@@ -1,0 +1,21 @@
+{
+  "name": "corbits-artifacts",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "bun run --cwd packages/artifacts build",
+    "test": "bun run test:package && bun run test:acceptance",
+    "test:package": "bun run --cwd packages/artifacts test",
+    "test:acceptance": "bun run build && bun test --cwd examples/reference-host"
+  },
+  "devDependencies": {
+    "@types/bun": "1.1.14",
+    "@types/node": "22.10.5",
+    "typescript": "5.7.2"
+  }
+}

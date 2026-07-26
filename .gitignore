@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+.env.local
+*.tsbuildinfo
+coverage/
+.DS_Store
+
+# npm pack output
+*.tgz
+.worktrees/
