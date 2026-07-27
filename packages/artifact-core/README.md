@@ -74,7 +74,10 @@ whole `createApp` wiring.
 
 ## The seams
 
-Three options have no sensible default; the rest fail closed and degrade a *feature*,
+TWO seams — authorization and provenance. `?creatorKind=` needs no seam at all: it is a
+denormalized column set once, from the caller's own scope, at write time.
+
+Two options have no sensible default; the rest fail closed and degrade a *feature*,
 never safety.
 
 | Option | Required | Default and what omitting it costs |
@@ -82,10 +85,22 @@ never safety.
 | `db` | **yes** | The drizzle handle the host already has |
 | `contentStore` | **yes** | `InlineContentStore` for a minimal host |
 | `resolvePrincipal` | **yes** | `(ctx: unknown) => { tenant, principal } \| null`. Identical to `@corbits/mailbox-core`'s, so a host mounting both passes one function to both. The resolved tenant is authoritative — no caller-supplied override. |
-| `adminAuthz` | no | `denyAllAdminAuthz` — only the owner (and the member behind a producing agent) can archive. Nothing becomes more permissive. |
-| `identity` | no | `anonymousIdentity` — `ownerName` is `null`, `?creatorKind=` matches nothing, cross-tenant reads refused. |
-| `provenance` | no | `noProvenance` — rows carry no decoration. Display-only by contract, so it can never change what is returned or who sees it. |
+| `adminAuthz` (Seam A) | no | `denyAllAdminAuthz` — nobody is an admin and no tenant may read another's artifacts. Nothing becomes more permissive. |
+| `provenance` (Seam B) | no | `noProvenance` — rows carry no decoration. Display-only by contract, so it can never change what is returned or who sees it. |
 | `uploadPolicy` | no | `ARTIFACT_UPLOAD_POLICY` — the standard document/image/spreadsheet allowlist. |
+
+`AdminAuthz` answers two verdicts, both fail-closed:
+
+```ts
+type AdminAuthz = {
+  // Called only after the core has already granted the exact-owner match, so
+  // a host implementation covers whatever else it wants to allow — a tenant
+  // admin, or the human member behind the agent that owns the row.
+  canAdminister(scope: ResolvedPrincipal, row: { ownerPrincipalId: string | null }): Promise<boolean>;
+  // The gate on a cross-tenant artifact_read.
+  canReadTenant(scope: ResolvedPrincipal, targetTenantId: string): Promise<boolean>;
+};
+```
 
 ## Routes
 
@@ -150,6 +165,7 @@ try {
     createFileArtifact(tx, contentStore, {
       scope,
       ownerPrincipalId: scope.principal,
+      creatorKind: "user",
       filename: file.name,
       mimeType: file.type,
       bytes,

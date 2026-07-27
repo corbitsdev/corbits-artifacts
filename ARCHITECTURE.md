@@ -48,8 +48,8 @@ Three options have no sensible default — `db`, `contentStore`,
 `resolvePrincipal` — and the rest degrade a *feature*, never safety, when
 omitted. The README's table of what a minimal host passes is the reference; what
 matters architecturally is that every default **fails closed**: no `adminAuthz`
-means nobody is an admin, no `identity` means no directory and no cross-tenant
-reads, no `provenance` means no decoration.
+means nobody is an admin and no tenant may read another's artifacts, no
+`provenance` means no decoration.
 
 What the package does **not** require of a host: no auth middleware, no session
 library, no particular schema, no control-plane tables, no id scheme, no UI.
@@ -61,7 +61,7 @@ route surface.
 
 ## The ports
 
-Five host seams. Four are types declared in `ports.ts`; `resolvePrincipal` is a
+Four host seams. Three are types declared in `ports.ts`; `resolvePrincipal` is a
 `mountArtifacts` option, typed at the mount boundary because it takes the host's
 request context as `unknown`. Every optional seam has a **named, exported**
 default.
@@ -70,18 +70,29 @@ default.
 | --- | --- | --- |
 | `resolvePrincipal` | Who the request runs as. Reads the host session; returns `null` when signed out. | none — required |
 | `ContentStore` | Where an artifact's file bytes live. | none — required |
-| `AdminAuthz` (Seam A) | Authorization. Only archive/unarchive consults it. | `denyAllAdminAuthz` |
-| `Identity` (Seam B) | Owner display names, the agent→human ownership resolution, creator-kind principal sets, and cross-tenant membership. | `anonymousIdentity` |
-| `Provenance` (Seam C) | A **display-only** decorator over serialized rows. | `noProvenance` |
+| `AdminAuthz` (Seam A) | Authorization: who may administer (archive/unarchive) a row they do not exactly own, and who may cross a tenant boundary to read. | `denyAllAdminAuthz` |
+| `Provenance` (Seam B) | A **display-only** decorator over serialized rows. | `noProvenance` |
 
-Seam C's display-only status is a contract, not a convention: it may add fields
-to rows on their way out and must never affect *what* is returned or *who* may
-see it. That is why provenance is a port at all — joining a host's workflow
-tables to decorate a row would make this package depend on a schema it must not
-know, and the dep-guard fails the build on exactly that.
+TWO seams, not three. There is no directory port: owner display names are
+gone from the serialized row entirely, and `?creatorKind=` is answered by a
+denormalized column (`artifact.creator_kind`) set once, from the caller's own
+scope, at write time — never resolved by a host lookup, so there is nothing
+here for a host to skip and silently return zero rows for.
 
-Seam B's `ownerIsMemberOfTenant` gates cross-tenant reads and must fail closed;
-the shipped `anonymousIdentity` does.
+Seam B's display-only status is a contract, not a convention: it may add
+fields to rows on their way out and must never affect *what* is returned or
+*who* may see it. That is why provenance is a port at all — joining a host's
+workflow tables to decorate a row would make this package depend on a schema
+it must not know, and the dep-guard fails the build on exactly that.
+
+`AdminAuthz` answers two independent verdicts, both must fail closed:
+
+- `canAdminister(scope, row)` — called only after the core has already
+  granted the exact-owner match, so a host's implementation covers whatever
+  else it wants to allow (a tenant admin, or the human member behind the agent
+  that owns the row).
+- `canReadTenant(scope, targetTenantId)` — the gate on a cross-tenant
+  `artifact_read`. The shipped `denyAllAdminAuthz` refuses both.
 
 ### ContentStore
 
