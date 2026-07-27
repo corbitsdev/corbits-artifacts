@@ -127,7 +127,7 @@ export type CreateArtifactArgs = {
   /** The human who owns this artifact; null for agents with no owning member. */
   ownerPrincipalId: string | null;
   /**
-   * The kind of the principal MINTING this row (`scope.principal`) — not the
+   * The kind of the principal MINTING this row (`scope.principalId`) — not the
    * owner's. The caller always knows this at write time, so it is supplied
    * rather than looked up: a host route only ever runs as one kind of caller.
    * Drives `?creatorKind` as a plain column predicate.
@@ -157,8 +157,8 @@ export async function createArtifact(
   const [row] = await tx
     .insert(artifact)
     .values({
-      tenantId: args.scope.tenant,
-      principalId: args.scope.principal,
+      tenantId: args.scope.tenantId,
+      principalId: args.scope.principalId,
       ownerPrincipalId: args.ownerPrincipalId,
       creatorKind: args.creatorKind,
       kind: args.kind,
@@ -177,7 +177,7 @@ export async function createArtifact(
     version: 1,
     title: args.title,
     content,
-    authorId: args.scope.principal,
+    authorId: args.scope.principalId,
     createdAt: now,
   });
 
@@ -221,7 +221,7 @@ export async function writeArtifactVersion(
       .where(
         and(
           eq(artifact.id, args.artifactId),
-          eq(artifact.tenantId, args.scope.tenant),
+          eq(artifact.tenantId, args.scope.tenantId),
         ),
       )
       .for("update")
@@ -252,7 +252,7 @@ export async function writeArtifactVersion(
       version,
       title,
       content,
-      authorId: args.scope.principal,
+      authorId: args.scope.principalId,
       createdAt: now,
     });
 

@@ -114,7 +114,7 @@ describe("every entry-point policy gates createFileArtifact", () => {
     db.transaction((tx) =>
       createFileArtifact(tx, InlineContentStore, {
         scope: SCOPE,
-        ownerPrincipalId: SCOPE.principal,
+        ownerPrincipalId: SCOPE.principalId,
         creatorKind: "user",
         filename,
         mimeType,
@@ -187,7 +187,7 @@ describe("createFileArtifact", () => {
     const row = await db.transaction((tx) =>
       createFileArtifact(tx, InlineContentStore, {
         scope: SCOPE,
-        ownerPrincipalId: SCOPE.principal,
+        ownerPrincipalId: SCOPE.principalId,
         creatorKind: "user",
         filename: "report.pdf",
         mimeType: "application/pdf",

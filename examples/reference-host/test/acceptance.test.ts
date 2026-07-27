@@ -444,7 +444,7 @@ describe("pdf parsing is the host's, and the module's contract with it holds", (
     const row = await host.db.transaction((tx) =>
       createFileArtifact(tx, InlineContentStore, {
         scope: host.scope(),
-        ownerPrincipalId: host.scope().principal,
+        ownerPrincipalId: host.scope().principalId,
         creatorKind: "user",
         filename: "report.pdf",
         mimeType: "application/pdf",
@@ -474,7 +474,7 @@ describe("pdf parsing is the host's, and the module's contract with it holds", (
       host.db.transaction((tx) =>
         createFileArtifact(tx, InlineContentStore, {
           scope: host.scope(),
-          ownerPrincipalId: host.scope().principal,
+          ownerPrincipalId: host.scope().principalId,
           creatorKind: "user",
           filename: "logo.svg",
           mimeType: "image/svg+xml",

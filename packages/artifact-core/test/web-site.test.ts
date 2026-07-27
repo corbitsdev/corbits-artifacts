@@ -95,12 +95,12 @@ describe("default seams", () => {
   test("the deny-all authz refuses administration and every cross-tenant read", async () => {
     expect(
       await denyAllAdminAuthz.canAdminister(
-        { tenant: "t", principal: "p" },
+        { tenantId: "t", principalId: "p" },
         { ownerPrincipalId: "p" },
       ),
     ).toBe(false);
     expect(
-      await denyAllAdminAuthz.canReadTenant({ tenant: "t", principal: "p" }, "other"),
+      await denyAllAdminAuthz.canReadTenant({ tenantId: "t", principalId: "p" }, "other"),
     ).toBe(false);
   });
 

@@ -452,7 +452,7 @@ describe("archive authorization", () => {
     const app = host(db, {
       adminAuthz: fakeAdminAuthz({
         canAdminister: async (scope, target) =>
-          scope.principal === "user-1" && target.ownerPrincipalId === "agent-9",
+          scope.principalId === "user-1" && target.ownerPrincipalId === "agent-9",
       }),
     });
     expect((await post(app, row.id, "archive")).status).toBe(200);
@@ -788,7 +788,7 @@ describe("post-commit side effects never turn a committed write into a 500", () 
     const body = (await res.json()) as { artifact: { id: string } };
     expect("ownerName" in body.artifact).toBe(false);
 
-    const rows = await listArtifacts(db, SCOPE.tenant, {});
+    const rows = await listArtifacts(db, SCOPE.tenantId, {});
     expect(rows.rows.map((r) => r.id)).toEqual([body.artifact.id]);
   });
 
@@ -899,10 +899,10 @@ describe("no-identity response: every route matches the cross-core rule", () => 
   // would be the worse bug of the two.
   test("a refused mutation leaves nothing behind", async () => {
     const db = await testDb();
-    const before = await listArtifacts(db, SCOPE.tenant, {});
+    const before = await listArtifacts(db, SCOPE.tenantId, {});
     const app = host(db, { principal: null });
     await app.request("/artifacts", json({ mode: "text", title: "ghost", content: "b" }));
-    const after = await listArtifacts(db, SCOPE.tenant, {});
+    const after = await listArtifacts(db, SCOPE.tenantId, {});
     expect(after.rows.length).toBe(before.rows.length);
   });
 });

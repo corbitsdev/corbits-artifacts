@@ -110,9 +110,9 @@ async function resolveForRead(
     tenantId?: string;
   },
 ): Promise<{ base: ReadBase; content: string }> {
-  const tenantId = args.tenantId ?? args.scope.tenant;
+  const tenantId = args.tenantId ?? args.scope.tenantId;
   if (
-    tenantId !== args.scope.tenant &&
+    tenantId !== args.scope.tenantId &&
     !(await adminAuthz.canReadTenant(args.scope, tenantId))
   ) {
     throw new ArtifactNotFoundError(args.artifactId);

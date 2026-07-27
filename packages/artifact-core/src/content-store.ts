@@ -46,8 +46,8 @@ export const InlineContentStore: ContentStore = {
     const [row] = await tx
       .insert(upload)
       .values({
-        tenantId: scope.tenant,
-        principalId: scope.principal,
+        tenantId: scope.tenantId,
+        principalId: scope.principalId,
         filename: blob.filename,
         mimeType: blob.mimeType,
         content: Buffer.from(blob.bytes),

@@ -282,7 +282,7 @@ describe("tool definitions", () => {
 describe("artifact_link_file", () => {
   const linkArgs = (over: Record<string, unknown> = {}) => ({
     scope: SCOPE,
-    ownerPrincipalId: SCOPE.principal,
+    ownerPrincipalId: SCOPE.principalId,
     creatorKind: "agent" as const,
     title: "Quarterly deck",
     kind: "file",

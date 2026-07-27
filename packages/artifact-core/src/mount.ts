@@ -133,7 +133,7 @@ export function mountArtifacts<E extends Env>(
     rows: ArtifactRow[],
   ): Promise<SerializedArtifact[]> {
     const serialized = rows.map(serializeArtifact);
-    await enrich(provenance, scope.tenant, serialized);
+    await enrich(provenance, scope.tenantId, serialized);
     return serialized;
   }
 
@@ -196,7 +196,7 @@ export function mountArtifacts<E extends Env>(
     if (!scope) return { response: c.json({ error: "Forbidden" }, 403) };
 
     const row = await getArtifact(db, c.req.param("id")!);
-    if (!row || row.kind === SKILL_DRAFT_KIND || row.tenantId !== scope.tenant) {
+    if (!row || row.kind === SKILL_DRAFT_KIND || row.tenantId !== scope.tenantId) {
       return { response: c.json({ error: "Artifact not found" }, 404) };
     }
     return { row, scope };
@@ -282,7 +282,7 @@ export function mountArtifacts<E extends Env>(
       };
 
       try {
-        const page = await listArtifacts(db, scope.tenant, filters);
+        const page = await listArtifacts(db, scope.tenantId, filters);
         return c.json({
           artifacts: await serialize(scope, page.rows),
           nextCursor: page.nextCursor,
@@ -334,7 +334,7 @@ export function mountArtifacts<E extends Env>(
       const row = await db.transaction((tx) =>
         createArtifact(tx, {
           scope,
-          ownerPrincipalId: scope.principal,
+          ownerPrincipalId: scope.principalId,
           creatorKind: "user",
           kind: body.kind ?? (isUrl ? "link" : "document"),
           title: body.title,
@@ -418,7 +418,7 @@ export function mountArtifacts<E extends Env>(
         }
       }
 
-      const ownerPrincipalId = scope.principal;
+      const ownerPrincipalId = scope.principalId;
       const rows = await db.transaction(async (tx) => {
         const created: ArtifactRow[] = [];
         for (const file of files) {
@@ -541,7 +541,7 @@ export function mountArtifacts<E extends Env>(
     if ("response" in loaded) return loaded.response;
     const { row, scope } = loaded;
 
-    let allowed = row.ownerPrincipalId === scope.principal;
+    let allowed = row.ownerPrincipalId === scope.principalId;
     if (!allowed) {
       allowed = await adminAuthz.canAdminister(scope, {
         ownerPrincipalId: row.ownerPrincipalId,

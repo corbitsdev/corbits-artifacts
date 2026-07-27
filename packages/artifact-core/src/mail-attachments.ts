@@ -53,7 +53,7 @@ async function assertArtifactsVisible(
           .where(
             and(
               inArray(artifact.id, wanted),
-              eq(artifact.tenantId, scope.tenant),
+              eq(artifact.tenantId, scope.tenantId),
               ne(artifact.kind, SKILL_DRAFT_KIND),
             ),
           );
@@ -88,8 +88,8 @@ export async function saveMailAttachmentRefs(
     .insert(mailAttachmentRef)
     .values(
       args.body.attachments.map((a) => ({
-        tenantId: args.scope.tenant,
-        principalId: args.scope.principal,
+        tenantId: args.scope.tenantId,
+        principalId: args.scope.principalId,
         instanceId: args.instanceId,
         mailId: args.body.mailId,
         artifactId: a.artifactId,
@@ -120,7 +120,7 @@ export async function listMailAttachmentRefs(
     .where(
       and(
         eq(mailAttachmentRef.instanceId, instanceId),
-        eq(mailAttachmentRef.tenantId, scope.tenant),
+        eq(mailAttachmentRef.tenantId, scope.tenantId),
       ),
     );
 }

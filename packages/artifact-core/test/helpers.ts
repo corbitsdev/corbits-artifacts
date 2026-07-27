@@ -26,7 +26,7 @@ export async function testDb(): Promise<ArtifactDb> {
   return db;
 }
 
-export const SCOPE = { tenant: "acme", principal: "user-1" };
+export const SCOPE = { tenantId: "acme", principalId: "user-1" };
 
 export async function seedArtifact(
   db: ArtifactDb,
@@ -40,13 +40,13 @@ export async function seedArtifact(
     creatorKind: "user" | "agent";
   }> = {},
 ): Promise<ArtifactRow> {
-  const scope = { ...SCOPE, ...(overrides.tenantId ? { tenant: overrides.tenantId } : {}) };
+  const scope = { ...SCOPE, ...(overrides.tenantId ? { tenantId: overrides.tenantId } : {}) };
   return await db.transaction((tx) =>
     createArtifact(tx, {
       scope,
       ownerPrincipalId:
         overrides.ownerPrincipalId === undefined
-          ? scope.principal
+          ? scope.principalId
           : overrides.ownerPrincipalId,
       creatorKind: overrides.creatorKind ?? "user",
       kind: overrides.kind ?? "document",
@@ -71,7 +71,7 @@ export async function seedSkillDraft(db: ArtifactDb, title: string): Promise<str
   const rows = await db.execute<{ id: string }>(sql`
     INSERT INTO "artifact" ("tenant_id", "principal_id", "owner_principal_id",
       "creator_kind", "kind", "title", "content", "source", "version")
-    VALUES (${SCOPE.tenant}, ${SCOPE.principal}, ${SCOPE.principal},
+    VALUES (${SCOPE.tenantId}, ${SCOPE.principalId}, ${SCOPE.principalId},
       'agent', 'skill-draft', ${title}, 'draft body', '{"origin":"agent"}'::jsonb, 1)
     RETURNING "id"
   `);

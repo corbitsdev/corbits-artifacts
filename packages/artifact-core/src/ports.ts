@@ -7,7 +7,7 @@ import type { ArtifactDb, ArtifactTx } from "./db.js";
  * mounting both cores resolves one principal from one session, so the two must
  * agree on what "the same user" means rather than each inventing a variant.
  */
-export type ResolvedPrincipal = { tenant: string; principal: string };
+export type ResolvedPrincipal = { tenantId: string; principalId: string };
 
 /** Bytes plus the metadata needed to serve them back. */
 export type FileBlob = {

@@ -30,7 +30,7 @@ async function storeFile(
   return await db.transaction((tx) =>
     createFileArtifact(tx, store, {
       scope: SCOPE,
-      ownerPrincipalId: SCOPE.principal,
+      ownerPrincipalId: SCOPE.principalId,
       creatorKind: "user",
       filename,
       mimeType,

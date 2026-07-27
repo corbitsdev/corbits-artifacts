@@ -59,7 +59,7 @@ mountArtifacts(api, {
   resolvePrincipal(ctx): ResolvedPrincipal | null {
     const user = (ctx as Context<AppEnv>).get("user");
     if (!user) return null;
-    return { tenant: user.tenantId, principal: user.id };
+    return { tenantId: user.tenantId, principalId: user.id };
   },
 });
 app.route("/api", api);
@@ -84,7 +84,7 @@ never safety.
 | --- | --- | --- |
 | `db` | **yes** | The drizzle handle the host already has |
 | `contentStore` | **yes** | `InlineContentStore` for a minimal host |
-| `resolvePrincipal` | **yes** | `(ctx: unknown) => { tenant, principal } \| null`. Identical to `@corbits/mailbox-core`'s, so a host mounting both passes one function to both. The resolved tenant is authoritative — no caller-supplied override. |
+| `resolvePrincipal` | **yes** | `(ctx: unknown) => { tenantId, principalId } \| null`. Identical to `@corbits/mailbox-core`'s, so a host mounting both passes one function to both. The resolved tenant is authoritative — no caller-supplied override. |
 | `adminAuthz` (Seam A) | no | `denyAllAdminAuthz` — nobody is an admin and no tenant may read another's artifacts. Nothing becomes more permissive. |
 | `provenance` (Seam B) | no | `noProvenance` — rows carry no decoration. Display-only by contract, so it can never change what is returned or who sees it. |
 | `uploadPolicy` | no | `ARTIFACT_UPLOAD_POLICY` — the standard document/image/spreadsheet allowlist. |
@@ -164,7 +164,7 @@ try {
   await db.transaction((tx) =>
     createFileArtifact(tx, contentStore, {
       scope,
-      ownerPrincipalId: scope.principal,
+      ownerPrincipalId: scope.principalId,
       creatorKind: "user",
       filename: file.name,
       mimeType: file.type,

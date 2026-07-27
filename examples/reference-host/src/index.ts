@@ -107,10 +107,10 @@ function createAdminAuthz(db: ArtifactDb, isAdmin: () => Promise<boolean>): Admi
       if (row.ownerPrincipalId === null) return false;
       const member = await ownerMemberPrincipalId(
         db,
-        scope.tenant,
+        scope.tenantId,
         row.ownerPrincipalId,
       );
-      return member !== null && member === scope.principal;
+      return member !== null && member === scope.principalId;
     },
     // This host has exactly one tenant, so a cross-tenant read is always
     // refused. A multi-tenant host would check active membership there.
@@ -277,7 +277,7 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
     const user = (ctx as Context<AppEnv>).get("user");
     if (!user) return null;
     const principal = principals.find((p) => p.kind === "user" && p.refId === user.id);
-    return principal ? { tenant, principal: principal.id } : null;
+    return principal ? { tenantId: tenant, principalId: principal.id } : null;
   }
 
   // A bare Interchange host: real sidecar router, real event-collector
@@ -341,8 +341,8 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
     tenant,
     agentPrincipal,
     scope: () => ({
-      tenant,
-      principal: principals.find((p) => p.kind === "user" && p.refId === "user-alice")!
+      tenantId: tenant,
+      principalId: principals.find((p) => p.kind === "user" && p.refId === "user-alice")!
         .id,
     }),
     setSession: (session) => {
