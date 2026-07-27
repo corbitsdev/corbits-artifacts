@@ -115,6 +115,7 @@ describe("every entry-point policy gates createFileArtifact", () => {
       createFileArtifact(tx, InlineContentStore, {
         scope: SCOPE,
         ownerPrincipalId: SCOPE.principal,
+        creatorKind: "user",
         filename,
         mimeType,
         bytes: new Uint8Array([1, 2, 3]),
@@ -187,6 +188,7 @@ describe("createFileArtifact", () => {
       createFileArtifact(tx, InlineContentStore, {
         scope: SCOPE,
         ownerPrincipalId: SCOPE.principal,
+        creatorKind: "user",
         filename: "report.pdf",
         mimeType: "application/pdf",
         bytes: new Uint8Array([1, 2, 3]),
@@ -208,6 +210,7 @@ describe("createFileArtifact", () => {
         await createFileArtifact(tx, InlineContentStore, {
           scope: SCOPE,
           ownerPrincipalId: null,
+          creatorKind: "user",
           filename: "half.pdf",
           mimeType: "application/pdf",
           bytes: new Uint8Array([1]),

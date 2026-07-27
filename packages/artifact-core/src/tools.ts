@@ -7,7 +7,7 @@ import {
   SKILL_DRAFT_KIND,
 } from "./artifacts.js";
 import { artifact, type ArtifactRow } from "./schema.js";
-import type { ResolvedPrincipal, Identity } from "./ports.js";
+import type { ResolvedPrincipal, AdminAuthz } from "./ports.js";
 import {
   parseWebSiteContentJson,
   normalizeWebSitePath,
@@ -102,7 +102,7 @@ export function windowContent(
  */
 async function resolveForRead(
   db: ArtifactDb,
-  identity: Identity,
+  adminAuthz: AdminAuthz,
   args: {
     scope: ResolvedPrincipal;
     artifactId: string;
@@ -113,7 +113,7 @@ async function resolveForRead(
   const tenantId = args.tenantId ?? args.scope.tenant;
   if (
     tenantId !== args.scope.tenant &&
-    !(await identity.ownerIsMemberOfTenant(args.scope, tenantId))
+    !(await adminAuthz.canReadTenant(args.scope, tenantId))
   ) {
     throw new ArtifactNotFoundError(args.artifactId);
   }
@@ -163,7 +163,7 @@ async function resolveForRead(
  */
 export async function readArtifact(
   db: ArtifactDb,
-  identity: Identity,
+  adminAuthz: AdminAuthz,
   args: {
     scope: ResolvedPrincipal;
     artifactId: string;
@@ -172,7 +172,7 @@ export async function readArtifact(
     path?: string;
   },
 ): Promise<ArtifactReadResult | (ReadBase & { summary: WebSiteReadSummary })> {
-  const { base, content } = await resolveForRead(db, identity, args);
+  const { base, content } = await resolveForRead(db, adminAuthz, args);
   if (base.kind !== WEB_SITE_KIND) return windowContent(base, content);
 
   if (args.path === undefined) {
@@ -189,7 +189,7 @@ export async function readArtifact(
 /** `artifact_read_chunk`: one bounded character range. Not for `web_site`. */
 export async function readArtifactChunk(
   db: ArtifactDb,
-  identity: Identity,
+  adminAuthz: AdminAuthz,
   args: {
     scope: ResolvedPrincipal;
     artifactId: string;
@@ -199,7 +199,7 @@ export async function readArtifactChunk(
     limit?: number;
   },
 ): Promise<ArtifactReadResult> {
-  const { base, content } = await resolveForRead(db, identity, args);
+  const { base, content } = await resolveForRead(db, adminAuthz, args);
   if (base.kind === WEB_SITE_KIND) {
     throw new Error(
       "artifact_read_chunk does not support web_site artifacts; use artifact_read for a summary or pass path to read one file",
@@ -236,6 +236,8 @@ export async function linkFileArtifact(
   args: {
     scope: ResolvedPrincipal;
     ownerPrincipalId: string | null;
+    /** The kind of principal minting this row — an agent tool call, always. */
+    creatorKind: "user" | "agent";
     title: string;
     kind: string;
     /** Where the file lives in the agent workspace, relative to its root. */
@@ -253,6 +255,7 @@ export async function linkFileArtifact(
     createArtifact(tx, {
       scope: args.scope,
       ownerPrincipalId: args.ownerPrincipalId,
+      creatorKind: args.creatorKind,
       kind: args.kind,
       title: args.title,
       content: args.preview ?? "",

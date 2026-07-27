@@ -6,7 +6,6 @@ import {
   getTableColumns,
   gte,
   ilike,
-  inArray,
   isNotNull,
   isNull,
   lte,
@@ -17,7 +16,7 @@ import {
 } from "drizzle-orm";
 import type { ArtifactDb, ArtifactTx } from "./db.js";
 import { artifact, artifactVersion, type ArtifactRow } from "./schema.js";
-import type { ResolvedPrincipal, Identity, Provenance } from "./ports.js";
+import type { ResolvedPrincipal, Provenance } from "./ports.js";
 import {
   parseWebSiteContentJson,
   serializeWebSiteContent,
@@ -94,7 +93,6 @@ export type SerializedArtifact = {
   source: Record<string, unknown> & { origin: string };
   version: number;
   ownerPrincipalId: string | null;
-  ownerName: string | null;
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -110,7 +108,6 @@ export function serializeArtifact(row: ArtifactRow): SerializedArtifact {
     source: normalizeSource(row.source),
     version: row.version,
     ownerPrincipalId: row.ownerPrincipalId,
-    ownerName: null,
     archivedAt: row.archivedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -129,6 +126,13 @@ export type CreateArtifactArgs = {
   scope: ResolvedPrincipal;
   /** The human who owns this artifact; null for agents with no owning member. */
   ownerPrincipalId: string | null;
+  /**
+   * The kind of the principal MINTING this row (`scope.principal`) — not the
+   * owner's. The caller always knows this at write time, so it is supplied
+   * rather than looked up: a host route only ever runs as one kind of caller.
+   * Drives `?creatorKind` as a plain column predicate.
+   */
+  creatorKind: "user" | "agent";
   kind: string;
   title: string;
   content: string;
@@ -156,6 +160,7 @@ export async function createArtifact(
       tenantId: args.scope.tenant,
       principalId: args.scope.principal,
       ownerPrincipalId: args.ownerPrincipalId,
+      creatorKind: args.creatorKind,
       kind: args.kind,
       title: args.title,
       content,
@@ -417,7 +422,6 @@ function cursorCondition(raw: string, oldestFirst: boolean): SQL {
 
 export async function listArtifacts(
   db: ArtifactDb,
-  identity: Identity,
   tenantId: string,
   filters: ListArtifactsFilters,
 ): Promise<{ rows: ArtifactRow[]; nextCursor: string | null }> {
@@ -450,13 +454,7 @@ export async function listArtifacts(
     conditions.push(eq(artifact.ownerPrincipalId, filters.ownerPrincipalId));
   }
   if (filters.creatorKind) {
-    // Creator kind is a facet of the owner principal, not a column here, so it
-    // folds in as an ownerPrincipalId membership test. NO matching principals
-    // must exclude everything, not fall through to unfiltered.
-    const ids = await identity.principalIdsByKind(tenantId, filters.creatorKind);
-    conditions.push(
-      ids.length > 0 ? inArray(artifact.ownerPrincipalId, ids) : sql`false`,
-    );
+    conditions.push(eq(artifact.creatorKind, filters.creatorKind));
   }
   if (filters.createdAfter !== undefined) {
     conditions.push(
@@ -516,25 +514,14 @@ export async function findArtifactByTitle(
 }
 
 /**
- * Attach owner display names and run the display-only provenance decorator.
- * One call so no surface can serialize a row and forget half the enrichment.
+ * Run the display-only provenance decorator over serialized rows. A named
+ * call rather than an inline `provenance.decorate(...)` at every call site, so
+ * a future decoration step has one place to join in.
  */
 export async function enrich(
-  identity: Identity,
   provenance: Provenance,
   tenantId: string,
   rows: SerializedArtifact[],
 ): Promise<void> {
-  const ownerIds = [
-    ...new Set(rows.map((r) => r.ownerPrincipalId).filter((id) => id !== null)),
-  ];
-  if (ownerIds.length > 0) {
-    const names = await identity.ownerNames(tenantId, ownerIds);
-    for (const row of rows) {
-      if (row.ownerPrincipalId !== null) {
-        row.ownerName = names.get(row.ownerPrincipalId) ?? null;
-      }
-    }
-  }
   await provenance.decorate(tenantId, rows);
 }

@@ -8,7 +8,7 @@ import {
   WEB_SITE_MAX_FILES,
   WebSiteContentError,
 } from "../src/web-site.js";
-import { anonymousIdentity, noProvenance } from "../src/ports.js";
+import { denyAllAdminAuthz, noProvenance } from "../src/ports.js";
 
 describe("path normalization", () => {
   test("strips leading slashes and converts backslashes", () => {
@@ -92,17 +92,15 @@ describe("summary", () => {
 });
 
 describe("default seams", () => {
-  test("the anonymous identity knows nobody and refuses cross-tenant reads", async () => {
-    expect(await anonymousIdentity.ownerNames("t", ["p"])).toEqual(new Map());
+  test("the deny-all authz refuses administration and every cross-tenant read", async () => {
     expect(
-      await anonymousIdentity.ownerMemberPrincipalId({ tenant: "t", principal: "p" }),
-    ).toBeNull();
-    expect(await anonymousIdentity.principalIdsByKind("t", "user")).toEqual([]);
-    expect(
-      await anonymousIdentity.ownerIsMemberOfTenant(
+      await denyAllAdminAuthz.canAdminister(
         { tenant: "t", principal: "p" },
-        "other",
+        { ownerPrincipalId: "p" },
       ),
+    ).toBe(false);
+    expect(
+      await denyAllAdminAuthz.canReadTenant({ tenant: "t", principal: "p" }, "other"),
     ).toBe(false);
   });
 

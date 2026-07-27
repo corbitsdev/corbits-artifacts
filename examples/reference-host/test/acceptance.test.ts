@@ -57,11 +57,11 @@ describe("import a URL, read it back, revise it, read the history", () => {
     artifactId = created.artifact.id;
   });
 
-  test("the identity seam resolves the owner's name from the host directory", async () => {
+  test("the detail route serves back the artifact with no ownerName field", async () => {
     const detail = await json<{
-      artifact: { ownerName: string | null; source: Record<string, unknown> };
+      artifact: { source: Record<string, unknown> };
     }>(await host.request(`/api/artifacts/${artifactId}`));
-    expect(detail.artifact.ownerName).toBe("Alice Ash");
+    expect("ownerName" in detail.artifact).toBe(false);
     expect(detail.artifact.source.origin).toBe("imported");
   });
 
@@ -192,13 +192,13 @@ describe("list: keyset paging, creatorKind, and the archived toggle", () => {
     expect(overlap).toEqual([]);
   });
 
-  test("creatorKind resolves through the identity seam", async () => {
+  test("creatorKind reads the denormalized column, set once at write time", async () => {
     // An agent-owned artifact, so creatorKind has something to separate.
     await host.db.execute(sql`
       INSERT INTO "artifact" ("tenant_id", "principal_id", "owner_principal_id",
-        "kind", "title", "content", "source", "version")
-      VALUES (${host.tenant}, ${host.agentPrincipal}, ${host.agentPrincipal}, 'document',
-        'Agent memo', 'written by an agent', '{"origin":"agent"}'::jsonb, 1)
+        "creator_kind", "kind", "title", "content", "source", "version")
+      VALUES (${host.tenant}, ${host.agentPrincipal}, ${host.agentPrincipal}, 'agent',
+        'document', 'Agent memo', 'written by an agent', '{"origin":"agent"}'::jsonb, 1)
     `);
 
     const agentOnly = await json<{ artifacts: { title: string }[] }>(
@@ -313,8 +313,8 @@ describe("a cross-tenant request fails closed", () => {
   test("a caller-supplied tenantId is not an override", async () => {
     await host.db.execute(sql`
       INSERT INTO "artifact" ("tenant_id", "principal_id", "owner_principal_id",
-        "kind", "title", "content", "source", "version")
-      VALUES ('some-other-tenant', 'outsider', 'outsider', 'document',
+        "creator_kind", "kind", "title", "content", "source", "version")
+      VALUES ('some-other-tenant', 'outsider', 'outsider', 'user', 'document',
         'Other tenant secret', 'not yours', '{"origin":"manual"}'::jsonb, 1)
     `);
     const res = await host.request("/api/artifacts?tenantId=some-other-tenant&limit=100");
@@ -445,6 +445,7 @@ describe("pdf parsing is the host's, and the module's contract with it holds", (
       createFileArtifact(tx, InlineContentStore, {
         scope: host.scope(),
         ownerPrincipalId: host.scope().principal,
+        creatorKind: "user",
         filename: "report.pdf",
         mimeType: "application/pdf",
         bytes: PDF,
@@ -474,6 +475,7 @@ describe("pdf parsing is the host's, and the module's contract with it holds", (
         createFileArtifact(tx, InlineContentStore, {
           scope: host.scope(),
           ownerPrincipalId: host.scope().principal,
+          creatorKind: "user",
           filename: "logo.svg",
           mimeType: "image/svg+xml",
           bytes: new Uint8Array(Buffer.from("<svg/>")),
@@ -490,8 +492,8 @@ describe("a skill-draft is invisible over the mounted host", () => {
   test("every detail route answers 404", async () => {
     const [draft] = await host.db.execute<{ id: string }>(sql`
       INSERT INTO "artifact" ("tenant_id", "principal_id", "owner_principal_id",
-        "kind", "title", "content", "source", "version")
-      VALUES (${host.tenant}, 'x', 'x', 'skill-draft', 'Scratch',
+        "creator_kind", "kind", "title", "content", "source", "version")
+      VALUES (${host.tenant}, 'x', 'x', 'agent', 'skill-draft', 'Scratch',
         'draft body', '{"origin":"agent"}'::jsonb, 1)
       RETURNING "id"
     `);

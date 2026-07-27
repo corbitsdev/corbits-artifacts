@@ -3,7 +3,7 @@ import { createArtifactDb, type ArtifactDb } from "../src/db.js";
 import { runArtifactMigrations } from "../src/migrations.js";
 import { createArtifact } from "../src/artifacts.js";
 import type { ArtifactRow } from "../src/schema.js";
-import type { Identity } from "../src/ports.js";
+import type { AdminAuthz } from "../src/ports.js";
 
 export const DATABASE_URL =
   process.env.ARTIFACT_DATABASE_URL ??
@@ -37,6 +37,7 @@ export async function seedArtifact(
     source: Record<string, unknown>;
     ownerPrincipalId: string | null;
     tenantId: string;
+    creatorKind: "user" | "agent";
   }> = {},
 ): Promise<ArtifactRow> {
   const scope = { ...SCOPE, ...(overrides.tenantId ? { tenant: overrides.tenantId } : {}) };
@@ -47,6 +48,7 @@ export async function seedArtifact(
         overrides.ownerPrincipalId === undefined
           ? scope.principal
           : overrides.ownerPrincipalId,
+      creatorKind: overrides.creatorKind ?? "user",
       kind: overrides.kind ?? "document",
       title: overrides.title ?? "Untitled",
       content: overrides.content ?? "body",
@@ -55,13 +57,11 @@ export async function seedArtifact(
   );
 }
 
-/** A directory that answers exactly what a test wires into it, nothing more. */
-export function fakeIdentity(overrides: Partial<Identity> = {}): Identity {
+/** An authz seam that answers exactly what a test wires into it, nothing more. */
+export function fakeAdminAuthz(overrides: Partial<AdminAuthz> = {}): AdminAuthz {
   return {
-    ownerNames: async () => new Map(),
-    ownerMemberPrincipalId: async () => null,
-    principalIdsByKind: async () => [],
-    ownerIsMemberOfTenant: async () => false,
+    canAdminister: async () => false,
+    canReadTenant: async () => false,
     ...overrides,
   };
 }
@@ -70,9 +70,9 @@ export function fakeIdentity(overrides: Partial<Identity> = {}): Identity {
 export async function seedSkillDraft(db: ArtifactDb, title: string): Promise<string> {
   const rows = await db.execute<{ id: string }>(sql`
     INSERT INTO "artifact" ("tenant_id", "principal_id", "owner_principal_id",
-      "kind", "title", "content", "source", "version")
+      "creator_kind", "kind", "title", "content", "source", "version")
     VALUES (${SCOPE.tenant}, ${SCOPE.principal}, ${SCOPE.principal},
-      'skill-draft', ${title}, 'draft body', '{"origin":"agent"}'::jsonb, 1)
+      'agent', 'skill-draft', ${title}, 'draft body', '{"origin":"agent"}'::jsonb, 1)
     RETURNING "id"
   `);
   return rows[0]!.id;

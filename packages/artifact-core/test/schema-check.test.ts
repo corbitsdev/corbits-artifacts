@@ -152,6 +152,7 @@ describe("text ids", () => {
       tenantId: "acme",
       principalId: "user-1",
       ownerPrincipalId: "user-1",
+      creatorKind: "user",
       kind: "note",
       title: "hello",
       content: "hello",

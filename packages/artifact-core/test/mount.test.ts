@@ -10,12 +10,11 @@ import {
   MAX_UPLOAD_TOTAL_BYTES,
 } from "../src/uploads.js";
 import type { ArtifactDb } from "../src/db.js";
-import type { AdminAuthz, ResolvedPrincipal, Identity, Provenance } from "../src/ports.js";
-import { fakeIdentity, seedArtifact, seedSkillDraft, SCOPE, testDb } from "./helpers.js";
+import type { AdminAuthz, ResolvedPrincipal, Provenance } from "../src/ports.js";
+import { fakeAdminAuthz, seedArtifact, seedSkillDraft, SCOPE, testDb } from "./helpers.js";
 
 type HostOpts = {
   principal?: ResolvedPrincipal | null;
-  identity?: Identity;
   adminAuthz?: AdminAuthz;
   provenance?: Provenance;
 };
@@ -27,7 +26,6 @@ function host(db: ArtifactDb, opts: HostOpts = {}) {
     db,
     contentStore: InlineContentStore,
     resolvePrincipal: () => principal,
-    identity: opts.identity ?? fakeIdentity(),
     ...(opts.adminAuthz ? { adminAuthz: opts.adminAuthz } : {}),
     ...(opts.provenance ? { provenance: opts.provenance } : {}),
   });
@@ -114,15 +112,12 @@ describe("GET /artifacts", () => {
     expect(await res.json()).toEqual({ artifacts: [], nextCursor: null });
   });
 
-  test("attaches owner names and runs the display-only provenance decorator", async () => {
+  test("runs the display-only provenance decorator over listed rows", async () => {
     const db = await testDb();
     await seedArtifact(db, { title: "Doc" });
 
     const decorated: string[] = [];
     const app = host(db, {
-      identity: fakeIdentity({
-        ownerNames: async (_tenant, ids) => new Map(ids.map((id) => [id, `Name of ${id}`])),
-      }),
       provenance: {
         decorate: async (tenantId, rows) => {
           decorated.push(tenantId);
@@ -134,10 +129,8 @@ describe("GET /artifacts", () => {
     const body = (await (await app.request("/artifacts")).json()) as {
       artifacts: Record<string, unknown>[];
     };
-    expect(body.artifacts[0]).toMatchObject({
-      ownerName: "Name of user-1",
-      sessionName: "Weekly brief",
-    });
+    expect(body.artifacts[0]).toMatchObject({ sessionName: "Weekly brief" });
+    expect("ownerName" in body.artifacts[0]!).toBe(false);
     expect(decorated).toEqual(["acme"]);
   });
 
@@ -185,6 +178,27 @@ describe("GET /artifacts", () => {
     expect((await app.request("/artifacts?creatorKind=robot")).status).toBe(400);
     expect((await app.request("/artifacts?cursor=garbage")).status).toBe(400);
     expect((await app.request("/artifacts?createdAfter=nonsense")).status).toBe(400);
+  });
+
+  test("?creatorKind=user and =agent read the denormalized column, not ownership", async () => {
+    const db = await testDb();
+    const mine = await seedArtifact(db, { title: "Mine", creatorKind: "user" });
+    const bot = await seedArtifact(db, {
+      title: "Bot",
+      ownerPrincipalId: "agent-9",
+      creatorKind: "agent",
+    });
+    const app = host(db);
+
+    const users = (await (await app.request("/artifacts?creatorKind=user")).json()) as {
+      artifacts: { id: string }[];
+    };
+    expect(users.artifacts.map((a) => a.id)).toEqual([mine.id]);
+
+    const agents = (await (await app.request("/artifacts?creatorKind=agent")).json()) as {
+      artifacts: { id: string }[];
+    };
+    expect(agents.artifacts.map((a) => a.id)).toEqual([bot.id]);
   });
 
   test("a caller-supplied tenant cannot widen the resolved scope", async () => {
@@ -432,13 +446,13 @@ describe("archive authorization", () => {
     expect((await post(host(db), row.id, "archive")).status).toBe(403);
   });
 
-  test("the member who owns the producing agent may archive", async () => {
+  test("a host-granted canAdminister allows the member who owns the producing agent", async () => {
     const db = await testDb();
     const row = await seedArtifact(db, { ownerPrincipalId: "agent-9" });
     const app = host(db, {
-      identity: fakeIdentity({
-        ownerMemberPrincipalId: async (scope) =>
-          scope.principal === "agent-9" ? "user-1" : null,
+      adminAuthz: fakeAdminAuthz({
+        canAdminister: async (scope, target) =>
+          scope.principal === "user-1" && target.ownerPrincipalId === "agent-9",
       }),
     });
     expect((await post(app, row.id, "archive")).status).toBe(200);
@@ -447,7 +461,9 @@ describe("archive authorization", () => {
   test("an admin may archive anyone's artifact — the only use of the authz seam", async () => {
     const db = await testDb();
     const row = await seedArtifact(db, { ownerPrincipalId: "someone-else" });
-    const app = host(db, { adminAuthz: { isAdmin: async () => true } });
+    const app = host(db, {
+      adminAuthz: fakeAdminAuthz({ canAdminister: async () => true }),
+    });
     expect((await post(app, row.id, "archive")).status).toBe(200);
   });
 
@@ -753,11 +769,6 @@ describe("post-commit side effects never turn a committed write into a 500", () 
   // A throwing host must not make a durable mutation report failure: the client
   // would retry a write that already succeeded, and keep retrying forever.
   const exploding = {
-    identity: fakeIdentity({
-      ownerNames: async () => {
-        throw new Error("host directory is down");
-      },
-    }),
     provenance: {
       decorate: async () => {
         throw new Error("host workflow lookup is down");
@@ -774,10 +785,10 @@ describe("post-commit side effects never turn a committed write into a 500", () 
       json({ mode: "text", title: "Survives", content: "body" }),
     );
     expect(res.status).toBe(201);
-    const body = (await res.json()) as { artifact: { id: string; ownerName: null } };
-    expect(body.artifact.ownerName).toBeNull();
+    const body = (await res.json()) as { artifact: { id: string } };
+    expect("ownerName" in body.artifact).toBe(false);
 
-    const rows = await listArtifacts(db, fakeIdentity(), SCOPE.tenant, {});
+    const rows = await listArtifacts(db, SCOPE.tenant, {});
     expect(rows.rows.map((r) => r.id)).toEqual([body.artifact.id]);
   });
 
@@ -888,10 +899,10 @@ describe("no-identity response: every route matches the cross-core rule", () => 
   // would be the worse bug of the two.
   test("a refused mutation leaves nothing behind", async () => {
     const db = await testDb();
-    const before = await listArtifacts(db, fakeIdentity(), SCOPE.tenant, {});
+    const before = await listArtifacts(db, SCOPE.tenant, {});
     const app = host(db, { principal: null });
     await app.request("/artifacts", json({ mode: "text", title: "ghost", content: "b" }));
-    const after = await listArtifacts(db, fakeIdentity(), SCOPE.tenant, {});
+    const after = await listArtifacts(db, SCOPE.tenant, {});
     expect(after.rows.length).toBe(before.rows.length);
   });
 });

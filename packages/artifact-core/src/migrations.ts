@@ -21,6 +21,7 @@ export const MIGRATIONS: Migration[] = [
           "tenant_id" text,
           "principal_id" text,
           "owner_principal_id" text,
+          "creator_kind" text NOT NULL,
           "parent_id" text REFERENCES "artifact"("id") ON DELETE CASCADE,
           "kind" text NOT NULL,
           "title" text NOT NULL,

@@ -25,13 +25,11 @@ import {
 } from "./mail-attachments.js";
 import type { ArtifactRow } from "./schema.js";
 import {
-  anonymousIdentity,
   denyAllAdminAuthz,
   noProvenance,
   type AdminAuthz,
   type ResolvedPrincipal,
   type ContentStore,
-  type Identity,
   type Provenance,
 } from "./ports.js";
 import {
@@ -59,10 +57,8 @@ export type MountArtifactsOpts = {
   resolvePrincipal: (
     ctx: unknown,
   ) => Promise<ResolvedPrincipal | null> | ResolvedPrincipal | null;
-  /** Seam A. Defaults to nobody being an admin. */
+  /** Seam A. Defaults to nobody being an admin and no cross-tenant reads. */
   adminAuthz?: AdminAuthz;
-  /** Seam B. Defaults to no directory. */
-  identity?: Identity;
   /** Seam C, display-only. Defaults to no decoration. */
   provenance?: Provenance;
   /** Which files `POST /artifacts/upload` accepts. */
@@ -121,7 +117,6 @@ export function mountArtifacts<E extends Env>(
     contentStore,
     resolvePrincipal,
     adminAuthz = denyAllAdminAuthz,
-    identity = anonymousIdentity,
     provenance = noProvenance,
     uploadPolicy = ARTIFACT_UPLOAD_POLICY,
   } = opts;
@@ -138,7 +133,7 @@ export function mountArtifacts<E extends Env>(
     rows: ArtifactRow[],
   ): Promise<SerializedArtifact[]> {
     const serialized = rows.map(serializeArtifact);
-    await enrich(identity, provenance, scope.tenant, serialized);
+    await enrich(provenance, scope.tenant, serialized);
     return serialized;
   }
 
@@ -287,7 +282,7 @@ export function mountArtifacts<E extends Env>(
       };
 
       try {
-        const page = await listArtifacts(db, identity, scope.tenant, filters);
+        const page = await listArtifacts(db, scope.tenant, filters);
         return c.json({
           artifacts: await serialize(scope, page.rows),
           nextCursor: page.nextCursor,
@@ -340,6 +335,7 @@ export function mountArtifacts<E extends Env>(
         createArtifact(tx, {
           scope,
           ownerPrincipalId: scope.principal,
+          creatorKind: "user",
           kind: body.kind ?? (isUrl ? "link" : "document"),
           title: body.title,
           content: body.content,
@@ -430,6 +426,7 @@ export function mountArtifacts<E extends Env>(
             await createFileArtifact(tx, contentStore, {
               scope,
               ownerPrincipalId,
+              creatorKind: "user",
               filename: file.name,
               mimeType: effectiveUploadMime(file, uploadPolicy),
               policy: uploadPolicy,
@@ -535,9 +532,9 @@ export function mountArtifacts<E extends Env>(
 
   /**
    * Archive is the only surface that consults the authz seam. Allowed for the
-   * principal-exact owner; for the member who owns the agent that produced it
-   * (agent artifacts are owned by a synthetic principal, so resolve it back);
-   * or for a tenant admin.
+   * principal-exact owner, or for whatever else the host's `canAdminister`
+   * chooses to allow (a tenant admin, or the member who owns the agent that
+   * produced it) — called only after the exact-owner match already failed.
    */
   async function setArchived(c: Ctx, archive: boolean) {
     const loaded = await loadScoped(c);
@@ -545,14 +542,11 @@ export function mountArtifacts<E extends Env>(
     const { row, scope } = loaded;
 
     let allowed = row.ownerPrincipalId === scope.principal;
-    if (!allowed && row.ownerPrincipalId !== null) {
-      const ownerMember = await identity.ownerMemberPrincipalId({
-        tenant: scope.tenant,
-        principal: row.ownerPrincipalId,
+    if (!allowed) {
+      allowed = await adminAuthz.canAdminister(scope, {
+        ownerPrincipalId: row.ownerPrincipalId,
       });
-      allowed = ownerMember !== null && ownerMember === scope.principal;
     }
-    if (!allowed) allowed = await adminAuthz.isAdmin(scope);
     if (!allowed) return c.json({ error: "Forbidden" }, 403);
 
     const updated = await setArtifactArchived(db, row, archive);

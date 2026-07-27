@@ -63,6 +63,14 @@ export const artifact = pgTable(
     tenantId: text("tenant_id"),
     principalId: text("principal_id"),
     ownerPrincipalId: text("owner_principal_id"),
+    /**
+     * The kind of principal that MINTED this row — "user" or "agent" — set
+     * once at write time from the caller's own scope. Denormalized rather than
+     * resolved through a host directory seam: a host that skipped an optional
+     * seam used to make `?creatorKind=` compile to `sql\`false\`` and silently
+     * return zero rows instead of failing loud.
+     */
+    creatorKind: text("creator_kind").notNull(),
     parentId: text("parent_id").references((): AnyPgColumn => artifact.id, {
       onDelete: "cascade",
     }),

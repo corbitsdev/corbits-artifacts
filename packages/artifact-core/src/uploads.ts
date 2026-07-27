@@ -180,6 +180,8 @@ export async function createFileArtifact(
   args: {
     scope: ResolvedPrincipal;
     ownerPrincipalId: string | null;
+    /** The kind of principal minting this row — the uploading caller's. */
+    creatorKind: "user" | "agent";
     filename: string;
     mimeType: string;
     bytes: Uint8Array;
@@ -200,6 +202,7 @@ export async function createFileArtifact(
   return await createArtifact(tx, {
     scope: args.scope,
     ownerPrincipalId: args.ownerPrincipalId,
+    creatorKind: args.creatorKind,
     kind: uploadArtifactKind(args.mimeType),
     title: args.filename,
     content: stored.content,

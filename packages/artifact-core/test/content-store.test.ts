@@ -31,6 +31,7 @@ async function storeFile(
     createFileArtifact(tx, store, {
       scope: SCOPE,
       ownerPrincipalId: SCOPE.principal,
+      creatorKind: "user",
       filename,
       mimeType,
       bytes,

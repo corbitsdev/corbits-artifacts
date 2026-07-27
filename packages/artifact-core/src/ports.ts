@@ -47,53 +47,41 @@ export type ContentStore = {
   ): Promise<FileBlob | null>;
 };
 
-/** Seam A — authorization. Only archive/unarchive consults it. */
+/**
+ * Seam A — authorization. The host answers two VERDICTS; the core never
+ * interprets directory rows to compute one itself.
+ */
 export type AdminAuthz = {
-  isAdmin(scope: ResolvedPrincipal): Promise<boolean>;
+  /**
+   * Whether scope may administer (archive/unarchive) an artifact. Called only
+   * after the core has already granted the exact-owner match, so a host's
+   * implementation covers whatever else it wants to allow — a tenant admin, or
+   * the human member behind the agent that owns the row. Must fail closed.
+   */
+  canAdminister(
+    scope: ResolvedPrincipal,
+    row: { ownerPrincipalId: string | null },
+  ): Promise<boolean>;
+  /**
+   * Whether scope may read another tenant's artifacts — the gate on a
+   * cross-tenant `artifact_read`. Must fail closed.
+   */
+  canReadTenant(scope: ResolvedPrincipal, targetTenantId: string): Promise<boolean>;
 };
 
 /**
- * An authorization seam for hosts with no admin concept: nobody is an admin, so
- * only the owner (and the member behind a producing agent) can archive. Fails
- * closed — it degrades a feature, never safety.
+ * An authorization seam for hosts with no admin concept and no cross-tenant
+ * reads: nobody is an admin, so only the exact owner can archive, and no
+ * tenant may read another's artifacts. Fails closed — it degrades a feature,
+ * never safety.
  *
- * Exported rather than left as an inline literal in `mount.ts` so that all three
- * of this package's optional seams have a *named* default a host can reference,
+ * Exported rather than left as an inline literal in `mount.ts` so that all of
+ * this package's optional seams have a *named* default a host can reference,
  * compare against, or wrap.
  */
-export const denyAllAdminAuthz: AdminAuthz = { isAdmin: async () => false };
-
-/**
- * Seam B — identity. Owner display names, and the agent→human resolution that
- * lets the member who owns a producing agent administer its artifacts.
- */
-export type Identity = {
-  /** Display names for owner principal ids. Missing ids simply stay unnamed. */
-  ownerNames(
-    tenantId: string,
-    ownerPrincipalIds: string[],
-  ): Promise<Map<string, string | null>>;
-  /** The human member principal behind an agent principal, or null. */
-  ownerMemberPrincipalId(scope: ResolvedPrincipal): Promise<string | null>;
-  /** Principal ids in a tenant whose creator kind matches. Drives `?creatorKind`. */
-  principalIdsByKind(tenantId: string, kind: "user" | "agent"): Promise<string[]>;
-  /**
-   * Whether the human behind this principal is an ACTIVE member of another
-   * tenant — the gate on a cross-tenant read. Must fail closed.
-   */
-  ownerIsMemberOfTenant(
-    scope: ResolvedPrincipal,
-    targetTenantId: string,
-  ): Promise<boolean>;
-};
-
-/** An identity seam for hosts with no directory: no names, no agent ownership,
- *  and no cross-tenant reads. */
-export const anonymousIdentity: Identity = {
-  ownerNames: async () => new Map(),
-  ownerMemberPrincipalId: async () => null,
-  principalIdsByKind: async () => [],
-  ownerIsMemberOfTenant: async () => false,
+export const denyAllAdminAuthz: AdminAuthz = {
+  canAdminister: async () => false,
+  canReadTenant: async () => false,
 };
 
 /**

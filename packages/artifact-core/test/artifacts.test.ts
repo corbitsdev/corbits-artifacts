@@ -31,6 +31,7 @@ describe("create", () => {
         createArtifact(tx, {
           scope: SCOPE,
           ownerPrincipalId: null,
+          creatorKind: "agent",
           kind: "skill-draft",
           title: "x",
           content: "y",
@@ -47,6 +48,7 @@ describe("create", () => {
         await createArtifact(tx, {
           scope: SCOPE,
           ownerPrincipalId: null,
+          creatorKind: "user",
           kind: "file",
           title: "orphan.pdf",
           content: "",
@@ -224,7 +226,7 @@ describe("serialization", () => {
     expect(json.archivedAt).toBeNull();
     expect(json.parentId).toBeNull();
     expect(json.ownerPrincipalId).toBeNull();
-    expect(json.ownerName).toBeNull();
+    expect("ownerName" in json).toBe(false);
   });
 });
 

@@ -21,13 +21,12 @@ export type {
   MailAttachmentRefRow,
 } from "./schema.js";
 
-export { anonymousIdentity, denyAllAdminAuthz, noProvenance } from "./ports.js";
+export { denyAllAdminAuthz, noProvenance } from "./ports.js";
 export type {
   AdminAuthz,
   ResolvedPrincipal,
   ContentStore,
   FileBlob,
-  Identity,
   Provenance,
   StoredFile,
 } from "./ports.js";

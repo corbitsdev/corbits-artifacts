@@ -4,15 +4,15 @@
 // The host is the real thing: hub routes, the hub request logger and the hub
 // session middleware are all live, and the artifact principal is resolved out
 // of the hub's own request context (`c.var.user`) rather than a local variable.
-// The three seams are implemented against the host's OWN control plane
-// (interchange `principal` / `user` rows), which is the point: the module knows
-// nothing about them, the host supplies them.
+// The two seams (authz + provenance) are implemented against the host's OWN
+// control plane (interchange `principal` / `user` rows), which is the point:
+// the module knows nothing about them, the host supplies them.
 //
 // This module only BUILDS the host. The acceptance scenarios live in
 // `test/acceptance.test.ts` and run under `bun test`, so they are collected by
 // CI like any other test instead of being a hand-rolled assert script nothing
 // executes.
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { createApp, type AppEnv } from "@intx/hub-api";
@@ -30,10 +30,10 @@ import {
   InlineContentStore,
   mountArtifacts,
   runArtifactMigrations,
+  type AdminAuthz,
   type ArtifactDb,
   type ResolvedPrincipal,
   type ContentStore,
-  type Identity,
   type Provenance,
 } from "@corbits/artifact-core";
 
@@ -54,76 +54,67 @@ function parsePostgresUrl(raw: string) {
   };
 }
 
-/** Seam B, implemented against the host's own directory tables. */
-function createIdentity(db: ArtifactDb): Identity {
+/**
+ * Resolve the human member who owns an agent principal — the agent's `refId`
+ * names them in this host's own `principal` table. Used only by
+ * `canAdminister`, which is called after the exact-owner match already
+ * failed, so an unowned or non-agent `ownerPrincipalId` correctly resolves to
+ * "nobody".
+ */
+async function ownerMemberPrincipalId(
+  db: ArtifactDb,
+  tenantId: string,
+  agentPrincipalId: string,
+): Promise<string | null> {
+  const [agent] = await db
+    .select({ refId: intxSchema.principal.refId })
+    .from(intxSchema.principal)
+    .where(
+      and(
+        eq(intxSchema.principal.id, agentPrincipalId),
+        eq(intxSchema.principal.tenantId, tenantId),
+        eq(intxSchema.principal.kind, "agent"),
+      ),
+    )
+    .limit(1);
+  if (!agent) return null;
+  const [member] = await db
+    .select({ id: intxSchema.principal.id })
+    .from(intxSchema.principal)
+    .where(
+      and(
+        eq(intxSchema.principal.tenantId, tenantId),
+        eq(intxSchema.principal.kind, "user"),
+        eq(intxSchema.principal.refId, agent.refId),
+        eq(intxSchema.principal.status, "active"),
+      ),
+    )
+    .limit(1);
+  return member?.id ?? null;
+}
+
+/**
+ * Seam A, implemented honestly against the host's own control plane.
+ * `isAdmin` is the host's own coarse admin check; `canAdminister` folds it
+ * together with "the member who owns the producing agent may administer its
+ * artifact" — the core calls this only after the exact-owner match already
+ * failed, so neither branch needs to re-check ownership.
+ */
+function createAdminAuthz(db: ArtifactDb, isAdmin: () => Promise<boolean>): AdminAuthz {
   return {
-    async ownerNames(tenantId, ownerPrincipalIds) {
-      const principals = await db
-        .select({ id: intxSchema.principal.id, refId: intxSchema.principal.refId })
-        .from(intxSchema.principal)
-        .where(
-          and(
-            eq(intxSchema.principal.tenantId, tenantId),
-            inArray(intxSchema.principal.id, ownerPrincipalIds),
-          ),
-        );
-      const refIds = [...new Set(principals.map((p) => p.refId))];
-      const users =
-        refIds.length > 0
-          ? await db
-              .select({ id: intxSchema.user.id, name: intxSchema.user.name })
-              .from(intxSchema.user)
-              .where(inArray(intxSchema.user.id, refIds))
-          : [];
-      const nameByRefId = new Map(users.map((u) => [u.id, u.name]));
-      return new Map(principals.map((p) => [p.id, nameByRefId.get(p.refId) ?? null]));
+    async canAdminister(scope, row) {
+      if (await isAdmin()) return true;
+      if (row.ownerPrincipalId === null) return false;
+      const member = await ownerMemberPrincipalId(
+        db,
+        scope.tenant,
+        row.ownerPrincipalId,
+      );
+      return member !== null && member === scope.principal;
     },
-
-    async ownerMemberPrincipalId(scope) {
-      // An agent principal's refId names the human who owns it in this host.
-      const [agent] = await db
-        .select({ refId: intxSchema.principal.refId })
-        .from(intxSchema.principal)
-        .where(
-          and(
-            eq(intxSchema.principal.id, scope.principal),
-            eq(intxSchema.principal.tenantId, scope.tenant),
-            eq(intxSchema.principal.kind, "agent"),
-          ),
-        )
-        .limit(1);
-      if (!agent) return null;
-      const [member] = await db
-        .select({ id: intxSchema.principal.id })
-        .from(intxSchema.principal)
-        .where(
-          and(
-            eq(intxSchema.principal.tenantId, scope.tenant),
-            eq(intxSchema.principal.kind, "user"),
-            eq(intxSchema.principal.refId, agent.refId),
-            eq(intxSchema.principal.status, "active"),
-          ),
-        )
-        .limit(1);
-      return member?.id ?? null;
-    },
-
-    async principalIdsByKind(tenantId, kind) {
-      const rows = await db
-        .select({ id: intxSchema.principal.id })
-        .from(intxSchema.principal)
-        .where(
-          and(
-            eq(intxSchema.principal.tenantId, tenantId),
-            eq(intxSchema.principal.kind, kind),
-          ),
-        );
-      return rows.map((r) => r.id);
-    },
-
     // This host has exactly one tenant, so a cross-tenant read is always
     // refused. A multi-tenant host would check active membership there.
-    async ownerIsMemberOfTenant() {
+    async canReadTenant() {
       return false;
     },
   };
@@ -308,8 +299,6 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
     endSession: refuse("endSession"),
   };
 
-  const identity = createIdentity(db);
-
   /** Build a host app with one ContentStore backend mounted. */
   function buildApp(contentStore: ContentStore, isAdmin: () => Promise<boolean>) {
     const app = createApp({
@@ -333,8 +322,7 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
       db,
       contentStore,
       resolvePrincipal,
-      adminAuthz: { isAdmin },
-      identity,
+      adminAuthz: createAdminAuthz(db, isAdmin),
       provenance,
     });
     const mounted = app.route("/api", api);

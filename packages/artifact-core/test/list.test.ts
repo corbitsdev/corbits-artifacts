@@ -7,10 +7,8 @@ import {
   MAX_LIST_LIMIT,
   setArtifactArchived,
 } from "../src/artifacts.js";
-import { fakeIdentity, seedArtifact, seedSkillDraft, testDb } from "./helpers.js";
+import { seedArtifact, seedSkillDraft, testDb } from "./helpers.js";
 import type { ArtifactDb } from "../src/db.js";
-
-const identity = fakeIdentity();
 
 /** Pin a row's timestamps so ordering and date filters are deterministic. */
 async function setTimes(db: ArtifactDb, id: string, iso: string) {
@@ -26,10 +24,10 @@ describe("list filters", () => {
     const hidden = await seedArtifact(db, { title: "Hidden" });
     await setArtifactArchived(db, hidden, true);
 
-    const defaults = await listArtifacts(db, identity, "acme", {});
+    const defaults = await listArtifacts(db, "acme", {});
     expect(defaults.rows.map((r) => r.id)).toEqual([visible.id]);
 
-    const archived = await listArtifacts(db, identity, "acme", { archived: true });
+    const archived = await listArtifacts(db, "acme", { archived: true });
     expect(archived.rows.map((r) => r.id)).toEqual([hidden.id]);
   });
 
@@ -38,9 +36,9 @@ describe("list filters", () => {
     await seedSkillDraft(db, "Scratch");
     await seedArtifact(db, { title: "Real" });
 
-    expect((await listArtifacts(db, identity, "acme", {})).rows.length).toBe(1);
+    expect((await listArtifacts(db, "acme", {})).rows.length).toBe(1);
     expect(
-      (await listArtifacts(db, identity, "acme", { kind: "skill-draft" })).rows.length,
+      (await listArtifacts(db, "acme", { kind: "skill-draft" })).rows.length,
     ).toBe(0);
   });
 
@@ -49,7 +47,7 @@ describe("list filters", () => {
     await seedArtifact(db, { title: "Ours" });
     await seedArtifact(db, { title: "Theirs", tenantId: "other" });
 
-    const rows = (await listArtifacts(db, identity, "acme", {})).rows;
+    const rows = (await listArtifacts(db, "acme", {})).rows;
     expect(rows.map((r) => r.title)).toEqual(["Ours"]);
   });
 
@@ -59,10 +57,10 @@ describe("list filters", () => {
     await seedArtifact(db, { title: "Other", content: "mentions quarterly plans" });
     await seedArtifact(db, { title: "100%", content: "literal" });
 
-    expect((await listArtifacts(db, identity, "acme", { query: "quarter" })).rows.length).toBe(
+    expect((await listArtifacts(db, "acme", { query: "quarter" })).rows.length).toBe(
       2,
     );
-    const percent = await listArtifacts(db, identity, "acme", { query: "%" });
+    const percent = await listArtifacts(db, "acme", { query: "%" });
     expect(percent.rows.map((r) => r.title)).toEqual(["100%"]);
   });
 
@@ -71,7 +69,7 @@ describe("list filters", () => {
     const row = await seedArtifact(db, { title: "Afternoon" });
     await setTimes(db, row.id, "2026-03-04T18:30:00Z");
 
-    const sameDay = await listArtifacts(db, identity, "acme", {
+    const sameDay = await listArtifacts(db, "acme", {
       createdAfter: "2026-03-04",
       createdBefore: "2026-03-04",
     });
@@ -83,7 +81,7 @@ describe("list filters", () => {
     const row = await seedArtifact(db, { title: "Afternoon" });
     await setTimes(db, row.id, "2026-03-04T18:30:00Z");
 
-    const before = await listArtifacts(db, identity, "acme", {
+    const before = await listArtifacts(db, "acme", {
       createdBefore: "2026-03-04T12:00:00Z",
     });
     expect(before.rows.length).toBe(0);
@@ -92,31 +90,30 @@ describe("list filters", () => {
   test("an unparseable date is a filter error", async () => {
     const db = await testDb();
     for (const filters of [{ createdAfter: "nope" }, { createdBefore: "nope" }]) {
-      await expect(listArtifacts(db, identity, "acme", filters)).rejects.toBeInstanceOf(
+      await expect(listArtifacts(db, "acme", filters)).rejects.toBeInstanceOf(
         ArtifactFilterError,
       );
     }
   });
 
-  test("creatorKind with no matching principals excludes everything", async () => {
+  test("creatorKind with no matching rows excludes everything", async () => {
     const db = await testDb();
-    await seedArtifact(db, { title: "Mine" });
+    await seedArtifact(db, { title: "Mine", creatorKind: "user" });
 
-    const none = await listArtifacts(db, identity, "acme", { creatorKind: "agent" });
+    const none = await listArtifacts(db, "acme", { creatorKind: "agent" });
     expect(none.rows.length).toBe(0);
   });
 
-  test("creatorKind narrows to the matching owner principals", async () => {
+  test("creatorKind narrows by the denormalized column, not the owner", async () => {
     const db = await testDb();
-    const mine = await seedArtifact(db, { title: "Mine" });
-    await seedArtifact(db, { title: "Bot", ownerPrincipalId: "agent-9" });
+    const mine = await seedArtifact(db, { title: "Mine", creatorKind: "user" });
+    await seedArtifact(db, {
+      title: "Bot",
+      ownerPrincipalId: "agent-9",
+      creatorKind: "agent",
+    });
 
-    const users = await listArtifacts(
-      db,
-      fakeIdentity({ principalIdsByKind: async () => ["user-1"] }),
-      "acme",
-      { creatorKind: "user" },
-    );
+    const users = await listArtifacts(db, "acme", { creatorKind: "user" });
     expect(users.rows.map((r) => r.id)).toEqual([mine.id]);
   });
 
@@ -127,11 +124,11 @@ describe("list filters", () => {
     const theirs = await seedArtifact(db, { title: "Bot", ownerPrincipalId: "agent-9" });
 
     expect(
-      (await listArtifacts(db, identity, "acme", { kind: "csv-export" })).rows.map((r) => r.id),
+      (await listArtifacts(db, "acme", { kind: "csv-export" })).rows.map((r) => r.id),
     ).toEqual([csv.id]);
     expect(
       (
-        await listArtifacts(db, identity, "acme", { ownerPrincipalId: "agent-9" })
+        await listArtifacts(db, "acme", { ownerPrincipalId: "agent-9" })
       ).rows.map((r) => r.id),
     ).toEqual([theirs.id]);
   });
@@ -152,7 +149,6 @@ describe("list paging", () => {
     for (let page = 0; page < 5; page += 1) {
       const result: Awaited<ReturnType<typeof listArtifacts>> = await listArtifacts(
         db,
-        identity,
         "acme",
         { limit: 2, ...(cursor ? { cursor } : {}) },
       );
@@ -175,9 +171,9 @@ describe("list paging", () => {
       ids.push(row.id);
     }
 
-    const first = await listArtifacts(db, identity, "acme", { sort: "oldest", limit: 2 });
+    const first = await listArtifacts(db, "acme", { sort: "oldest", limit: 2 });
     expect(first.rows.map((r) => r.id)).toEqual([ids[0], ids[1]]);
-    const second = await listArtifacts(db, identity, "acme", {
+    const second = await listArtifacts(db, "acme", {
       sort: "oldest",
       limit: 2,
       cursor: first.nextCursor!,
@@ -189,7 +185,7 @@ describe("list paging", () => {
     const db = await testDb();
     for (const cursor of ["garbage", "not-a-date__abc", `${new Date().toISOString()}__`]) {
       await expect(
-        listArtifacts(db, identity, "acme", { cursor }),
+        listArtifacts(db, "acme", { cursor }),
       ).rejects.toBeInstanceOf(ArtifactFilterError);
     }
   });
@@ -198,22 +194,22 @@ describe("list paging", () => {
     const db = await testDb();
     await db.execute(sql`
       INSERT INTO "artifact" ("tenant_id", "principal_id", "owner_principal_id",
-        "kind", "title", "content", "source", "version")
-      SELECT 'acme', 'user-1', 'user-1', 'document', 'Bulk ' || i, 'body',
+        "creator_kind", "kind", "title", "content", "source", "version")
+      SELECT 'acme', 'user-1', 'user-1', 'user', 'document', 'Bulk ' || i, 'body',
         '{"origin":"manual"}'::jsonb, 1
       FROM generate_series(1, ${MAX_LIST_LIMIT + 5}) AS i
     `);
 
-    const huge = await listArtifacts(db, identity, "acme", { limit: 10_000 });
+    const huge = await listArtifacts(db, "acme", { limit: 10_000 });
     expect(huge.rows.length).toBe(MAX_LIST_LIMIT);
     expect(huge.nextCursor).not.toBeNull();
 
-    const zero = await listArtifacts(db, identity, "acme", { limit: 0 });
+    const zero = await listArtifacts(db, "acme", { limit: 0 });
     expect(zero.rows.length).toBe(1);
 
     // A non-numeric `?limit=` reaches here as NaN and must take the default,
     // not collapse to one row.
-    const garbage = await listArtifacts(db, identity, "acme", { limit: Number("abc") });
+    const garbage = await listArtifacts(db, "acme", { limit: Number("abc") });
     expect(garbage.rows.length).toBe(DEFAULT_LIST_LIMIT);
   });
 
@@ -234,7 +230,6 @@ describe("list paging", () => {
     for (let page = 0; page < 6; page += 1) {
       const result: Awaited<ReturnType<typeof listArtifacts>> = await listArtifacts(
         db,
-        identity,
         "acme",
         { limit: 1, ...(cursor ? { cursor } : {}) },
       );
@@ -253,7 +248,7 @@ describe("list paging", () => {
     await setTimes(db, row.id, "2026-01-01T00:00:00.123456Z");
     await seedArtifact(db, { title: "Second" });
 
-    const first = await listArtifacts(db, identity, "acme", { limit: 1, sort: "oldest" });
+    const first = await listArtifacts(db, "acme", { limit: 1, sort: "oldest" });
     expect(first.nextCursor).toBe(`2026-01-01T00:00:00.123456Z__${row.id}`);
     expect(new Date(first.nextCursor!.slice(0, 27)).toISOString()).not.toBe(
       "2026-01-01T00:00:00.123456Z",
