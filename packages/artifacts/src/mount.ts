@@ -20,6 +20,7 @@ import {
 import { resolveDownload } from "./download.js";
 import {
   listMailAttachmentRefs,
+  MailAttachmentKindError,
   saveMailAttachmentRefs,
   SaveMailAttachmentRefsSchema,
 } from "./mail-attachments.js";
@@ -637,7 +638,10 @@ export function mountArtifacts<E extends Env>(
       ],
       responses: {
         201: { description: "References recorded" },
-        400: { description: "Invalid request body" },
+        400: {
+          description:
+            "Invalid request body, or a referenced artifact is not an attachable file/image kind",
+        },
         403: { description: "Tenant not accessible" },
         404: { description: "A referenced artifact is not visible to the caller" },
       },
@@ -659,6 +663,11 @@ export function mountArtifacts<E extends Env>(
         // here is indistinguishable from naming one that never existed.
         if (err instanceof ArtifactNotFoundError) {
           return c.json({ error: "Artifact not found" }, 404);
+        }
+        // Visible but wrong kind: the id is real to this tenant, so 400 rather
+        // than collapsing into the 404 existence oracle.
+        if (err instanceof MailAttachmentKindError) {
+          return c.json({ error: err.message }, 400);
         }
         throw err;
       }
