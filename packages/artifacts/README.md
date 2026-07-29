@@ -202,10 +202,27 @@ re-run prints nothing.
 ## Development
 
 ```bash
+# Destructive harness (TRUNCATE / DROP SCHEMA) is fail-closed. Opt in explicitly:
+export ALLOW_DESTRUCTIVE_ARTIFACT_TESTS=1
+# Optional override; default is postgres://postgres:postgres@localhost:5457/artifact_core
+# export ARTIFACT_DATABASE_URL=postgres://postgres:postgres@localhost:5457/artifact_core
+
 bun run test          # dependency check, then the suite (needs Postgres)
 bun run test:coverage
 bun run build         # dist/ — JS + .d.ts, consumable from Node
 ```
+
+The package suite truncates artifact tables between tests and some migration tests
+drop the package schema. Both paths refuse unless:
+
+| Requirement | Value |
+| --- | --- |
+| Opt-in env | `ALLOW_DESTRUCTIVE_ARTIFACT_TESTS=1` (exactly `"1"`) |
+| Database name allowlist | `artifact_core` (the documented local docker default), **or** any name ending in `_test` (e.g. `artifacts_test`) |
+
+Point `ARTIFACT_DATABASE_URL` at an allowlisted ephemeral database. A missing opt-in
+or a production-looking name throws before any TRUNCATE/DROP runs. The gate is pure
+URL/env parsing, so its unit tests do not need a live Postgres.
 
 The tarball ships `src/` alongside `dist/`, so the emitted `.js.map` and `.d.ts.map`
 resolve: go-to-definition and stack traces land on real TypeScript.
