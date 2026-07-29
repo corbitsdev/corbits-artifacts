@@ -96,7 +96,7 @@ happen in major versions.
 
 | Surface | Behavior |
 | --- | --- |
-| `GET /api/artifacts` | Tenant-scoped list; query/kind/owner/creatorKind/date filters, keyset cursor, archived toggle |
+| `GET /api/artifacts` | Tenant-scoped list; query/kind/owner/creatorKind/date filters, keyset cursor, archived toggle. **Discovery only:** each item omits `content` (fetch bodies via detail, download, or tools) |
 | `POST /api/artifacts` | Human import — link a URL or paste text |
 | `POST /api/artifacts/upload` | multipart import. An optional `generatedBy` form field is stored as `source.generatedBy`, a free-form display label nothing here reads back |
 | `GET /api/artifacts/:id` | Deep link (archived artifacts still load) |
@@ -106,6 +106,12 @@ happen in major versions.
 | `…/api/instances/:id/mail-attachments` | Artifact↔message associations |
 
 Every route carries `describeRoute`, so it appears in the host's `/openapi.json`.
+
+**List contract (minor client break):** `GET /api/artifacts` (and `listArtifacts` /
+`serializeArtifactListItem`) no longer include full `content` on each item. Clients that
+previously rendered list rows from the list payload must load bodies via
+`GET /api/artifacts/:id`, download, or the read tools. Search still matches title and
+content server-side; only the response projection changes.
 
 ### Two response contracts
 
@@ -198,6 +204,12 @@ host's own migrations must run first.
 (`artifacts.migrations`). Call it unconditionally on every boot of every
 replica: concurrent cold starts serialize on a transaction-scoped advisory lock, and a
 re-run prints nothing.
+
+Event timestamps are `timestamptz` so list keyset cursors and date filters stay
+stable under a non-UTC session `TimeZone`. A ledgered retype migration converts
+legacy zoneless columns with `USING col AT TIME ZONE 'UTC'` (existing walls were
+always documented as UTC). Do not edit shipped migrations to roll back — ship a
+new reverse cast if you must.
 
 ## Development
 

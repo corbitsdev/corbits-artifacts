@@ -186,6 +186,15 @@ every boot of every replica.
   fresh databases diverge silently. Ship a new migration instead. The column is
   `NOT NULL`, so the guarantee is unconditional: there is no unrecorded row for
   the runner to adopt and wave through.
+- Event timestamps (`created_at`, `updated_at`, `archived_at`) are
+  **`timestamptz`**. The initial create migration still lays them down as
+  zoneless `timestamp`; a follow-on migration retypes them with
+  `USING col AT TIME ZONE 'UTC'`, treating existing walls as the UTC clocks the
+  package always assumed. List keyset cursors project through
+  `AT TIME ZONE 'UTC'` and compare with `::timestamptz`, so paging and date
+  filters stay on the absolute instant under any session `TimeZone`. Rollback is
+  the reverse cast (`TYPE timestamp USING col AT TIME ZONE 'UTC'`) plus a new
+  ledgered migration — never edit a shipped one.
 
 **The package owns its own Postgres schema.** Every table, index and the ledger
 live in `artifacts`, created by the runner and qualified in every

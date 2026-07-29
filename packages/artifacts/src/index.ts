@@ -48,14 +48,18 @@ export {
   listArtifactVersions,
   MAX_LIST_LIMIT,
   serializeArtifact,
+  serializeArtifactListItem,
   setArtifactArchived,
   SKILL_DRAFT_KIND,
   writeArtifactVersion,
 } from "./artifacts.js";
 export type {
+  ArtifactListRow,
   CreateArtifactArgs,
   ListArtifactsFilters,
   SerializedArtifact,
+  SerializedArtifactBase,
+  SerializedArtifactListItem,
 } from "./artifacts.js";
 
 export {

@@ -115,6 +115,28 @@ describe("GET /artifacts", () => {
     expect(await res.json()).toEqual({ artifacts: [], nextCursor: null });
   });
 
+  // List is discovery: full bodies stay on detail/download/tools.
+  test("omits content from listed artifacts even when the body is large", async () => {
+    const db = await testDb();
+    const large = "y".repeat(40_000);
+    const row = await seedArtifact(db, { title: "Heavy", content: large });
+    const app = host(db);
+
+    const listed = (await (await app.request("/artifacts")).json()) as {
+      artifacts: Record<string, unknown>[];
+    };
+    expect(listed.artifacts).toHaveLength(1);
+    expect(listed.artifacts[0]!.id).toBe(row.id);
+    expect(listed.artifacts[0]!.title).toBe("Heavy");
+    expect("content" in listed.artifacts[0]!).toBe(false);
+
+    // Detail still returns the full body.
+    const detail = (await (
+      await app.request(`/artifacts/${row.id}`)
+    ).json()) as { artifact: { content: string } };
+    expect(detail.artifact.content).toBe(large);
+  });
+
   test("attaches owner names and runs the display-only provenance decorator", async () => {
     const db = await testDb();
     await seedArtifact(db, { title: "Doc" });

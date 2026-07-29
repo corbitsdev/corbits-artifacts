@@ -68,11 +68,11 @@ export function normalizeSource(
   return { ...object, origin: "unknown" };
 }
 
-export type SerializedArtifact = {
+/** Shared JSON fields on every artifact surface (list and detail). */
+export type SerializedArtifactBase = {
   id: string;
   kind: string;
   title: string;
-  content: string;
   source: Record<string, unknown> & { origin: string };
   version: number;
   ownerPrincipalId: string | null;
@@ -82,12 +82,27 @@ export type SerializedArtifact = {
   updatedAt: string;
 };
 
-export function serializeArtifact(row: ArtifactRow): SerializedArtifact {
+/** Detail / create / revise response — includes the full body. */
+export type SerializedArtifact = SerializedArtifactBase & {
+  content: string;
+};
+
+/**
+ * List response item — discovery only. Full `content` is never projected on
+ * list; clients fetch a body via detail, download, or tools.
+ */
+export type SerializedArtifactListItem = SerializedArtifactBase;
+
+/** Row shape returned by `listArtifacts` (no `content` column selected). */
+export type ArtifactListRow = Omit<ArtifactRow, "content">;
+
+function serializeArtifactBase(
+  row: ArtifactListRow | ArtifactRow,
+): SerializedArtifactBase {
   return {
     id: row.id,
     kind: row.kind,
     title: row.title,
-    content: row.content,
     source: normalizeSource(row.source),
     version: row.version,
     ownerPrincipalId: row.ownerPrincipalId,
@@ -96,6 +111,20 @@ export function serializeArtifact(row: ArtifactRow): SerializedArtifact {
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
+}
+
+export function serializeArtifact(row: ArtifactRow): SerializedArtifact {
+  return {
+    ...serializeArtifactBase(row),
+    content: row.content,
+  };
+}
+
+/** List serializer: same metadata as detail, never the body. */
+export function serializeArtifactListItem(
+  row: ArtifactListRow,
+): SerializedArtifactListItem {
+  return serializeArtifactBase(row);
 }
 
 /** `web_site` content is round-tripped through its schema; other kinds pass through. */
@@ -401,28 +430,28 @@ export const ListArtifactsQuery = type({
 );
 
 /**
- * Postgres `timestamp` holds microseconds while a JS `Date` holds milliseconds,
+ * Postgres `timestamptz` holds microseconds while a JS `Date` holds milliseconds,
  * so the cursor is rendered by Postgres at full precision — `Date#toISOString`
- * would truncate and skip/repeat rows inside a tie group. `updated_at` is a
- * zoneless UTC column, so no `AT TIME ZONE 'UTC'` here: that would produce a
- * `timestamptz` rendered in the session's zone. The literal `Z` states the
- * column's contents are UTC.
+ * would truncate and skip/repeat rows inside a tie group. `to_char` on a
+ * `timestamptz` renders in the session TimeZone, so project through
+ * `AT TIME ZONE 'UTC'` first and stamp a literal `Z` — the keyset then stays
+ * on the absolute instant under any session zone.
  */
-export const CURSOR_TIMESTAMP_SQL = sql<string>`to_char(${artifact.updatedAt}, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+export const CURSOR_TIMESTAMP_SQL = sql<string>`to_char(${artifact.updatedAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
 
 /**
  * A single row-value comparison so Postgres binds it as an Index Cond on
  * (tenant_id, updated_at, id); an OR-of-ranges lands in Filter and forces a
- * sort. The cursor value is cast to the zoneless column's type (`::timestamp`
- * accepts and discards the trailing `Z`); casting the column to `timestamptz`
- * instead would apply the session's zone and defeat the index.
+ * sort. The cursor value is cast to `timestamptz` so both sides are absolute
+ * instants — stable under any session TimeZone and index-friendly on the
+ * column as stored.
  */
 function cursorCondition(
   { at, id }: { at: string; id: string },
   oldestFirst: boolean,
 ): SQL {
   const operator = oldestFirst ? sql`>` : sql`<`;
-  return sql`(${artifact.updatedAt}, ${artifact.id}) ${operator} (${at}::timestamp, ${id})`;
+  return sql`(${artifact.updatedAt}, ${artifact.id}) ${operator} (${at}::timestamptz, ${id})`;
 }
 
 export async function listArtifacts(
@@ -430,7 +459,7 @@ export async function listArtifacts(
   identity: Identity,
   tenantId: string,
   filters: ListArtifactsFilters,
-): Promise<{ rows: ArtifactRow[]; nextCursor: string | null }> {
+): Promise<{ rows: ArtifactListRow[]; nextCursor: string | null }> {
   const limit = filters.limit ?? DEFAULT_LIST_LIMIT;
   const oldestFirst = filters.sort === "oldest";
 
@@ -445,6 +474,7 @@ export async function listArtifacts(
   // literal percent instead of matching everything.
   const query = (filters.query?.trim() ?? "").slice(0, 200).replace(/[%_\\]/g, "\\$&");
   if (query) {
+    // Filter may match on content, but list never SELECTs the body column.
     conditions.push(
       or(ilike(artifact.title, `%${query}%`), ilike(artifact.content, `%${query}%`))!,
     );
@@ -472,8 +502,11 @@ export async function listArtifacts(
     conditions.push(cursorCondition(filters.cursor, oldestFirst));
   }
 
+  // Discovery projection: every column except `content`. Bodies can be huge;
+  // clients that need one fetch detail, download, or tools.
+  const { content: _content, ...listColumns } = getTableColumns(artifact);
   const fetched = await db
-    .select({ ...getTableColumns(artifact), cursorAt: CURSOR_TIMESTAMP_SQL })
+    .select({ ...listColumns, cursorAt: CURSOR_TIMESTAMP_SQL })
     .from(artifact)
     .where(and(...conditions))
     .orderBy(
@@ -484,7 +517,7 @@ export async function listArtifacts(
     .limit(limit + 1);
 
   const page = fetched.slice(0, limit);
-  const rows: ArtifactRow[] = page.map(({ cursorAt: _cursorAt, ...row }) => row);
+  const rows: ArtifactListRow[] = page.map(({ cursorAt: _cursorAt, ...row }) => row);
   if (fetched.length <= limit) return { rows, nextCursor: null };
   const last = page[page.length - 1]!;
   return { rows, nextCursor: `${last.cursorAt}__${last.id}` };
@@ -518,12 +551,13 @@ export async function findArtifactByTitle(
 /**
  * Attach owner display names and run the display-only provenance decorator.
  * One call so no surface can serialize a row and forget half the enrichment.
+ * Accepts list items (no content) and detail rows alike.
  */
 export async function enrich(
   identity: Identity,
-  decorate: (tenantId: string, rows: SerializedArtifact[]) => Promise<void>,
+  decorate: (tenantId: string, rows: readonly SerializedArtifactBase[]) => Promise<void>,
   tenantId: string,
-  rows: SerializedArtifact[],
+  rows: SerializedArtifactBase[],
 ): Promise<void> {
   const ownerIds = [
     ...new Set(rows.map((r) => r.ownerPrincipalId).filter((id) => id !== null)),

@@ -12,10 +12,14 @@ import {
   ListArtifactsQuery,
   listArtifactVersions,
   serializeArtifact,
+  serializeArtifactListItem,
   setArtifactArchived,
   SKILL_DRAFT_KIND,
   writeArtifactVersion,
+  type ArtifactListRow,
   type SerializedArtifact,
+  type SerializedArtifactBase,
+  type SerializedArtifactListItem,
 } from "./artifacts.js";
 import { resolveDownload } from "./download.js";
 import {
@@ -66,8 +70,13 @@ export type MountArtifactsOpts = {
   /**
    * A DISPLAY-ONLY decorator: it may add fields to the serialized rows and
    * must never affect what is returned or who may see it. Defaults to a no-op.
+   * Receives list items (no `content`) on `GET /artifacts` and full detail rows
+   * (with `content`) on single-artifact surfaces.
    */
-  decorate?: (tenantId: string, rows: SerializedArtifact[]) => Promise<void>;
+  decorate?: (
+    tenantId: string,
+    rows: readonly SerializedArtifactBase[],
+  ) => Promise<void>;
   /** Which files `POST /artifacts/upload` accepts. */
   uploadPolicy?: UploadPolicy;
 };
@@ -178,6 +187,16 @@ export function mountArtifacts<E extends Env>(
     return serialized;
   }
 
+  /** List is discovery: metadata + enrichment, never the body. */
+  async function serializeList(
+    scope: ResolvedPrincipal,
+    rows: ArtifactListRow[],
+  ): Promise<SerializedArtifactListItem[]> {
+    const serialized = rows.map(serializeArtifactListItem);
+    await enrich(identity, decorate, scope.tenantId, serialized);
+    return serialized;
+  }
+
   /**
    * Serialize AFTER a write has committed. Enrichment is display-only and runs
    * against host-supplied seams: if one throws here, the row is already durable
@@ -224,7 +243,7 @@ export function mountArtifacts<E extends Env>(
       tags: ["Artifacts"],
       summary: "List artifacts in the caller's tenant",
       description:
-        "Newest-updated first by default. Supports query/kind/owner/creatorKind/date filters, an `updatedAt__id` keyset cursor, and an archived-only toggle. skill-draft artifacts are never listed.",
+        "Newest-updated first by default. Supports query/kind/owner/creatorKind/date filters, an `updatedAt__id` keyset cursor, and an archived-only toggle. skill-draft artifacts are never listed. List is discovery only: each item omits `content` (fetch the body via GET /artifacts/:id, download, or tools).",
       parameters: [
         { name: "query", in: "query", required: false, schema: { type: "string" } },
         { name: "sort", in: "query", required: false, schema: { type: "string" } },
@@ -263,7 +282,10 @@ export function mountArtifacts<E extends Env>(
         },
       ],
       responses: {
-        200: { description: "A page of artifacts" },
+        200: {
+          description:
+            "A page of artifacts without full `content` (metadata only; use detail/download/tools for bodies)",
+        },
         400: { description: "Invalid filter or cursor" },
         403: { description: "Tenant not accessible" },
       },
@@ -278,7 +300,7 @@ export function mountArtifacts<E extends Env>(
 
       const page = await listArtifacts(db, identity, scope.tenantId, filters);
       return c.json({
-        artifacts: await serialize(scope, page.rows),
+        artifacts: await serializeList(scope, page.rows),
         nextCursor: page.nextCursor,
       });
     },
