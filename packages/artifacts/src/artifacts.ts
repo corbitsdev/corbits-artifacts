@@ -11,6 +11,7 @@ import {
   inArray,
   isNotNull,
   isNull,
+  lt,
   lte,
   ne,
   or,
@@ -32,6 +33,46 @@ import {
  * would leak that an id is real.
  */
 export const SKILL_DRAFT_KIND = "skill-draft";
+
+/**
+ * Max title length (JavaScript string length) accepted on create/revise.
+ * Keep in sync with mount OpenAPI and package README.
+ */
+export const MAX_ARTIFACT_TITLE_LENGTH = 512;
+
+/**
+ * Max body size in UTF-8 bytes on create/revise. Sized above MAX_UPLOAD_BYTES
+ * so base64 data-URL expansion for file artifacts still fits, and above the
+ * web_site total budget.
+ */
+export const MAX_ARTIFACT_CONTENT_BYTES = 15 * 1024 * 1024;
+
+export class ArtifactSizeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ArtifactSizeError";
+  }
+}
+
+/** Reject oversize title/content before they hit the database. */
+export function assertArtifactFieldSizes(fields: {
+  title?: string;
+  content?: string;
+}): void {
+  if (fields.title !== undefined && fields.title.length > MAX_ARTIFACT_TITLE_LENGTH) {
+    throw new ArtifactSizeError(
+      `Artifact title exceeds the ${MAX_ARTIFACT_TITLE_LENGTH} character limit`,
+    );
+  }
+  if (fields.content !== undefined) {
+    const bytes = Buffer.byteLength(fields.content, "utf8");
+    if (bytes > MAX_ARTIFACT_CONTENT_BYTES) {
+      throw new ArtifactSizeError(
+        `Artifact content exceeds the ${MAX_ARTIFACT_CONTENT_BYTES} byte limit`,
+      );
+    }
+  }
+}
 
 /** Coarse producer classes. `unknown` covers rows written before provenance. */
 export const ARTIFACT_ORIGINS = [
@@ -68,11 +109,11 @@ export function normalizeSource(
   return { ...object, origin: "unknown" };
 }
 
-export type SerializedArtifact = {
+/** Shared JSON fields on every artifact surface (list and detail). */
+export type SerializedArtifactBase = {
   id: string;
   kind: string;
   title: string;
-  content: string;
   source: Record<string, unknown> & { origin: string };
   version: number;
   ownerPrincipalId: string | null;
@@ -82,12 +123,27 @@ export type SerializedArtifact = {
   updatedAt: string;
 };
 
-export function serializeArtifact(row: ArtifactRow): SerializedArtifact {
+/** Detail / create / revise response — includes the full body. */
+export type SerializedArtifact = SerializedArtifactBase & {
+  content: string;
+};
+
+/**
+ * List response item — discovery only. Full `content` is never projected on
+ * list; clients fetch a body via detail, download, or tools.
+ */
+export type SerializedArtifactListItem = SerializedArtifactBase;
+
+/** Row shape returned by `listArtifacts` (no `content` column selected). */
+export type ArtifactListRow = Omit<ArtifactRow, "content">;
+
+function serializeArtifactBase(
+  row: ArtifactListRow | ArtifactRow,
+): SerializedArtifactBase {
   return {
     id: row.id,
     kind: row.kind,
     title: row.title,
-    content: row.content,
     source: normalizeSource(row.source),
     version: row.version,
     ownerPrincipalId: row.ownerPrincipalId,
@@ -96,6 +152,20 @@ export function serializeArtifact(row: ArtifactRow): SerializedArtifact {
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
+}
+
+export function serializeArtifact(row: ArtifactRow): SerializedArtifact {
+  return {
+    ...serializeArtifactBase(row),
+    content: row.content,
+  };
+}
+
+/** List serializer: same metadata as detail, never the body. */
+export function serializeArtifactListItem(
+  row: ArtifactListRow,
+): SerializedArtifactListItem {
+  return serializeArtifactBase(row);
 }
 
 /** `web_site` content is round-tripped through its schema; other kinds pass through. */
@@ -129,6 +199,7 @@ export async function createArtifact(
     throw new Error("skill-draft artifacts are not created through this module");
   }
   const content = normalizeContentForKind(args.kind, args.content);
+  assertArtifactFieldSizes({ title: args.title, content });
   const now = new Date();
 
   const [row] = await tx
@@ -188,6 +259,9 @@ export async function writeArtifactVersion(
   if (args.title === undefined && args.content === undefined) {
     throw new Error("Provide content and/or title to revise the artifact");
   }
+  if (args.title !== undefined) {
+    assertArtifactFieldSizes({ title: args.title });
+  }
   const now = new Date();
 
   return await db.transaction(async (tx) => {
@@ -217,6 +291,9 @@ export async function writeArtifactVersion(
       args.content === undefined
         ? existing.content
         : normalizeContentForKind(existing.kind, args.content);
+    if (args.content !== undefined) {
+      assertArtifactFieldSizes({ content });
+    }
 
     await tx
       .update(artifact)
@@ -271,11 +348,34 @@ export async function getArtifactVersion(
   return row ?? null;
 }
 
+export type ArtifactVersionListItem = {
+  version: number;
+  title: string;
+  authorId: string;
+  createdAt: string;
+};
+
+export type ListArtifactVersionsFilters = {
+  cursor?: number;
+  limit?: number;
+};
+
+/**
+ * Version history, newest first, keyset-paginated by version number. Same
+ * limit defaults/clamps as listArtifacts. Does not project content.
+ */
 export async function listArtifactVersions(
   db: ArtifactDb,
   artifactId: string,
-): Promise<{ version: number; title: string; authorId: string; createdAt: string }[]> {
-  const rows = await db
+  filters: ListArtifactVersionsFilters = {},
+): Promise<{ versions: ArtifactVersionListItem[]; nextCursor: string | null }> {
+  const limit = filters.limit ?? DEFAULT_LIST_LIMIT;
+  const conditions: SQL[] = [eq(artifactVersion.artifactId, artifactId)];
+  if (filters.cursor !== undefined) {
+    conditions.push(lt(artifactVersion.version, filters.cursor));
+  }
+
+  const fetched = await db
     .select({
       version: artifactVersion.version,
       title: artifactVersion.title,
@@ -283,15 +383,25 @@ export async function listArtifactVersions(
       createdAt: artifactVersion.createdAt,
     })
     .from(artifactVersion)
-    .where(eq(artifactVersion.artifactId, artifactId))
-    .orderBy(desc(artifactVersion.version));
-  return rows.map((r) => ({ ...r, createdAt: r.createdAt.toISOString() }));
+    .where(and(...conditions))
+    .orderBy(desc(artifactVersion.version))
+    .limit(limit + 1);
+
+  const page = fetched.slice(0, limit);
+  const versions = page.map((r) => ({
+    ...r,
+    createdAt: r.createdAt.toISOString(),
+  }));
+  if (fetched.length <= limit) return { versions, nextCursor: null };
+  const last = page[page.length - 1]!;
+  return { versions, nextCursor: String(last.version) };
 }
 
 /**
  * Archive (soft-hide) or unarchive. Idempotent: re-archiving never overwrites
  * the original timestamp, and unarchiving a visible artifact is a no-op.
- * Returns the row as it now stands.
+ * Returns the row as it now stands in the database — never a locally
+ * synthesized timestamp that may have lost a concurrent race.
  */
 export async function setArtifactArchived(
   db: ArtifactDb,
@@ -299,21 +409,38 @@ export async function setArtifactArchived(
   archive: boolean,
 ): Promise<ArtifactRow> {
   if (archive && row.archivedAt === null) {
-    const archivedAt = new Date();
-    await db
+    const [updated] = await db
       .update(artifact)
-      .set({ archivedAt })
-      .where(and(eq(artifact.id, row.id), isNull(artifact.archivedAt)));
-    return { ...row, archivedAt };
+      .set({ archivedAt: new Date() })
+      .where(and(eq(artifact.id, row.id), isNull(artifact.archivedAt)))
+      .returning();
+    if (updated) return updated;
+    // Zero rows: a concurrent archive already won, or the row was archived
+    // under a fresher view. Reload so the response matches durable state.
+    return reloadArtifactRow(db, row.id);
   }
   if (!archive && row.archivedAt !== null) {
-    await db
+    const [updated] = await db
       .update(artifact)
       .set({ archivedAt: null })
-      .where(eq(artifact.id, row.id));
-    return { ...row, archivedAt: null };
+      .where(eq(artifact.id, row.id))
+      .returning();
+    if (updated) return updated;
+    return reloadArtifactRow(db, row.id);
   }
   return row;
+}
+
+async function reloadArtifactRow(
+  db: ArtifactDb,
+  artifactId: string,
+): Promise<ArtifactRow> {
+  const [current] = await db
+    .select()
+    .from(artifact)
+    .where(eq(artifact.id, artifactId));
+  if (!current) throw new ArtifactNotFoundError(artifactId);
+  return current;
 }
 
 export const DEFAULT_LIST_LIMIT = 20;
@@ -382,29 +509,46 @@ export const ListArtifactsQuery = type({
   (q): ListArtifactsFilters => ({ ...q, archived: q.archived === "true" }),
 );
 
+/** GET /artifacts/:id/versions query — cursor is the last version seen (newest-first). */
+export const ListArtifactVersionsQuery = type({
+  "cursor?": type("string").pipe((raw, ctx) => {
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 1) {
+      return ctx.error("a positive integer version cursor");
+    }
+    return n;
+  }),
+  limit: ListLimit.default(String(DEFAULT_LIST_LIMIT)),
+}).pipe(
+  (q): ListArtifactVersionsFilters => ({
+    ...(q.cursor !== undefined ? { cursor: q.cursor } : {}),
+    limit: q.limit,
+  }),
+);
+
 /**
- * Postgres `timestamp` holds microseconds while a JS `Date` holds milliseconds,
+ * Postgres `timestamptz` holds microseconds while a JS `Date` holds milliseconds,
  * so the cursor is rendered by Postgres at full precision — `Date#toISOString`
- * would truncate and skip/repeat rows inside a tie group. `updated_at` is a
- * zoneless UTC column, so no `AT TIME ZONE 'UTC'` here: that would produce a
- * `timestamptz` rendered in the session's zone. The literal `Z` states the
- * column's contents are UTC.
+ * would truncate and skip/repeat rows inside a tie group. `to_char` on a
+ * `timestamptz` renders in the session TimeZone, so project through
+ * `AT TIME ZONE 'UTC'` first and stamp a literal `Z` — the keyset then stays
+ * on the absolute instant under any session zone.
  */
-export const CURSOR_TIMESTAMP_SQL = sql<string>`to_char(${artifact.updatedAt}, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+export const CURSOR_TIMESTAMP_SQL = sql<string>`to_char(${artifact.updatedAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
 
 /**
  * A single row-value comparison so Postgres binds it as an Index Cond on
  * (tenant_id, updated_at, id); an OR-of-ranges lands in Filter and forces a
- * sort. The cursor value is cast to the zoneless column's type (`::timestamp`
- * accepts and discards the trailing `Z`); casting the column to `timestamptz`
- * instead would apply the session's zone and defeat the index.
+ * sort. The cursor value is cast to `timestamptz` so both sides are absolute
+ * instants — stable under any session TimeZone and index-friendly on the
+ * column as stored.
  */
 function cursorCondition(
   { at, id }: { at: string; id: string },
   oldestFirst: boolean,
 ): SQL {
   const operator = oldestFirst ? sql`>` : sql`<`;
-  return sql`(${artifact.updatedAt}, ${artifact.id}) ${operator} (${at}::timestamp, ${id})`;
+  return sql`(${artifact.updatedAt}, ${artifact.id}) ${operator} (${at}::timestamptz, ${id})`;
 }
 
 export async function listArtifacts(
@@ -412,7 +556,7 @@ export async function listArtifacts(
   identity: Identity,
   tenantId: string,
   filters: ListArtifactsFilters,
-): Promise<{ rows: ArtifactRow[]; nextCursor: string | null }> {
+): Promise<{ rows: ArtifactListRow[]; nextCursor: string | null }> {
   const limit = filters.limit ?? DEFAULT_LIST_LIMIT;
   const oldestFirst = filters.sort === "oldest";
 
@@ -427,6 +571,7 @@ export async function listArtifacts(
   // literal percent instead of matching everything.
   const query = (filters.query?.trim() ?? "").slice(0, 200).replace(/[%_\\]/g, "\\$&");
   if (query) {
+    // Filter may match on content, but list never SELECTs the body column.
     conditions.push(
       or(ilike(artifact.title, `%${query}%`), ilike(artifact.content, `%${query}%`))!,
     );
@@ -454,8 +599,11 @@ export async function listArtifacts(
     conditions.push(cursorCondition(filters.cursor, oldestFirst));
   }
 
+  // Discovery projection: every column except `content`. Bodies can be huge;
+  // clients that need one fetch detail, download, or tools.
+  const { content: _content, ...listColumns } = getTableColumns(artifact);
   const fetched = await db
-    .select({ ...getTableColumns(artifact), cursorAt: CURSOR_TIMESTAMP_SQL })
+    .select({ ...listColumns, cursorAt: CURSOR_TIMESTAMP_SQL })
     .from(artifact)
     .where(and(...conditions))
     .orderBy(
@@ -466,7 +614,7 @@ export async function listArtifacts(
     .limit(limit + 1);
 
   const page = fetched.slice(0, limit);
-  const rows: ArtifactRow[] = page.map(({ cursorAt: _cursorAt, ...row }) => row);
+  const rows: ArtifactListRow[] = page.map(({ cursorAt: _cursorAt, ...row }) => row);
   if (fetched.length <= limit) return { rows, nextCursor: null };
   const last = page[page.length - 1]!;
   return { rows, nextCursor: `${last.cursorAt}__${last.id}` };
@@ -500,12 +648,13 @@ export async function findArtifactByTitle(
 /**
  * Attach owner display names and run the display-only provenance decorator.
  * One call so no surface can serialize a row and forget half the enrichment.
+ * Accepts list items (no content) and detail rows alike.
  */
 export async function enrich(
   identity: Identity,
-  decorate: (tenantId: string, rows: SerializedArtifact[]) => Promise<void>,
+  decorate: (tenantId: string, rows: readonly SerializedArtifactBase[]) => Promise<void>,
   tenantId: string,
-  rows: SerializedArtifact[],
+  rows: SerializedArtifactBase[],
 ): Promise<void> {
   const ownerIds = [
     ...new Set(rows.map((r) => r.ownerPrincipalId).filter((id) => id !== null)),

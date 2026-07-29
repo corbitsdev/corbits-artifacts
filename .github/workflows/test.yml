@@ -24,6 +24,9 @@ jobs:
 
     env:
       ARTIFACT_DATABASE_URL: postgres://postgres:postgres@localhost:5457/artifact_core
+      # Package suite TRUNCATEs tables / some migration tests DROP SCHEMA — both
+      # refuse unless opted in against an allowlisted ephemeral database name.
+      ALLOW_DESTRUCTIVE_ARTIFACT_TESTS: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -38,14 +41,17 @@ jobs:
       - name: check-deps
         run: bun run --cwd packages/artifacts scripts/check-deps.ts
 
+      # typecheck builds first: examples import @corbits/artifacts through the
+      # published dist types, same path a consumer resolves.
       - name: typecheck
         run: bun run typecheck
 
       - name: unit + integration tests
         run: bun run --cwd packages/artifacts test:coverage
 
-      # Emits dist/, which is also what the reference host resolves through —
-      # so this proves the published artifact, not just the sources.
+      # dist/ is already emitted by typecheck; re-run for a clean package build
+      # so acceptance and the node consumer smoke test do not depend on typecheck
+      # having side-effected the tree.
       - name: build
         run: bun run build
 

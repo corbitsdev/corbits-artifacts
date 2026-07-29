@@ -34,7 +34,7 @@ import {
   type ResolvedPrincipal,
   type ContentStore,
   type Identity,
-  type SerializedArtifact,
+  type SerializedArtifactBase,
 } from "@corbits/artifacts";
 
 export const DATABASE_URL =
@@ -130,7 +130,7 @@ function createIdentity(db: ArtifactDb): Identity {
 }
 
 /** Display-only decorator. Adds a label, never changes what is returned. */
-async function decorate(_tenantId: string, rows: SerializedArtifact[]) {
+async function decorate(_tenantId: string, rows: readonly SerializedArtifactBase[]) {
   for (const row of rows) {
     (row as Record<string, unknown>).generatedByLabel =
       typeof row.source.generatedBy === "string" ? row.source.generatedBy : null;
@@ -371,7 +371,7 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
 
   return {
     db,
-    tenant,
+    tenantId: tenant,
     agentPrincipal,
     scope: () => ({
       tenantId: tenant,

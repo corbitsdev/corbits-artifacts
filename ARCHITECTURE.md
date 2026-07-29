@@ -123,14 +123,29 @@ which store is installed.
 Four physical tables — `artifact`, `artifact_version`, `upload`,
 `mail_attachment_ref` — plus this package's own migration ledger.
 
-**Hard control-plane foreign keys, by design.** `tenant_id` references
-`public.tenant(id)` (`ON DELETE CASCADE` — a deleted tenant takes its artifacts
-with it) and `principal_id` / `owner_principal_id` reference
+**Hard control-plane foreign keys, by design.** `tenant_id` is `NOT NULL` and
+references `public.tenant(id)` (`ON DELETE CASCADE` — a deleted tenant takes its
+artifacts with it) and `principal_id` / `owner_principal_id` reference
 `public.principal(id)` (`ON DELETE SET NULL` — a removed principal detaches its
 artifacts rather than destroying them). This package is coupled to Interchange:
 it mounts on Interchange-shaped hosts only, and the host's own migrations must
 have run before `runArtifactMigrations`. The internal key —
 `artifact_version.artifact_id` — cascades with its artifact.
+
+**Cheap row-local CHECKs.** `artifact.version` and `artifact_version.version`
+must be ≥ 1; `upload.size` and `mail_attachment_ref.size` must be ≥ 0. These are
+single-column constraints applied by a ledgered migration — free at write time.
+
+**Principal↔tenant alignment is host-owned.** The package FKs each column into
+the control plane independently; it does **not** enforce that `principal_id` (or
+`owner_principal_id`) belongs to the same tenant as `tenant_id`. A multi-table
+trigger or composite FK into `public.principal` would couple every write to a
+control-plane lookup and is deliberately out of scope. The host's
+`resolvePrincipal` is the authority: it returns the `(tenantId, principalId)`
+pair every route and tool write stamps, so a correctly mounted host never
+plants a cross-tenant principal. Operators cleaning legacy rows before the
+`tenant_id NOT NULL` migration must assign a valid tenant or delete orphans —
+the migration fails with an explicit message if null `tenant_id` rows remain.
 
 **`kind` is free-form text, not a pg enum,** validated at the application edge.
 New kinds cost no migration. What is *not* free-form is the import allowlist:
@@ -186,6 +201,22 @@ every boot of every replica.
   fresh databases diverge silently. Ship a new migration instead. The column is
   `NOT NULL`, so the guarantee is unconditional: there is no unrecorded row for
   the runner to adopt and wave through.
+- Event timestamps (`created_at`, `updated_at`, `archived_at`) are
+  **`timestamptz`**. The initial create migration still lays them down as
+  zoneless `timestamp`; a follow-on migration retypes them with
+  `USING col AT TIME ZONE 'UTC'`, treating existing walls as the UTC clocks the
+  package always assumed. List keyset cursors project through
+  `AT TIME ZONE 'UTC'` and compare with `::timestamptz`, so paging and date
+  filters stay on the absolute instant under any session `TimeZone`. Rollback is
+  the reverse cast (`TYPE timestamp USING col AT TIME ZONE 'UTC'`) plus a new
+  ledgered migration — never edit a shipped one.
+- A later ledgered migration sets `artifact.tenant_id NOT NULL` and adds the
+  version/size CHECKs. If null-tenant rows still exist, that migration raises
+  before altering the column so the operator can clean them up first.
+- Empty ledger + pre-existing package objects fails closed
+  (`MigrationAdoptError`). `{ adopt: true }` records checksums without re-DDL
+  only after shape validation: tables, column types, required nullability, and
+  the named CHECK constraints. Column presence alone is not enough.
 
 **The package owns its own Postgres schema.** Every table, index and the ledger
 live in `artifacts`, created by the runner and qualified in every

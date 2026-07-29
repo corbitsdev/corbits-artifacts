@@ -6,6 +6,7 @@ import {
   listArtifacts,
   ListArtifactsQuery,
   MAX_LIST_LIMIT,
+  serializeArtifactListItem,
   setArtifactArchived,
 } from "./artifacts.js";
 import { fakeIdentity, seedArtifact, seedSkillDraft, testDb } from "./test-helpers.js";
@@ -26,6 +27,29 @@ async function setTimes(db: ArtifactDb, id: string, iso: string) {
     sql`UPDATE "artifacts"."artifact" SET "created_at" = ${iso}::timestamptz, "updated_at" = ${iso}::timestamptz WHERE "id" = ${id}`,
   );
 }
+
+describe("list projection", () => {
+  // List is discovery, not bulk download: full bodies stay on detail/download/tools.
+  test("omits content from listed rows even when the body is large", async () => {
+    const db = await testDb();
+    const large = "x".repeat(50_000);
+    const seeded = await seedArtifact(db, { title: "Bulky", content: large });
+
+    const page = await listArtifacts(db, identity, "acme", {});
+    expect(page.rows.map((r) => r.id)).toEqual([seeded.id]);
+    const row = page.rows[0] as { id: string; content?: string; title?: string };
+    // The list query must not select the body column at all.
+    expect("content" in row).toBe(false);
+    expect(row.content).toBeUndefined();
+    // And the payload must not equal the seeded body if a serializer ever reintroduces a field.
+    expect(row.content).not.toBe(large);
+
+    const listed = serializeArtifactListItem(page.rows[0]!);
+    expect("content" in listed).toBe(false);
+    expect(listed.title).toBe("Bulky");
+    expect(listed.id).toBe(seeded.id);
+  });
+});
 
 describe("list filters", () => {
   test("hides archived by default and shows only archived when asked", async () => {
@@ -268,5 +292,63 @@ describe("list paging", () => {
     expect(new Date(first.nextCursor!.slice(0, 27)).toISOString()).not.toBe(
       "2026-01-01T00:00:00.123456Z",
     );
+  });
+
+  /**
+   * Zoneless `timestamp` columns reinterpret absolute instants as session wall
+   * clocks on write. A non-UTC `TimeZone` then makes the cursor claim a false
+   * `Z` and page against a different instant than the row stores. `timestamptz`
+   * keeps the keyset stable under any session zone.
+   */
+  test("keyset cursor stays on the UTC instant under a non-UTC session TimeZone", async () => {
+    const db = await testDb();
+    await db.execute(sql`SET TimeZone = 'America/Los_Angeles'`);
+    try {
+      const ids: string[] = [];
+      for (let i = 0; i < 3; i += 1) {
+        const row = await seedArtifact(db, { title: `Zone${i}` });
+        // Absolute UTC pins written the same way production dates arrive.
+        await setTimes(db, row.id, `2026-01-0${i + 1}T12:00:00.000000Z`);
+        ids.push(row.id);
+      }
+
+      const first = await listArtifacts(db, identity, "acme", { limit: 1 });
+      // Newest first: 2026-01-03 12:00 UTC — not the LA wall clock 04:00 with a
+      // lying Z suffix.
+      expect(first.rows.map((r) => r.id)).toEqual([ids[2]]);
+      expect(first.nextCursor).toBe(`2026-01-03T12:00:00.000000Z__${ids[2]}`);
+
+      const second = await listArtifacts(
+        db,
+        identity,
+        "acme",
+        parseQuery({ limit: "1", cursor: first.nextCursor! }),
+      );
+      expect(second.rows.map((r) => r.id)).toEqual([ids[1]]);
+      expect(second.nextCursor).toBe(`2026-01-02T12:00:00.000000Z__${ids[1]}`);
+
+      const third = await listArtifacts(
+        db,
+        identity,
+        "acme",
+        parseQuery({ limit: "1", cursor: second.nextCursor! }),
+      );
+      expect(third.rows.map((r) => r.id)).toEqual([ids[0]]);
+      expect(third.nextCursor).toBeNull();
+
+      // Date filters must also compare absolute instants, not session walls.
+      const filtered = await listArtifacts(
+        db,
+        identity,
+        "acme",
+        parseQuery({
+          createdAfter: "2026-01-02T00:00:00Z",
+          createdBefore: "2026-01-02T23:59:59Z",
+        }),
+      );
+      expect(filtered.rows.map((r) => r.id)).toEqual([ids[1]]);
+    } finally {
+      await db.execute(sql`SET TimeZone = 'UTC'`);
+    }
   });
 });

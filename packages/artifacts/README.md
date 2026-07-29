@@ -96,16 +96,40 @@ happen in major versions.
 
 | Surface | Behavior |
 | --- | --- |
-| `GET /api/artifacts` | Tenant-scoped list; query/kind/owner/creatorKind/date filters, keyset cursor, archived toggle |
+| `GET /api/artifacts` | Tenant-scoped list; query/kind/owner/creatorKind/date filters, keyset cursor, archived toggle. **Discovery only:** each item omits `content` (fetch bodies via detail, download, or tools) |
 | `POST /api/artifacts` | Human import — link a URL or paste text |
 | `POST /api/artifacts/upload` | multipart import. An optional `generatedBy` form field is stored as `source.generatedBy`, a free-form display label nothing here reads back |
 | `GET /api/artifacts/:id` | Deep link (archived artifacts still load) |
-| `GET`/`POST /api/artifacts/:id/versions` | Version history and revision |
+| `GET`/`POST /api/artifacts/:id/versions` | Version history (paginated, no content bodies) and revision |
 | `POST /api/artifacts/:id/(un)archive` | Idempotent soft-hide |
 | `GET /api/artifacts/:id/download` | One path over three storage conventions |
 | `…/api/instances/:id/mail-attachments` | Artifact↔message associations |
 
 Every route carries `describeRoute`, so it appears in the host's `/openapi.json`.
+
+**List contract (minor client break):** `GET /api/artifacts` (and `listArtifacts` /
+`serializeArtifactListItem`) no longer include full `content` on each item. Clients that
+previously rendered list rows from the list payload must load bodies via
+`GET /api/artifacts/:id`, download, or the read tools. Search still matches title and
+content server-side; only the response projection changes.
+
+**Version history pagination:** `GET /api/artifacts/:id/versions` returns
+`{ versions, nextCursor }` with the same default/max limit clamps as list. Cursor is the
+last version number returned (newest-first). Version rows omit content; use
+`GET /api/artifacts/:id?version=N` (or `getArtifactVersion`) for a pinned body.
+
+**Write size limits:** create and revise reject titles longer than 512 characters and
+content larger than 15 MiB UTF-8 (`ArtifactSizeError` / HTTP 400). JSON mutators also
+refuse a declared `Content-Length` over that same 15 MiB ceiling with HTTP 413 before
+buffering the body; missing `Content-Length` still streams into the parser. **Hosts
+should set a global request body limit upstream** of this mount (Hono middleware, Bun
+server, reverse proxy) — the package check is a best-effort edge guard, not a substitute
+for a host-level cap. Upload byte caps remain on the multipart path.
+
+**Auth before body:** mutating JSON routes (`POST /api/artifacts`,
+`POST /api/artifacts/:id/versions`, `POST …/mail-attachments`) resolve the principal
+before parsing the body, so an unauthenticated caller gets 403 without learning whether
+the JSON was well-formed. Upload already auth'd first.
 
 ### Two response contracts
 
@@ -189,9 +213,12 @@ blob, then inline data URL, then downloadable text (`csv-export`). Bytes are ser
 ## Schema and migrations
 
 Four tables — `artifact`, `artifact_version`, `upload`, `mail_attachment_ref` — in the
-package-owned `artifacts` Postgres schema. `tenant_id` and the principal columns are
-hard foreign keys into Interchange's `public.tenant` / `public.principal`, so the
-host's own migrations must run first.
+package-owned `artifacts` Postgres schema. `tenant_id` is required (`NOT NULL`) and,
+with the principal columns, is a hard foreign key into Interchange's
+`public.tenant` / `public.principal`, so the host's own migrations must run first.
+Version columns CHECK ≥ 1; size columns CHECK ≥ 0. Whether a principal belongs to
+the stamped tenant is **host-owned** via `resolvePrincipal` — the package does not
+install multi-table triggers for that alignment (see ARCHITECTURE.md).
 
 `runArtifactMigrations(db)` is idempotent, advisory-locked, creates and owns the
 `artifacts` Postgres schema, and keeps its own ledger
@@ -199,13 +226,42 @@ host's own migrations must run first.
 replica: concurrent cold starts serialize on a transaction-scoped advisory lock, and a
 re-run prints nothing.
 
+If the ledger is empty but package tables already exist (restored dump, dropped
+ledger), the runner fails closed with `MigrationAdoptError`. Operators who have
+confirmed the live schema may pass `{ adopt: true }` to record checksums without
+re-running DDL. Adopt validates tables, column types, `artifact.tenant_id NOT NULL`,
+and the named version/size CHECK constraints — not a columns-only glance.
+
+Event timestamps are `timestamptz` so list keyset cursors and date filters stay
+stable under a non-UTC session `TimeZone`. A ledgered retype migration converts
+legacy zoneless columns with `USING col AT TIME ZONE 'UTC'` (existing walls were
+always documented as UTC). Do not edit shipped migrations to roll back — ship a
+new reverse cast if you must.
+
 ## Development
 
 ```bash
+# Destructive harness (TRUNCATE / DROP SCHEMA) is fail-closed. Opt in explicitly:
+export ALLOW_DESTRUCTIVE_ARTIFACT_TESTS=1
+# Optional override; default is postgres://postgres:postgres@localhost:5457/artifact_core
+# export ARTIFACT_DATABASE_URL=postgres://postgres:postgres@localhost:5457/artifact_core
+
 bun run test          # dependency check, then the suite (needs Postgres)
 bun run test:coverage
 bun run build         # dist/ — JS + .d.ts, consumable from Node
 ```
+
+The package suite truncates artifact tables between tests and some migration tests
+drop the package schema. Both paths refuse unless:
+
+| Requirement | Value |
+| --- | --- |
+| Opt-in env | `ALLOW_DESTRUCTIVE_ARTIFACT_TESTS=1` (exactly `"1"`) |
+| Database name allowlist | `artifact_core` (the documented local docker default), **or** any name ending in `_test` (e.g. `artifacts_test`) |
+
+Point `ARTIFACT_DATABASE_URL` at an allowlisted ephemeral database. A missing opt-in
+or a production-looking name throws before any TRUNCATE/DROP runs. The gate is pure
+URL/env parsing, so its unit tests do not need a live Postgres.
 
 The tarball ships `src/` alongside `dist/`, so the emitted `.js.map` and `.d.ts.map`
 resolve: go-to-definition and stack traces land on real TypeScript.

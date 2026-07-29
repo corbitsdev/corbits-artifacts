@@ -3,7 +3,11 @@ import { sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { mountArtifacts } from "./mount.js";
 import { InlineContentStore } from "./content-store.js";
-import { listArtifacts, setArtifactArchived } from "./artifacts.js";
+import {
+  listArtifacts,
+  MAX_ARTIFACT_CONTENT_BYTES,
+  setArtifactArchived,
+} from "./artifacts.js";
 import {
   MAX_UPLOAD_BYTES,
   MAX_UPLOAD_FILE_COUNT,
@@ -105,6 +109,54 @@ describe("POST /artifacts", () => {
     );
     expect(res.status).toBe(403);
   });
+
+  // Auth must run before body parse: an unauthenticated caller never learns
+  // whether the body was valid JSON/shape — they get 403 either way.
+  test("is 403 for an unauthenticated caller even when the body is empty or invalid", async () => {
+    const db = await testDb();
+    const app = host(db, { principal: null });
+    for (const body of ["", "{", "{}", "null"]) {
+      const res = await app.request("/artifacts", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      });
+      expect({ body, status: res.status, json: await res.json() }).toEqual({
+        body,
+        status: 403,
+        json: { error: "Tenant not accessible" },
+      });
+    }
+  });
+
+  test("rejects a declared Content-Length over the content ceiling with 413", async () => {
+    const db = await testDb();
+    const res = await host(db).request("/artifacts", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": String(MAX_ARTIFACT_CONTENT_BYTES + 1),
+      },
+      // Body is small; the declared length alone must be enough to refuse.
+      body: JSON.stringify({ mode: "text", title: "t", content: "small" }),
+    });
+    expect(res.status).toBe(413);
+  });
+
+  test("rejects oversize content after parse with 400", async () => {
+    const db = await testDb();
+    const res = await host(db).request(
+      "/artifacts",
+      json({
+        mode: "text",
+        title: "t",
+        content: "x".repeat(MAX_ARTIFACT_CONTENT_BYTES + 1),
+      }),
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/content exceeds/i);
+  });
 });
 
 describe("GET /artifacts", () => {
@@ -113,6 +165,28 @@ describe("GET /artifacts", () => {
     const res = await host(db, { principal: null }).request("/artifacts");
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ artifacts: [], nextCursor: null });
+  });
+
+  // List is discovery: full bodies stay on detail/download/tools.
+  test("omits content from listed artifacts even when the body is large", async () => {
+    const db = await testDb();
+    const large = "y".repeat(40_000);
+    const row = await seedArtifact(db, { title: "Heavy", content: large });
+    const app = host(db);
+
+    const listed = (await (await app.request("/artifacts")).json()) as {
+      artifacts: Record<string, unknown>[];
+    };
+    expect(listed.artifacts).toHaveLength(1);
+    expect(listed.artifacts[0]!.id).toBe(row.id);
+    expect(listed.artifacts[0]!.title).toBe("Heavy");
+    expect("content" in listed.artifacts[0]!).toBe(false);
+
+    // Detail still returns the full body.
+    const detail = (await (
+      await app.request(`/artifacts/${row.id}`)
+    ).json()) as { artifact: { content: string } };
+    expect(detail.artifact.content).toBe(large);
   });
 
   test("attaches owner names and runs the display-only provenance decorator", async () => {
@@ -320,6 +394,39 @@ describe("every way of not getting an artifact is indistinguishable", () => {
 });
 
 describe("versions", () => {
+  // Auth (loadScoped) before body parse: empty/invalid body still 403 when signed out.
+  test("revise is 403 for an unauthenticated caller even with an empty or invalid body", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db);
+    const app = host(db, { principal: null });
+    for (const body of ["", "{", "{}", "null"]) {
+      const res = await app.request(`/artifacts/${row.id}/versions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      });
+      expect({ body, status: res.status, json: await res.json() }).toEqual({
+        body,
+        status: 403,
+        json: { error: "Forbidden" },
+      });
+    }
+  });
+
+  test("revise rejects a declared Content-Length over the content ceiling with 413", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db);
+    const res = await host(db).request(`/artifacts/${row.id}/versions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": String(MAX_ARTIFACT_CONTENT_BYTES + 1),
+      },
+      body: JSON.stringify({ content: "small" }),
+    });
+    expect(res.status).toBe(413);
+  });
+
   test("revises through the route and lists the history newest-first", async () => {
     const db = await testDb();
     const app = host(db);
@@ -331,8 +438,42 @@ describe("versions", () => {
 
     const history = (await (
       await app.request(`/artifacts/${row.id}/versions`)
-    ).json()) as { versions: { version: number }[] };
+    ).json()) as { versions: { version: number }[]; nextCursor: string | null };
     expect(history.versions.map((v) => v.version)).toEqual([2, 1]);
+    expect(history.nextCursor).toBeNull();
+  });
+
+  test("version history paginates with cursor and limit", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const row = await seedArtifact(db, { title: "Draft", content: "v1" });
+    await app.request(`/artifacts/${row.id}/versions`, json({ content: "v2" }));
+    await app.request(`/artifacts/${row.id}/versions`, json({ content: "v3" }));
+
+    const page1 = (await (
+      await app.request(`/artifacts/${row.id}/versions?limit=2`)
+    ).json()) as { versions: { version: number }[]; nextCursor: string | null };
+    expect(page1.versions.map((v) => v.version)).toEqual([3, 2]);
+    expect(page1.nextCursor).toBe("2");
+
+    const page2 = (await (
+      await app.request(`/artifacts/${row.id}/versions?limit=2&cursor=${page1.nextCursor}`)
+    ).json()) as { versions: { version: number }[]; nextCursor: string | null };
+    expect(page2.versions.map((v) => v.version)).toEqual([1]);
+    expect(page2.nextCursor).toBeNull();
+  });
+
+  test("oversize create title is 400", async () => {
+    const db = await testDb();
+    const res = await host(db).request(
+      "/artifacts",
+      json({
+        title: "x".repeat(513),
+        content: "ok",
+        mode: "text",
+      }),
+    );
+    expect(res.status).toBe(400);
   });
 
   test("a body with neither title nor content is 400", async () => {
@@ -626,6 +767,24 @@ describe("download over HTTP", () => {
 });
 
 describe("mail attachment references", () => {
+  // Auth before body parse on the write route.
+  test("POST is 403 for an unauthenticated caller even with an empty or invalid body", async () => {
+    const db = await testDb();
+    const app = host(db, { principal: null });
+    for (const body of ["", "{", "{}", "null"]) {
+      const res = await app.request("/instances/inst-1/mail-attachments", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      });
+      expect({ body, status: res.status, json: await res.json() }).toEqual({
+        body,
+        status: 403,
+        json: { error: "Tenant not accessible" },
+      });
+    }
+  });
+
   test("records and lists an artifact↔message association, idempotently", async () => {
     const db = await testDb();
     const app = host(db);

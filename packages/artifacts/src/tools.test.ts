@@ -299,8 +299,8 @@ describe("artifact_link_file", () => {
     expect(row.source).toEqual({ origin: "agent", workspace: { path: "out/deck.pdf" } });
 
     const versions = await listArtifactVersions(db, row.id);
-    expect(versions.map((v) => v.version)).toEqual([1]);
-    expect(versions[0]!.title).toBe("Quarterly deck");
+    expect(versions.versions.map((v) => v.version)).toEqual([1]);
+    expect(versions.versions[0]!.title).toBe("Quarterly deck");
   });
 
   test("no bytes move: nothing is written to the blob side-table", async () => {

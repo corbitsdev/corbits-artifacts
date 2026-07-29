@@ -5,21 +5,29 @@ import { describeRoute } from "hono-openapi";
 import type { ArtifactDb } from "./db.js";
 import {
   ArtifactNotFoundError,
+  ArtifactSizeError,
   createArtifact,
   enrich,
   getArtifact,
   listArtifacts,
   ListArtifactsQuery,
   listArtifactVersions,
+  ListArtifactVersionsQuery,
+  MAX_ARTIFACT_CONTENT_BYTES,
   serializeArtifact,
+  serializeArtifactListItem,
   setArtifactArchived,
   SKILL_DRAFT_KIND,
   writeArtifactVersion,
+  type ArtifactListRow,
   type SerializedArtifact,
+  type SerializedArtifactBase,
+  type SerializedArtifactListItem,
 } from "./artifacts.js";
 import { resolveDownload } from "./download.js";
 import {
   listMailAttachmentRefs,
+  MailAttachmentKindError,
   saveMailAttachmentRefs,
   SaveMailAttachmentRefsSchema,
 } from "./mail-attachments.js";
@@ -65,8 +73,13 @@ export type MountArtifactsOpts = {
   /**
    * A DISPLAY-ONLY decorator: it may add fields to the serialized rows and
    * must never affect what is returned or who may see it. Defaults to a no-op.
+   * Receives list items (no `content`) on `GET /artifacts` and full detail rows
+   * (with `content`) on single-artifact surfaces.
    */
-  decorate?: (tenantId: string, rows: SerializedArtifact[]) => Promise<void>;
+  decorate?: (
+    tenantId: string,
+    rows: readonly SerializedArtifactBase[],
+  ) => Promise<void>;
   /** Which files `POST /artifacts/upload` accepts. */
   uploadPolicy?: UploadPolicy;
 };
@@ -168,11 +181,33 @@ export function mountArtifacts<E extends Env>(
 
   const readJson = (c: Ctx): Promise<unknown> => c.req.json().catch(() => null);
 
+  /**
+   * Coarse HTTP body ceiling for JSON mutators, reusing the content-byte constant.
+   * Only acts when Content-Length is present; missing length still streams into
+   * `readJson`, so hosts must set a global request body limit upstream.
+   */
+  function contentLengthOverCeiling(c: Ctx): boolean {
+    const raw = c.req.header("content-length");
+    if (raw === undefined || raw === "") return false;
+    const n = Number(raw);
+    return Number.isFinite(n) && n > MAX_ARTIFACT_CONTENT_BYTES;
+  }
+
   async function serialize(
     scope: ResolvedPrincipal,
     rows: ArtifactRow[],
   ): Promise<SerializedArtifact[]> {
     const serialized = rows.map(serializeArtifact);
+    await enrich(identity, decorate, scope.tenantId, serialized);
+    return serialized;
+  }
+
+  /** List is discovery: metadata + enrichment, never the body. */
+  async function serializeList(
+    scope: ResolvedPrincipal,
+    rows: ArtifactListRow[],
+  ): Promise<SerializedArtifactListItem[]> {
+    const serialized = rows.map(serializeArtifactListItem);
     await enrich(identity, decorate, scope.tenantId, serialized);
     return serialized;
   }
@@ -223,7 +258,7 @@ export function mountArtifacts<E extends Env>(
       tags: ["Artifacts"],
       summary: "List artifacts in the caller's tenant",
       description:
-        "Newest-updated first by default. Supports query/kind/owner/creatorKind/date filters, an `updatedAt__id` keyset cursor, and an archived-only toggle. skill-draft artifacts are never listed.",
+        "Newest-updated first by default. Supports query/kind/owner/creatorKind/date filters, an `updatedAt__id` keyset cursor, and an archived-only toggle. skill-draft artifacts are never listed. List is discovery only: each item omits `content` (fetch the body via GET /artifacts/:id, download, or tools).",
       parameters: [
         { name: "query", in: "query", required: false, schema: { type: "string" } },
         { name: "sort", in: "query", required: false, schema: { type: "string" } },
@@ -262,7 +297,10 @@ export function mountArtifacts<E extends Env>(
         },
       ],
       responses: {
-        200: { description: "A page of artifacts" },
+        200: {
+          description:
+            "A page of artifacts without full `content` (metadata only; use detail/download/tools for bodies)",
+        },
         400: { description: "Invalid filter or cursor" },
         403: { description: "Tenant not accessible" },
       },
@@ -277,7 +315,7 @@ export function mountArtifacts<E extends Env>(
 
       const page = await listArtifacts(db, identity, scope.tenantId, filters);
       return c.json({
-        artifacts: await serialize(scope, page.rows),
+        artifacts: await serializeList(scope, page.rows),
         nextCursor: page.nextCursor,
       });
     },
@@ -294,33 +332,54 @@ export function mountArtifacts<E extends Env>(
         201: { description: "Artifact created" },
         400: { description: "Invalid request body" },
         403: { description: "Tenant not accessible" },
+        413: { description: "Declared Content-Length over the content ceiling" },
       },
     }),
     async (c) => {
+      // Principal before body: unauthenticated callers get 403 without learning
+      // whether the JSON was well-formed.
+      const scope = await scopeFor(c);
+      if (!scope) return c.json({ error: "Tenant not accessible" }, 403);
+      if (contentLengthOverCeiling(c)) {
+        return c.json(
+          {
+            error: `Request body exceeds the ${MAX_ARTIFACT_CONTENT_BYTES} byte limit`,
+          },
+          413,
+        );
+      }
+
       const raw = await readJson(c);
       if (raw === null) return c.json({ error: "Invalid JSON body" }, 400);
       const body = CreateArtifactRequest(raw);
       if (body instanceof type.errors) return c.json({ error: body.summary }, 400);
 
-      const scope = await scopeFor(c);
-      if (!scope) return c.json({ error: "Tenant not accessible" }, 403);
-
       const isUrl = body.mode === "url";
-      const row = await db.transaction((tx) =>
-        createArtifact(tx, {
-          scope,
-          ownerPrincipalId: scope.principalId,
-          kind: body.kind ?? (isUrl ? "link" : "document"),
-          title: body.title,
-          content: body.content,
-          source: isUrl
-            ? { origin: "imported", url: body.content }
-            : { origin: "manual" },
-        }),
-      );
+      try {
+        const row = await db.transaction((tx) =>
+          createArtifact(tx, {
+            scope,
+            ownerPrincipalId: scope.principalId,
+            kind: body.kind ?? (isUrl ? "link" : "document"),
+            title: body.title,
+            content: body.content,
+            source: isUrl
+              ? { origin: "imported", url: body.content }
+              : { origin: "manual" },
+          }),
+        );
 
-      const [artifactJson] = await serializeCommitted(scope, [row]);
-      return c.json({ artifact: artifactJson }, 201);
+        const [artifactJson] = await serializeCommitted(scope, [row]);
+        return c.json({ artifact: artifactJson }, 201);
+      } catch (error) {
+        if (error instanceof ArtifactSizeError) {
+          return c.json({ error: error.message }, 400);
+        }
+        if (error instanceof WebSiteContentError) {
+          return c.json({ error: error.message }, 400);
+        }
+        throw error;
+      }
     },
   );
 
@@ -454,9 +513,12 @@ export function mountArtifacts<E extends Env>(
     describeRoute({
       tags: ["Artifacts"],
       summary: "List an artifact's version history",
+      description:
+        "Newest first. Paginated with the same limit defaults as list (cursor is the last version number returned).",
       parameters: [idParam],
       responses: {
-        200: { description: "Versions, newest first" },
+        200: { description: "Versions page, newest first" },
+        400: { description: "Invalid cursor or limit" },
         403: { description: "No resolvable principal" },
         404: { description: "Artifact not found" },
       },
@@ -464,7 +526,11 @@ export function mountArtifacts<E extends Env>(
     async (c) => {
       const loaded = await loadScoped(c);
       if ("response" in loaded) return loaded.response;
-      return c.json({ versions: await listArtifactVersions(db, loaded.row.id) });
+      const query = ListArtifactVersionsQuery(c.req.query());
+      if (query instanceof type.errors) {
+        return c.json({ error: query.summary }, 400);
+      }
+      return c.json(await listArtifactVersions(db, loaded.row.id, query));
     },
   );
 
@@ -481,19 +547,29 @@ export function mountArtifacts<E extends Env>(
         400: { description: "Invalid request body or content" },
         403: { description: "No resolvable principal, or not the owner" },
         404: { description: "Artifact not found" },
+        413: { description: "Declared Content-Length over the content ceiling" },
       },
     }),
     async (c) => {
-      const raw = await readJson(c);
-      if (raw === null) return c.json({ error: "Invalid JSON body" }, 400);
-      const body = ReviseArtifactRequest(raw);
-      if (body instanceof type.errors) return c.json({ error: body.summary }, 400);
-
+      // loadScoped resolves the principal before any body parse.
       const loaded = await loadScoped(c);
       if ("response" in loaded) return loaded.response;
       if (!(await canMutate(loaded.row, loaded.scope))) {
         return c.json({ error: "Forbidden" }, 403);
       }
+      if (contentLengthOverCeiling(c)) {
+        return c.json(
+          {
+            error: `Request body exceeds the ${MAX_ARTIFACT_CONTENT_BYTES} byte limit`,
+          },
+          413,
+        );
+      }
+
+      const raw = await readJson(c);
+      if (raw === null) return c.json({ error: "Invalid JSON body" }, 400);
+      const body = ReviseArtifactRequest(raw);
+      if (body instanceof type.errors) return c.json({ error: body.summary }, 400);
       try {
         return c.json(
           await writeArtifactVersion(db, {
@@ -506,6 +582,9 @@ export function mountArtifacts<E extends Env>(
       } catch (error) {
         if (error instanceof ArtifactNotFoundError) {
           return c.json({ error: "Artifact not found" }, 404);
+        }
+        if (error instanceof ArtifactSizeError) {
+          return c.json({ error: error.message }, 400);
         }
         if (error instanceof WebSiteContentError) {
           return c.json({ error: error.message }, 400);
@@ -637,17 +716,29 @@ export function mountArtifacts<E extends Env>(
       ],
       responses: {
         201: { description: "References recorded" },
-        400: { description: "Invalid request body" },
+        400: {
+          description:
+            "Invalid request body, or a referenced artifact is not an attachable file/image kind",
+        },
         403: { description: "Tenant not accessible" },
         404: { description: "A referenced artifact is not visible to the caller" },
+        413: { description: "Declared Content-Length over the content ceiling" },
       },
     }),
     async (c) => {
+      const scope = await scopeFor(c);
+      if (!scope) return c.json({ error: "Tenant not accessible" }, 403);
+      if (contentLengthOverCeiling(c)) {
+        return c.json(
+          {
+            error: `Request body exceeds the ${MAX_ARTIFACT_CONTENT_BYTES} byte limit`,
+          },
+          413,
+        );
+      }
       const raw = await readJson(c);
       const body = SaveMailAttachmentRefsSchema(raw);
       if (body instanceof type.errors) return c.json({ error: body.summary }, 400);
-      const scope = await scopeFor(c);
-      if (!scope) return c.json({ error: "Tenant not accessible" }, 403);
       try {
         await saveMailAttachmentRefs(db, {
           scope,
@@ -659,6 +750,11 @@ export function mountArtifacts<E extends Env>(
         // here is indistinguishable from naming one that never existed.
         if (err instanceof ArtifactNotFoundError) {
           return c.json({ error: "Artifact not found" }, 404);
+        }
+        // Visible but wrong kind: the id is real to this tenant, so 400 rather
+        // than collapsing into the 404 existence oracle.
+        if (err instanceof MailAttachmentKindError) {
+          return c.json({ error: err.message }, 400);
         }
         throw err;
       }

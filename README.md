@@ -22,6 +22,10 @@ bun install
 docker run -d --name corbits-artifact-pg -p 5457:5432 \
   -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=artifact_core postgres:16
 
+# The package suite TRUNCATEs tables and some migration tests DROP SCHEMA.
+# Both refuse unless you opt in and the database name is allowlisted.
+export ALLOW_DESTRUCTIVE_ARTIFACT_TESTS=1
+
 bun run test:package     # dependency check, then unit + integration
 bun run build            # dist/ (JS + .d.ts)
 bun run test:acceptance  # builds, then the acceptance scenarios
@@ -34,7 +38,10 @@ run stops meaning anything.
 
 Tests and the example expect
 `postgres://postgres:postgres@localhost:5457/artifact_core`; override with
-`ARTIFACT_DATABASE_URL`.
+`ARTIFACT_DATABASE_URL`. Destructive package tests additionally require
+`ALLOW_DESTRUCTIVE_ARTIFACT_TESTS=1` and an allowlisted database name
+(`artifact_core`, or any name ending in `_test`). See the package README Development
+section for the full gate contract.
 
 ## Conventions
 

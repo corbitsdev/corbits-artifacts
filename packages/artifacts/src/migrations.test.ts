@@ -6,12 +6,16 @@ import postgres from "postgres";
 import { createArtifactDb } from "./db.js";
 import {
   migrationChecksum,
+  MigrationAdoptError,
   MigrationChecksumError,
   MIGRATIONS,
   runArtifactMigrations,
 } from "./migrations.js";
 import * as schema from "./schema.js";
-import { DATABASE_URL } from "./test-helpers.js";
+import {
+  assertDestructiveArtifactTestsAllowed,
+  DATABASE_URL,
+} from "./test-helpers.js";
 
 const SCHEMA = "artifacts";
 const LEDGER = "migrations";
@@ -69,6 +73,7 @@ describe("migrations", () => {
   // the lock, not the IF NOT EXISTS, that makes the runner safe to call from
   // every instance at once.
   test("concurrent first boots against a fresh database all succeed", async () => {
+    assertDestructiveArtifactTestsAllowed(DATABASE_URL);
     await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
     // Each handle is its own pool, so all four genuinely believe they are the
     // first boot.
@@ -301,6 +306,7 @@ describe("migrations", () => {
   test("the migrations create exactly the tables schema.ts declares, no more, no less", async () => {
     // The package schema is dropped and rebuilt from empty, so the migrations
     // are its only writer and the comparison is an EQUALITY.
+    assertDestructiveArtifactTestsAllowed(DATABASE_URL);
     await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
     await runArtifactMigrations(db);
     const tables = await db.execute<{ table_name: string }>(sql`
@@ -312,5 +318,321 @@ describe("migrations", () => {
       .filter((name) => name !== LEDGER)
       .sort();
     expect(created).toEqual(DECLARED_TABLES);
+  });
+
+  /**
+   * Empty ledger + pre-existing package objects is the AUDIT-013 footgun:
+   * `CREATE IF NOT EXISTS` no-ops and a naive runner would still stamp the
+   * current checksum, so boot "succeeds" while the live shape is wrong.
+   * These three cases pin the adopt-or-fail contract.
+   */
+  test("clean install still migrates when the package schema is empty", async () => {
+    assertDestructiveArtifactTestsAllowed(DATABASE_URL);
+    await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
+    await runArtifactMigrations(db);
+
+    const ledger = await db.execute<{ id: string; checksum: string }>(
+      sql`SELECT "id", "checksum" FROM ${sql.identifier(SCHEMA)}.${sql.identifier(LEDGER)} ORDER BY "id"`,
+    );
+    expect(ledger.map((r) => r.id)).toEqual(MIGRATIONS.map((m) => m.id));
+    for (const row of ledger) {
+      const migration = MIGRATIONS.find((m) => m.id === row.id)!;
+      expect(row.checksum).toBe(migrationChecksum(migration));
+    }
+  });
+
+  test("empty ledger + wrong shape fails closed and does not write a checksum", async () => {
+    assertDestructiveArtifactTestsAllowed(DATABASE_URL);
+    await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
+    // Partial / wrong object: schema + a table that is not the package shape.
+    await db.execute(sql`CREATE SCHEMA ${sql.identifier(SCHEMA)}`);
+    await db.execute(sql`
+      CREATE TABLE ${sql.identifier(SCHEMA)}."artifact" (
+        "id" text PRIMARY KEY,
+        "not_the_real_shape" text
+      )
+    `);
+
+    await expect(runArtifactMigrations(db)).rejects.toThrow(MigrationAdoptError);
+    await expect(
+      runArtifactMigrations(db, { adopt: true }),
+    ).rejects.toThrow(MigrationAdoptError);
+
+    // No ledger row may have been recorded — including a ledger that was
+    // created mid-run and then rolled back with the failed transaction.
+    const ledgerTables = await db.execute<{ n: number }>(sql`
+      SELECT count(*)::int AS n FROM information_schema.tables
+      WHERE table_schema = ${SCHEMA} AND table_name = ${LEDGER}
+    `);
+    expect(ledgerTables[0]!.n).toBe(0);
+
+    // And the wrong object is still the only package table — runner must not
+    // have half-applied real DDL around it.
+    const tables = await db.execute<{ table_name: string }>(sql`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = ${SCHEMA}
+    `);
+    expect(tables.map((t) => t.table_name).sort()).toEqual(["artifact"]);
+  });
+
+  test("empty ledger + compatible shape requires explicit adopt; adopt records checksums without re-DDL", async () => {
+    assertDestructiveArtifactTestsAllowed(DATABASE_URL);
+    await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
+    // Build a correct shape the honest way, then erase the ledger so the next
+    // boot sees "objects present, ledger empty" — the adopt path's input.
+    await runArtifactMigrations(db);
+    await db.execute(
+      sql`DROP TABLE ${sql.identifier(SCHEMA)}.${sql.identifier(LEDGER)}`,
+    );
+
+    // Without the flag: fail closed even though the shape is right. Silent
+    // adoption is how a wrong-but-lucky shape used to get a checksum stamp.
+    await expect(runArtifactMigrations(db)).rejects.toThrow(MigrationAdoptError);
+
+    const stillEmpty = await db.execute<{ n: number }>(sql`
+      SELECT count(*)::int AS n FROM information_schema.tables
+      WHERE table_schema = ${SCHEMA} AND table_name = ${LEDGER}
+    `);
+    expect(stillEmpty[0]!.n).toBe(0);
+
+    // With the flag: shape validates, ledger is written, objects stay put.
+    await runArtifactMigrations(db, { adopt: true });
+
+    const ledger = await db.execute<{ id: string; checksum: string }>(
+      sql`SELECT "id", "checksum" FROM ${sql.identifier(SCHEMA)}.${sql.identifier(LEDGER)} ORDER BY "id"`,
+    );
+    expect(ledger.map((r) => r.id)).toEqual(MIGRATIONS.map((m) => m.id));
+    for (const row of ledger) {
+      const migration = MIGRATIONS.find((m) => m.id === row.id)!;
+      expect(row.checksum).toBe(migrationChecksum(migration));
+    }
+
+    // Re-run (no adopt needed once ledgered) remains a quiet no-op.
+    await runArtifactMigrations(db);
+    const again = await db.execute<{ id: string }>(
+      sql`SELECT "id" FROM ${sql.identifier(SCHEMA)}.${sql.identifier(LEDGER)}`,
+    );
+    expect(again.length).toBe(MIGRATIONS.length);
+  });
+
+  test("empty ledger + columns without 0003 CHECKs refuses adopt", async () => {
+    assertDestructiveArtifactTestsAllowed(DATABASE_URL);
+    await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
+    // Honest migrate, drop ledger, then strip a row-local CHECK so columns and
+    // types still match but 0003 invariants are gone — adopt must not stamp.
+    await runArtifactMigrations(db);
+    await db.execute(
+      sql`DROP TABLE ${sql.identifier(SCHEMA)}.${sql.identifier(LEDGER)}`,
+    );
+    await db.execute(sql`
+      ALTER TABLE ${sql.identifier(SCHEMA)}."artifact"
+        DROP CONSTRAINT "artifact_version_gte_1"
+    `);
+
+    await expect(
+      runArtifactMigrations(db, { adopt: true }),
+    ).rejects.toThrow(MigrationAdoptError);
+    await expect(
+      runArtifactMigrations(db, { adopt: true }),
+    ).rejects.toThrow(/artifact_version_gte_1/);
+
+    const ledgerTables = await db.execute<{ n: number }>(sql`
+      SELECT count(*)::int AS n FROM information_schema.tables
+      WHERE table_schema = ${SCHEMA} AND table_name = ${LEDGER}
+    `);
+    expect(ledgerTables[0]!.n).toBe(0);
+
+    // Later tests call runArtifactMigrations without a reset; restore a
+    // fully-ledgered schema so they are not stranded on an empty ledger.
+    await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
+    await runArtifactMigrations(db);
+  });
+
+  test("empty ledger + nullable tenant_id refuses adopt", async () => {
+    assertDestructiveArtifactTestsAllowed(DATABASE_URL);
+    await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
+    await runArtifactMigrations(db);
+    await db.execute(
+      sql`DROP TABLE ${sql.identifier(SCHEMA)}.${sql.identifier(LEDGER)}`,
+    );
+    await db.execute(sql`
+      ALTER TABLE ${sql.identifier(SCHEMA)}."artifact"
+        ALTER COLUMN "tenant_id" DROP NOT NULL
+    `);
+
+    await expect(
+      runArtifactMigrations(db, { adopt: true }),
+    ).rejects.toThrow(MigrationAdoptError);
+    await expect(
+      runArtifactMigrations(db, { adopt: true }),
+    ).rejects.toThrow(/tenant_id.*NOT NULL/i);
+
+    const ledgerTables = await db.execute<{ n: number }>(sql`
+      SELECT count(*)::int AS n FROM information_schema.tables
+      WHERE table_schema = ${SCHEMA} AND table_name = ${LEDGER}
+    `);
+    expect(ledgerTables[0]!.n).toBe(0);
+
+    await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
+    await runArtifactMigrations(db);
+  });
+
+  /**
+   * DB invariants: tenant_id is required on every artifact row; version and size
+   * stay non-negative. Principal↔tenant alignment is host-owned (resolvePrincipal)
+   * — no multi-table trigger here.
+   */
+  test("null tenant_id on artifact is rejected after migrations", async () => {
+    await runArtifactMigrations(db);
+    const failure = await db
+      .execute(sql`
+        INSERT INTO "artifacts"."artifact"
+          ("tenant_id", "kind", "title", "content", "version")
+        VALUES (NULL, 'document', 'orphan', 'body', 1)
+      `)
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(failure).not.toBeNull();
+    expect(String((failure as { cause?: unknown }).cause)).toMatch(
+      /null value in column "tenant_id"/,
+    );
+  });
+
+  test("version and size CHECK constraints reject impossible values", async () => {
+    await runArtifactMigrations(db);
+
+    const badArtifactVersion = await db
+      .execute(sql`
+        INSERT INTO "artifacts"."artifact"
+          ("tenant_id", "kind", "title", "content", "version")
+        VALUES ('acme', 'document', 'bad-ver', 'body', 0)
+      `)
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(badArtifactVersion).not.toBeNull();
+    expect(String((badArtifactVersion as { cause?: unknown }).cause)).toMatch(
+      /artifact_version_gte_1|check constraint/i,
+    );
+
+    // A legal artifact so we can try a bad history row and a bad upload.
+    const [row] = await db.execute<{ id: string }>(sql`
+      INSERT INTO "artifacts"."artifact"
+        ("tenant_id", "kind", "title", "content", "version")
+      VALUES ('acme', 'document', 'ok', 'body', 1)
+      RETURNING "id"
+    `);
+
+    const badHistory = await db
+      .execute(sql`
+        INSERT INTO "artifacts"."artifact_version"
+          ("artifact_id", "version", "title", "content", "author_id")
+        VALUES (${row!.id}, 0, 'ok', 'body', 'user-1')
+      `)
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(badHistory).not.toBeNull();
+    expect(String((badHistory as { cause?: unknown }).cause)).toMatch(
+      /artifact_version_version_gte_1|check constraint/i,
+    );
+
+    const badUpload = await db
+      .execute(sql`
+        INSERT INTO "artifacts"."upload"
+          ("tenant_id", "filename", "mime_type", "content", "size")
+        VALUES ('acme', 'x.bin', 'application/octet-stream', decode('00', 'hex'), -1)
+      `)
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(badUpload).not.toBeNull();
+    expect(String((badUpload as { cause?: unknown }).cause)).toMatch(
+      /upload_size_gte_0|check constraint/i,
+    );
+
+    const badRef = await db
+      .execute(sql`
+        INSERT INTO "artifacts"."mail_attachment_ref"
+          ("tenant_id", "instance_id", "mail_id", "artifact_id",
+           "name", "mime_type", "size")
+        VALUES ('acme', 'inst', 'mail', ${row!.id}, 'a.bin',
+                'application/octet-stream', -1)
+      `)
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(badRef).not.toBeNull();
+    expect(String((badRef as { cause?: unknown }).cause)).toMatch(
+      /mail_attachment_ref_size_gte_0|check constraint/i,
+    );
+  });
+
+  test("migration fails clearly when null tenant_id rows already exist", async () => {
+    assertDestructiveArtifactTestsAllowed(DATABASE_URL);
+    await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
+
+    // Apply only the baseline + timestamptz migrations so tenant_id is still
+    // nullable, plant a null-tenant row, then attempt the full runner (which
+    // must include the invariants migration).
+    const preInvariant = MIGRATIONS.filter(
+      (m) => m.id === "0001_artifacts" || m.id === "0002_timestamptz",
+    );
+    expect(preInvariant.length).toBe(2);
+    expect(MIGRATIONS.some((m) => m.id === "0003_schema_invariants")).toBe(true);
+
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`CREATE SCHEMA IF NOT EXISTS ${sql.identifier(SCHEMA)}`);
+      await tx.execute(sql`
+        CREATE TABLE IF NOT EXISTS ${sql.identifier(SCHEMA)}.${sql.identifier(LEDGER)} (
+          "id" text PRIMARY KEY,
+          "checksum" text NOT NULL,
+          "applied_at" timestamptz NOT NULL DEFAULT now()
+        )
+      `);
+      for (const migration of preInvariant) {
+        for (const statement of migration.statements) {
+          await tx.execute(statement);
+        }
+        await tx.execute(sql`
+          INSERT INTO ${sql.identifier(SCHEMA)}.${sql.identifier(LEDGER)}
+            ("id", "checksum")
+          VALUES (${migration.id}, ${migrationChecksum(migration)})
+        `);
+      }
+    });
+
+    await db.execute(sql`
+      INSERT INTO "artifacts"."artifact"
+        ("tenant_id", "kind", "title", "content", "version")
+      VALUES (NULL, 'document', 'orphan', 'body', 1)
+    `);
+
+    const failure = await runArtifactMigrations(db).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(failure).not.toBeNull();
+    expect(String(failure)).toMatch(/null tenant_id/i);
+
+    // The invariants migration must not be stamped when the guard fails.
+    const ledger = await db.execute<{ id: string }>(
+      sql`SELECT "id" FROM ${sql.identifier(SCHEMA)}.${sql.identifier(LEDGER)} ORDER BY "id"`,
+    );
+    expect(ledger.map((r) => r.id)).toEqual([
+      "0001_artifacts",
+      "0002_timestamptz",
+    ]);
+
+    // Full suite (and re-runs of this file) must not inherit null-tenant rows
+    // and a half-applied ledger.
+    await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
+    await runArtifactMigrations(db);
   });
 });

@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  check,
   customType,
   index,
   integer,
@@ -54,15 +55,17 @@ const surrogateId = () =>
  * free-form text validated at the application edge, not a pg enum, so kinds
  * grow without a migration.
  *
- * `tenantId` and the principal columns are hard foreign keys into the host's
- * control plane: this package binds to Interchange, and the database refuses
- * an artifact whose tenant or principal does not exist.
+ * `tenantId` is required and, with the principal columns, is a hard foreign
+ * key into the host's control plane: this package binds to Interchange, and
+ * the database refuses an artifact whose tenant or principal does not exist.
+ * Whether a principal *belongs* to that tenant is host-owned — see the data
+ * model note in ARCHITECTURE.md — so there is no multi-table trigger here.
  */
 export const artifact = artifactsSchema.table(
   "artifact",
   {
     id: surrogateId(),
-    tenantId: tenantRef("tenant_id"),
+    tenantId: tenantRef("tenant_id").notNull(),
     principalId: principalRef("principal_id"),
     ownerPrincipalId: principalRef("owner_principal_id"),
     kind: text("kind").notNull(),
@@ -71,15 +74,16 @@ export const artifact = artifactsSchema.table(
     source: jsonb("source"),
     version: integer("version").notNull().default(1),
     /** Soft-archive: null = visible, a timestamp = hidden from discovery. */
-    archivedAt: timestamp("archived_at"),
-    createdAt: timestamp("created_at").notNull().defaultNow(),
-    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     // The id tie-break must be IN the keyset index (see migrations.ts).
     index("artifact_tenant_updated_id_idx").on(t.tenantId, t.updatedAt, t.id),
     index("artifact_principal_idx").on(t.principalId),
     index("artifact_owner_principal_idx").on(t.ownerPrincipalId),
+    check("artifact_version_gte_1", sql`${t.version} >= 1`),
   ],
 );
 
@@ -104,10 +108,11 @@ export const artifactVersion = artifactsSchema.table(
     title: text("title").notNull(),
     content: text("content").notNull(),
     authorId: text("author_id").notNull(),
-    createdAt: timestamp("created_at").notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     unique("artifact_version_artifact_id_version").on(t.artifactId, t.version),
+    check("artifact_version_version_gte_1", sql`${t.version} >= 1`),
   ],
 );
 
@@ -127,9 +132,13 @@ export const upload = artifactsSchema.table(
     mimeType: text("mime_type").notNull(),
     content: bytea("content").notNull(),
     size: integer("size").notNull(),
-    createdAt: timestamp("created_at").notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("upload_tenant_idx").on(t.tenantId), index("upload_principal_idx").on(t.principalId)],
+  (t) => [
+    index("upload_tenant_idx").on(t.tenantId),
+    index("upload_principal_idx").on(t.principalId),
+    check("upload_size_gte_0", sql`${t.size} >= 0`),
+  ],
 );
 
 /**
@@ -150,7 +159,7 @@ export const mailAttachmentRef = artifactsSchema.table(
     name: text("name").notNull(),
     mimeType: text("mime_type").notNull(),
     size: integer("size").notNull(),
-    createdAt: timestamp("created_at").notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     unique("mail_attachment_ref_mail_id_artifact_id").on(
@@ -160,6 +169,7 @@ export const mailAttachmentRef = artifactsSchema.table(
     index("mail_attachment_ref_instance_idx").on(t.instanceId),
     index("mail_attachment_ref_tenant_idx").on(t.tenantId),
     index("mail_attachment_ref_principal_idx").on(t.principalId),
+    check("mail_attachment_ref_size_gte_0", sql`${t.size} >= 0`),
   ],
 );
 

@@ -14,6 +14,13 @@ Nothing is mocked at the database boundary. Migrations, indexes, keyset cursors,
 version-bump race and tenant scoping are asserted against a live server, because that is
 the only place they are true.
 
+The harness truncates package tables between tests and drops the package schema in a
+couple of migration cases. Those paths are fail-closed: set
+`ALLOW_DESTRUCTIVE_ARTIFACT_TESTS=1` and point `ARTIFACT_DATABASE_URL` at an allowlisted
+ephemeral database (`artifact_core`, or any name ending in `_test`). Without both, the
+suite throws before mutating. The gate itself is pure URL/env parsing and is covered by
+unit tests that do not need Postgres.
+
 ## The reference host is the acceptance suite, not a demo
 
 `examples/reference-host` mounts the package on a real `@intx/hub-api` app against a

@@ -2,16 +2,19 @@ import { describe, expect, test } from "bun:test";
 import { and, eq } from "drizzle-orm";
 import {
   ArtifactNotFoundError,
+  ArtifactSizeError,
   createArtifact,
   findArtifactByTitle,
   getArtifactVersion,
   listArtifactVersions,
+  MAX_ARTIFACT_CONTENT_BYTES,
+  MAX_ARTIFACT_TITLE_LENGTH,
   normalizeSource,
   serializeArtifact,
   setArtifactArchived,
   writeArtifactVersion,
 } from "./artifacts.js";
-import { artifactVersion } from "./schema.js";
+import { artifact, artifactVersion } from "./schema.js";
 import { seedArtifact, seedSkillDraft, SCOPE, testDb } from "./test-helpers.js";
 
 describe("create", () => {
@@ -71,6 +74,34 @@ describe("create", () => {
       files: { "index.html": "<p>hi</p>" },
     });
   });
+  test("rejects oversize title and content before insert", async () => {
+    const db = await testDb();
+    await expect(
+      db.transaction((tx) =>
+        createArtifact(tx, {
+          scope: SCOPE,
+          ownerPrincipalId: SCOPE.principalId,
+          kind: "document",
+          title: "x".repeat(MAX_ARTIFACT_TITLE_LENGTH + 1),
+          content: "ok",
+          source: { origin: "manual" },
+        }),
+      ),
+    ).rejects.toBeInstanceOf(ArtifactSizeError);
+
+    await expect(
+      db.transaction((tx) =>
+        createArtifact(tx, {
+          scope: SCOPE,
+          ownerPrincipalId: SCOPE.principalId,
+          kind: "document",
+          title: "ok",
+          content: "x".repeat(MAX_ARTIFACT_CONTENT_BYTES + 1),
+          source: { origin: "manual" },
+        }),
+      ),
+    ).rejects.toBeInstanceOf(ArtifactSizeError);
+  });
 });
 
 describe("versioning", () => {
@@ -87,9 +118,48 @@ describe("versioning", () => {
     expect(second.title).toBe("Draft");
 
     const history = await listArtifactVersions(db, row.id);
-    expect(history.map((h) => h.version)).toEqual([2, 1]);
+    expect(history.versions.map((h) => h.version)).toEqual([2, 1]);
+    expect(history.nextCursor).toBeNull();
     expect((await getArtifactVersion(db, row.id, 1))?.content).toBe("v1");
     expect((await getArtifactVersion(db, row.id, 2))?.content).toBe("v2");
+  });
+
+  test("paginates version history newest-first without content", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db, { title: "Draft", content: "v1" });
+    await writeArtifactVersion(db, { scope: SCOPE, artifactId: row.id, content: "v2" });
+    await writeArtifactVersion(db, { scope: SCOPE, artifactId: row.id, content: "v3" });
+
+    const page1 = await listArtifactVersions(db, row.id, { limit: 2 });
+    expect(page1.versions.map((v) => v.version)).toEqual([3, 2]);
+    expect(page1.versions[0]).not.toHaveProperty("content");
+    expect(page1.nextCursor).toBe("2");
+
+    const page2 = await listArtifactVersions(db, row.id, {
+      limit: 2,
+      cursor: Number(page1.nextCursor),
+    });
+    expect(page2.versions.map((v) => v.version)).toEqual([1]);
+    expect(page2.nextCursor).toBeNull();
+  });
+
+  test("rejects oversize revise fields", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db);
+    await expect(
+      writeArtifactVersion(db, {
+        scope: SCOPE,
+        artifactId: row.id,
+        title: "x".repeat(MAX_ARTIFACT_TITLE_LENGTH + 1),
+      }),
+    ).rejects.toBeInstanceOf(ArtifactSizeError);
+    await expect(
+      writeArtifactVersion(db, {
+        scope: SCOPE,
+        artifactId: row.id,
+        content: "x".repeat(MAX_ARTIFACT_CONTENT_BYTES + 1),
+      }),
+    ).rejects.toBeInstanceOf(ArtifactSizeError);
   });
 
   test("concurrent writers serialize into distinct versions", async () => {
@@ -158,6 +228,64 @@ describe("archive", () => {
     const restored = await setArtifactArchived(db, again, false);
     expect(restored.archivedAt).toBeNull();
     expect((await setArtifactArchived(db, restored, false)).archivedAt).toBeNull();
+  });
+
+  test("returned archivedAt matches durable DB state", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db);
+
+    const archived = await setArtifactArchived(db, row, true);
+    const [durable] = await db
+      .select()
+      .from(artifact)
+      .where(eq(artifact.id, row.id));
+    expect(durable?.archivedAt).not.toBeNull();
+    expect(archived.archivedAt?.getTime()).toBe(durable!.archivedAt!.getTime());
+  });
+
+  test("reports durable archivedAt when a concurrent archive already won", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db);
+
+    // Race winner already wrote a known timestamp; caller still holds a
+    // pre-archive snapshot (archivedAt null).
+    const winnerAt = new Date("2020-01-15T12:00:00.000Z");
+    await db
+      .update(artifact)
+      .set({ archivedAt: winnerAt })
+      .where(eq(artifact.id, row.id));
+
+    const result = await setArtifactArchived(db, row, true);
+
+    expect(result.archivedAt?.toISOString()).toBe(winnerAt.toISOString());
+    const [durable] = await db
+      .select()
+      .from(artifact)
+      .where(eq(artifact.id, row.id));
+    expect(result.archivedAt?.getTime()).toBe(durable!.archivedAt!.getTime());
+    // Original timestamp must not be overwritten by the late archive attempt.
+    expect(durable!.archivedAt?.toISOString()).toBe(winnerAt.toISOString());
+  });
+
+  test("concurrent archive calls all return the durable timestamp", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db);
+
+    const results = await Promise.all([
+      setArtifactArchived(db, row, true),
+      setArtifactArchived(db, row, true),
+      setArtifactArchived(db, row, true),
+    ]);
+
+    const [durable] = await db
+      .select()
+      .from(artifact)
+      .where(eq(artifact.id, row.id));
+    expect(durable?.archivedAt).not.toBeNull();
+    const durableMs = durable!.archivedAt!.getTime();
+    for (const result of results) {
+      expect(result.archivedAt?.getTime()).toBe(durableMs);
+    }
   });
 });
 
