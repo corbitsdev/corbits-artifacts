@@ -291,7 +291,8 @@ export async function listArtifactVersions(
 /**
  * Archive (soft-hide) or unarchive. Idempotent: re-archiving never overwrites
  * the original timestamp, and unarchiving a visible artifact is a no-op.
- * Returns the row as it now stands.
+ * Returns the row as it now stands in the database — never a locally
+ * synthesized timestamp that may have lost a concurrent race.
  */
 export async function setArtifactArchived(
   db: ArtifactDb,
@@ -299,21 +300,38 @@ export async function setArtifactArchived(
   archive: boolean,
 ): Promise<ArtifactRow> {
   if (archive && row.archivedAt === null) {
-    const archivedAt = new Date();
-    await db
+    const [updated] = await db
       .update(artifact)
-      .set({ archivedAt })
-      .where(and(eq(artifact.id, row.id), isNull(artifact.archivedAt)));
-    return { ...row, archivedAt };
+      .set({ archivedAt: new Date() })
+      .where(and(eq(artifact.id, row.id), isNull(artifact.archivedAt)))
+      .returning();
+    if (updated) return updated;
+    // Zero rows: a concurrent archive already won, or the row was archived
+    // under a fresher view. Reload so the response matches durable state.
+    return reloadArtifactRow(db, row.id);
   }
   if (!archive && row.archivedAt !== null) {
-    await db
+    const [updated] = await db
       .update(artifact)
       .set({ archivedAt: null })
-      .where(eq(artifact.id, row.id));
-    return { ...row, archivedAt: null };
+      .where(eq(artifact.id, row.id))
+      .returning();
+    if (updated) return updated;
+    return reloadArtifactRow(db, row.id);
   }
   return row;
+}
+
+async function reloadArtifactRow(
+  db: ArtifactDb,
+  artifactId: string,
+): Promise<ArtifactRow> {
+  const [current] = await db
+    .select()
+    .from(artifact)
+    .where(eq(artifact.id, artifactId));
+  if (!current) throw new ArtifactNotFoundError(artifactId);
+  return current;
 }
 
 export const DEFAULT_LIST_LIMIT = 20;

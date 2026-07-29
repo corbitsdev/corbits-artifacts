@@ -11,7 +11,7 @@ import {
   setArtifactArchived,
   writeArtifactVersion,
 } from "./artifacts.js";
-import { artifactVersion } from "./schema.js";
+import { artifact, artifactVersion } from "./schema.js";
 import { seedArtifact, seedSkillDraft, SCOPE, testDb } from "./test-helpers.js";
 
 describe("create", () => {
@@ -158,6 +158,64 @@ describe("archive", () => {
     const restored = await setArtifactArchived(db, again, false);
     expect(restored.archivedAt).toBeNull();
     expect((await setArtifactArchived(db, restored, false)).archivedAt).toBeNull();
+  });
+
+  test("returned archivedAt matches durable DB state", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db);
+
+    const archived = await setArtifactArchived(db, row, true);
+    const [durable] = await db
+      .select()
+      .from(artifact)
+      .where(eq(artifact.id, row.id));
+    expect(durable?.archivedAt).not.toBeNull();
+    expect(archived.archivedAt?.getTime()).toBe(durable!.archivedAt!.getTime());
+  });
+
+  test("reports durable archivedAt when a concurrent archive already won", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db);
+
+    // Race winner already wrote a known timestamp; caller still holds a
+    // pre-archive snapshot (archivedAt null).
+    const winnerAt = new Date("2020-01-15T12:00:00.000Z");
+    await db
+      .update(artifact)
+      .set({ archivedAt: winnerAt })
+      .where(eq(artifact.id, row.id));
+
+    const result = await setArtifactArchived(db, row, true);
+
+    expect(result.archivedAt?.toISOString()).toBe(winnerAt.toISOString());
+    const [durable] = await db
+      .select()
+      .from(artifact)
+      .where(eq(artifact.id, row.id));
+    expect(result.archivedAt?.getTime()).toBe(durable!.archivedAt!.getTime());
+    // Original timestamp must not be overwritten by the late archive attempt.
+    expect(durable!.archivedAt?.toISOString()).toBe(winnerAt.toISOString());
+  });
+
+  test("concurrent archive calls all return the durable timestamp", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db);
+
+    const results = await Promise.all([
+      setArtifactArchived(db, row, true),
+      setArtifactArchived(db, row, true),
+      setArtifactArchived(db, row, true),
+    ]);
+
+    const [durable] = await db
+      .select()
+      .from(artifact)
+      .where(eq(artifact.id, row.id));
+    expect(durable?.archivedAt).not.toBeNull();
+    const durableMs = durable!.archivedAt!.getTime();
+    for (const result of results) {
+      expect(result.archivedAt?.getTime()).toBe(durableMs);
+    }
   });
 });
 
