@@ -116,6 +116,40 @@ export const MIGRATIONS: Migration[] = [
       `,
     ],
   },
+  {
+    // Zoneless `timestamp` stores a wall clock. Absolute instants written through
+    // a non-UTC session TimeZone land as session-local walls, so list cursors
+    // (which stamp a literal Z) and date filters compare the wrong instant.
+    // `timestamptz` keeps absolute time; existing walls are treated as UTC — the
+    // package always documented these columns as UTC wall clocks.
+    id: "0002_timestamptz",
+    statements: [
+      sql`
+        ALTER TABLE "artifacts"."artifact"
+          ALTER COLUMN "archived_at" TYPE timestamptz
+            USING "archived_at" AT TIME ZONE 'UTC',
+          ALTER COLUMN "created_at" TYPE timestamptz
+            USING "created_at" AT TIME ZONE 'UTC',
+          ALTER COLUMN "updated_at" TYPE timestamptz
+            USING "updated_at" AT TIME ZONE 'UTC'
+      `,
+      sql`
+        ALTER TABLE "artifacts"."artifact_version"
+          ALTER COLUMN "created_at" TYPE timestamptz
+            USING "created_at" AT TIME ZONE 'UTC'
+      `,
+      sql`
+        ALTER TABLE "artifacts"."upload"
+          ALTER COLUMN "created_at" TYPE timestamptz
+            USING "created_at" AT TIME ZONE 'UTC'
+      `,
+      sql`
+        ALTER TABLE "artifacts"."mail_attachment_ref"
+          ALTER COLUMN "created_at" TYPE timestamptz
+            USING "created_at" AT TIME ZONE 'UTC'
+      `,
+    ],
+  },
 ];
 
 // Advisory locks are namespaced by this integer alone; deliberately arbitrary
@@ -191,9 +225,9 @@ const EXPECTED_OWNED_SHAPE: Readonly<
     { name: "content", udt: "text" },
     { name: "source", udt: "jsonb" },
     { name: "version", udt: "int4" },
-    { name: "archived_at", udt: "timestamp" },
-    { name: "created_at", udt: "timestamp" },
-    { name: "updated_at", udt: "timestamp" },
+    { name: "archived_at", udt: "timestamptz" },
+    { name: "created_at", udt: "timestamptz" },
+    { name: "updated_at", udt: "timestamptz" },
   ],
   artifact_version: [
     { name: "id", udt: "text" },
@@ -202,7 +236,7 @@ const EXPECTED_OWNED_SHAPE: Readonly<
     { name: "title", udt: "text" },
     { name: "content", udt: "text" },
     { name: "author_id", udt: "text" },
-    { name: "created_at", udt: "timestamp" },
+    { name: "created_at", udt: "timestamptz" },
   ],
   upload: [
     { name: "id", udt: "text" },
@@ -212,7 +246,7 @@ const EXPECTED_OWNED_SHAPE: Readonly<
     { name: "mime_type", udt: "text" },
     { name: "content", udt: "bytea" },
     { name: "size", udt: "int4" },
-    { name: "created_at", udt: "timestamp" },
+    { name: "created_at", udt: "timestamptz" },
   ],
   mail_attachment_ref: [
     { name: "id", udt: "text" },
@@ -224,7 +258,7 @@ const EXPECTED_OWNED_SHAPE: Readonly<
     { name: "name", udt: "text" },
     { name: "mime_type", udt: "text" },
     { name: "size", udt: "int4" },
-    { name: "created_at", udt: "timestamp" },
+    { name: "created_at", udt: "timestamptz" },
   ],
 };
 

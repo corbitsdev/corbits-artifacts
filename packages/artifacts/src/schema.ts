@@ -71,9 +71,9 @@ export const artifact = artifactsSchema.table(
     source: jsonb("source"),
     version: integer("version").notNull().default(1),
     /** Soft-archive: null = visible, a timestamp = hidden from discovery. */
-    archivedAt: timestamp("archived_at"),
-    createdAt: timestamp("created_at").notNull().defaultNow(),
-    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     // The id tie-break must be IN the keyset index (see migrations.ts).
@@ -104,7 +104,7 @@ export const artifactVersion = artifactsSchema.table(
     title: text("title").notNull(),
     content: text("content").notNull(),
     authorId: text("author_id").notNull(),
-    createdAt: timestamp("created_at").notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     unique("artifact_version_artifact_id_version").on(t.artifactId, t.version),
@@ -127,7 +127,7 @@ export const upload = artifactsSchema.table(
     mimeType: text("mime_type").notNull(),
     content: bytea("content").notNull(),
     size: integer("size").notNull(),
-    createdAt: timestamp("created_at").notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("upload_tenant_idx").on(t.tenantId), index("upload_principal_idx").on(t.principalId)],
 );
@@ -150,7 +150,7 @@ export const mailAttachmentRef = artifactsSchema.table(
     name: text("name").notNull(),
     mimeType: text("mime_type").notNull(),
     size: integer("size").notNull(),
-    createdAt: timestamp("created_at").notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     unique("mail_attachment_ref_mail_id_artifact_id").on(
