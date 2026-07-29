@@ -9,6 +9,14 @@ always called out under their own heading.
 
 ## [Unreleased]
 
+### Changed
+
+- The repository root **is** the `@corbits/artifacts` package. The previous
+  `packages/artifacts` workspace nesting is gone so
+  `bun add github:corbitsdev/corbits-artifacts` installs cleanly. Bun consumers
+  resolve TypeScript sources via the `bun` export condition; Node consumers
+  continue to use the built `dist/` from `npm pack` / a published release.
+
 ### 0.1.0 — first release
 
 Initial public release. Nothing has been published before this, so everything is

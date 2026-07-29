@@ -39,7 +39,7 @@ jobs:
       # No unpublished @workbench/* scope may leak in — it does not exist on
       # npm, so a leak makes the package uninstallable outside the monorepo.
       - name: check-deps
-        run: bun run --cwd packages/artifacts scripts/check-deps.ts
+        run: bun run scripts/check-deps.ts
 
       # typecheck builds first: examples import @corbits/artifacts through the
       # published dist types, same path a consumer resolves.
@@ -47,7 +47,7 @@ jobs:
         run: bun run typecheck
 
       - name: unit + integration tests
-        run: bun run --cwd packages/artifacts test:coverage
+        run: bun run test:coverage
 
       # dist/ is already emitted by typecheck; re-run for a clean package build
       # so acceptance and the node consumer smoke test do not depend on typecheck
@@ -64,8 +64,8 @@ jobs:
       - name: node consumer smoke test
         run: |
           set -euo pipefail
-          TARBALL="$(cd packages/artifacts && npm pack --silent)"
-          TARBALL="$PWD/packages/artifacts/$TARBALL"
+          TARBALL="$(npm pack --silent)"
+          TARBALL="$PWD/$TARBALL"
           mkdir -p "$RUNNER_TEMP/consumer" && cd "$RUNNER_TEMP/consumer"
           npm init -y >/dev/null && npm pkg set type=module >/dev/null
           npm install "$TARBALL"

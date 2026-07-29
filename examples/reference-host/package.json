@@ -11,7 +11,7 @@
     "typescript": "5.7.2"
   },
   "dependencies": {
-    "@corbits/artifacts": "workspace:*",
+    "@corbits/artifacts": "file:../..",
     "@intx/db": "0.2.2",
     "@intx/hub-api": "0.2.2",
     "@intx/hub-common": "0.2.2",
