@@ -213,6 +213,10 @@ every boot of every replica.
 - A later ledgered migration sets `artifact.tenant_id NOT NULL` and adds the
   version/size CHECKs. If null-tenant rows still exist, that migration raises
   before altering the column so the operator can clean them up first.
+- Empty ledger + pre-existing package objects fails closed
+  (`MigrationAdoptError`). `{ adopt: true }` records checksums without re-DDL
+  only after shape validation: tables, column types, required nullability, and
+  the named CHECK constraints. Column presence alone is not enough.
 
 **The package owns its own Postgres schema.** Every table, index and the ledger
 live in `artifacts`, created by the runner and qualified in every

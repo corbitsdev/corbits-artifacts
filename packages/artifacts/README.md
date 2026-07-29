@@ -226,6 +226,12 @@ install multi-table triggers for that alignment (see ARCHITECTURE.md).
 replica: concurrent cold starts serialize on a transaction-scoped advisory lock, and a
 re-run prints nothing.
 
+If the ledger is empty but package tables already exist (restored dump, dropped
+ledger), the runner fails closed with `MigrationAdoptError`. Operators who have
+confirmed the live schema may pass `{ adopt: true }` to record checksums without
+re-running DDL. Adopt validates tables, column types, `artifact.tenant_id NOT NULL`,
+and the named version/size CHECK constraints — not a columns-only glance.
+
 Event timestamps are `timestamptz` so list keyset cursors and date filters stay
 stable under a non-UTC session `TimeZone`. A ledgered retype migration converts
 legacy zoneless columns with `USING col AT TIME ZONE 'UTC'` (existing walls were

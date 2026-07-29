@@ -415,6 +415,68 @@ describe("migrations", () => {
     expect(again.length).toBe(MIGRATIONS.length);
   });
 
+  test("empty ledger + columns without 0003 CHECKs refuses adopt", async () => {
+    assertDestructiveArtifactTestsAllowed(DATABASE_URL);
+    await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
+    // Honest migrate, drop ledger, then strip a row-local CHECK so columns and
+    // types still match but 0003 invariants are gone — adopt must not stamp.
+    await runArtifactMigrations(db);
+    await db.execute(
+      sql`DROP TABLE ${sql.identifier(SCHEMA)}.${sql.identifier(LEDGER)}`,
+    );
+    await db.execute(sql`
+      ALTER TABLE ${sql.identifier(SCHEMA)}."artifact"
+        DROP CONSTRAINT "artifact_version_gte_1"
+    `);
+
+    await expect(
+      runArtifactMigrations(db, { adopt: true }),
+    ).rejects.toThrow(MigrationAdoptError);
+    await expect(
+      runArtifactMigrations(db, { adopt: true }),
+    ).rejects.toThrow(/artifact_version_gte_1/);
+
+    const ledgerTables = await db.execute<{ n: number }>(sql`
+      SELECT count(*)::int AS n FROM information_schema.tables
+      WHERE table_schema = ${SCHEMA} AND table_name = ${LEDGER}
+    `);
+    expect(ledgerTables[0]!.n).toBe(0);
+
+    // Later tests call runArtifactMigrations without a reset; restore a
+    // fully-ledgered schema so they are not stranded on an empty ledger.
+    await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
+    await runArtifactMigrations(db);
+  });
+
+  test("empty ledger + nullable tenant_id refuses adopt", async () => {
+    assertDestructiveArtifactTestsAllowed(DATABASE_URL);
+    await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
+    await runArtifactMigrations(db);
+    await db.execute(
+      sql`DROP TABLE ${sql.identifier(SCHEMA)}.${sql.identifier(LEDGER)}`,
+    );
+    await db.execute(sql`
+      ALTER TABLE ${sql.identifier(SCHEMA)}."artifact"
+        ALTER COLUMN "tenant_id" DROP NOT NULL
+    `);
+
+    await expect(
+      runArtifactMigrations(db, { adopt: true }),
+    ).rejects.toThrow(MigrationAdoptError);
+    await expect(
+      runArtifactMigrations(db, { adopt: true }),
+    ).rejects.toThrow(/tenant_id.*NOT NULL/i);
+
+    const ledgerTables = await db.execute<{ n: number }>(sql`
+      SELECT count(*)::int AS n FROM information_schema.tables
+      WHERE table_schema = ${SCHEMA} AND table_name = ${LEDGER}
+    `);
+    expect(ledgerTables[0]!.n).toBe(0);
+
+    await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
+    await runArtifactMigrations(db);
+  });
+
   /**
    * DB invariants: tenant_id is required on every artifact row; version and size
    * stay non-negative. Principal↔tenant alignment is host-owned (resolvePrincipal)
@@ -567,5 +629,10 @@ describe("migrations", () => {
       "0001_artifacts",
       "0002_timestamptz",
     ]);
+
+    // Full suite (and re-runs of this file) must not inherit null-tenant rows
+    // and a half-applied ledger.
+    await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
+    await runArtifactMigrations(db);
   });
 });

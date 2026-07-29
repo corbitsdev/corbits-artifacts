@@ -249,65 +249,87 @@ export class MigrationAdoptError extends Error {
  * `adopt` is an operator escape hatch for the rare case where package tables
  * already exist (restored dump, manual DDL, ledger dropped) and the operator
  * has confirmed they match the expected shape. It is never set by default and
- * must not be passed on ordinary boots.
+ * must not be passed on ordinary boots. Adopt validates tables, column types,
+ * required nullability (`artifact.tenant_id`), and the named CHECK constraints
+ * from `0003_schema_invariants` before writing ledger rows — it does not
+ * re-run DDL.
  */
 export type RunArtifactMigrationsOptions = {
   adopt?: boolean;
 };
 
 /** Package-owned tables (excluding the ledger) and the columns each must have. */
-const EXPECTED_OWNED_SHAPE: Readonly<
-  Record<string, readonly { name: string; udt: string }[]>
-> = {
-  artifact: [
-    { name: "id", udt: "text" },
-    { name: "tenant_id", udt: "text" },
-    { name: "principal_id", udt: "text" },
-    { name: "owner_principal_id", udt: "text" },
-    { name: "kind", udt: "text" },
-    { name: "title", udt: "text" },
-    { name: "content", udt: "text" },
-    { name: "source", udt: "jsonb" },
-    { name: "version", udt: "int4" },
-    { name: "archived_at", udt: "timestamptz" },
-    { name: "created_at", udt: "timestamptz" },
-    { name: "updated_at", udt: "timestamptz" },
-  ],
-  artifact_version: [
-    { name: "id", udt: "text" },
-    { name: "artifact_id", udt: "text" },
-    { name: "version", udt: "int4" },
-    { name: "title", udt: "text" },
-    { name: "content", udt: "text" },
-    { name: "author_id", udt: "text" },
-    { name: "created_at", udt: "timestamptz" },
-  ],
-  upload: [
-    { name: "id", udt: "text" },
-    { name: "tenant_id", udt: "text" },
-    { name: "principal_id", udt: "text" },
-    { name: "filename", udt: "text" },
-    { name: "mime_type", udt: "text" },
-    { name: "content", udt: "bytea" },
-    { name: "size", udt: "int4" },
-    { name: "created_at", udt: "timestamptz" },
-  ],
-  mail_attachment_ref: [
-    { name: "id", udt: "text" },
-    { name: "tenant_id", udt: "text" },
-    { name: "principal_id", udt: "text" },
-    { name: "instance_id", udt: "text" },
-    { name: "mail_id", udt: "text" },
-    { name: "artifact_id", udt: "text" },
-    { name: "name", udt: "text" },
-    { name: "mime_type", udt: "text" },
-    { name: "size", udt: "int4" },
-    { name: "created_at", udt: "timestamptz" },
-  ],
+type ExpectedColumn = {
+  name: string;
+  udt: string;
+  /** When set, live `is_nullable` must be `NO`. */
+  notNull?: true;
 };
 
-async function listOwnedTables(tx: ArtifactTx): Promise<string[]> {
+const EXPECTED_OWNED_SHAPE: Readonly<Record<string, readonly ExpectedColumn[]>> =
+  {
+    artifact: [
+      { name: "id", udt: "text" },
+      { name: "tenant_id", udt: "text", notNull: true },
+      { name: "principal_id", udt: "text" },
+      { name: "owner_principal_id", udt: "text" },
+      { name: "kind", udt: "text" },
+      { name: "title", udt: "text" },
+      { name: "content", udt: "text" },
+      { name: "source", udt: "jsonb" },
+      { name: "version", udt: "int4" },
+      { name: "archived_at", udt: "timestamptz" },
+      { name: "created_at", udt: "timestamptz" },
+      { name: "updated_at", udt: "timestamptz" },
+    ],
+    artifact_version: [
+      { name: "id", udt: "text" },
+      { name: "artifact_id", udt: "text" },
+      { name: "version", udt: "int4" },
+      { name: "title", udt: "text" },
+      { name: "content", udt: "text" },
+      { name: "author_id", udt: "text" },
+      { name: "created_at", udt: "timestamptz" },
+    ],
+    upload: [
+      { name: "id", udt: "text" },
+      { name: "tenant_id", udt: "text" },
+      { name: "principal_id", udt: "text" },
+      { name: "filename", udt: "text" },
+      { name: "mime_type", udt: "text" },
+      { name: "content", udt: "bytea" },
+      { name: "size", udt: "int4" },
+      { name: "created_at", udt: "timestamptz" },
+    ],
+    mail_attachment_ref: [
+      { name: "id", udt: "text" },
+      { name: "tenant_id", udt: "text" },
+      { name: "principal_id", udt: "text" },
+      { name: "instance_id", udt: "text" },
+      { name: "mail_id", udt: "text" },
+      { name: "artifact_id", udt: "text" },
+      { name: "name", udt: "text" },
+      { name: "mime_type", udt: "text" },
+      { name: "size", udt: "int4" },
+      { name: "created_at", udt: "timestamptz" },
+    ],
+  };
 
+/**
+ * Row-local CHECKs applied by `0003_schema_invariants`. Adopt must see these
+ * names so stamping 0003 without the constraints cannot pass shape validation.
+ */
+const EXPECTED_CHECK_CONSTRAINTS: ReadonlyArray<{
+  table: string;
+  name: string;
+}> = [
+  { table: "artifact", name: "artifact_version_gte_1" },
+  { table: "artifact_version", name: "artifact_version_version_gte_1" },
+  { table: "upload", name: "upload_size_gte_0" },
+  { table: "mail_attachment_ref", name: "mail_attachment_ref_size_gte_0" },
+];
+
+async function listOwnedTables(tx: ArtifactTx): Promise<string[]> {
   const rows = await tx.execute<{ table_name: string }>(sql`
     SELECT table_name FROM information_schema.tables
     WHERE table_schema = ${ARTIFACTS_SCHEMA}
@@ -319,11 +341,11 @@ async function listOwnedTables(tx: ArtifactTx): Promise<string[]> {
 }
 
 /**
- * Compare live catalogue columns against the shape the migrations create.
- * Returns a human-readable mismatch list (empty when compatible).
+ * Compare live catalogue against the shape the migrations create: tables,
+ * column types, required nullability, and named CHECK constraints. Returns a
+ * human-readable mismatch list (empty when compatible).
  */
 async function shapeMismatches(tx: ArtifactTx): Promise<string[]> {
-
   const owned = await listOwnedTables(tx);
   const expectedTables = Object.keys(EXPECTED_OWNED_SHAPE).sort();
   const mismatches: string[] = [];
@@ -347,35 +369,77 @@ async function shapeMismatches(tx: ArtifactTx): Promise<string[]> {
     table_name: string;
     column_name: string;
     udt_name: string;
+    is_nullable: string;
   }>(sql`
-    SELECT table_name, column_name, udt_name
+    SELECT table_name, column_name, udt_name, is_nullable
     FROM information_schema.columns
     WHERE table_schema = ${ARTIFACTS_SCHEMA}
       AND table_name <> ${LEDGER_TABLE}
   `);
 
-  const byTable = new Map<string, Map<string, string>>();
+  const byTable = new Map<string, Map<string, { udt: string; nullable: string }>>();
   for (const col of columns) {
     let cols = byTable.get(col.table_name);
     if (!cols) {
       cols = new Map();
       byTable.set(col.table_name, cols);
     }
-    cols.set(col.column_name, col.udt_name);
+    cols.set(col.column_name, {
+      udt: col.udt_name,
+      nullable: col.is_nullable,
+    });
   }
 
   for (const table of expectedTables) {
     const expectedCols = EXPECTED_OWNED_SHAPE[table]!;
     const live = byTable.get(table) ?? new Map();
-    for (const { name, udt } of expectedCols) {
-      const liveUdt = live.get(name);
-      if (liveUdt === undefined) {
-        mismatches.push(`missing column ${ARTIFACTS_SCHEMA}.${table}.${name}`);
-      } else if (liveUdt !== udt) {
+    for (const expected of expectedCols) {
+      const liveCol = live.get(expected.name);
+      if (liveCol === undefined) {
         mismatches.push(
-          `column ${ARTIFACTS_SCHEMA}.${table}.${name} has type ${liveUdt}, expected ${udt}`,
+          `missing column ${ARTIFACTS_SCHEMA}.${table}.${expected.name}`,
+        );
+      } else if (liveCol.udt !== expected.udt) {
+        mismatches.push(
+          `column ${ARTIFACTS_SCHEMA}.${table}.${expected.name} has type ${liveCol.udt}, expected ${expected.udt}`,
+        );
+      } else if (expected.notNull && liveCol.nullable !== "NO") {
+        mismatches.push(
+          `column ${ARTIFACTS_SCHEMA}.${table}.${expected.name} is nullable, expected NOT NULL`,
         );
       }
+    }
+  }
+
+  if (mismatches.length > 0) return mismatches;
+
+  // Named CHECKs from 0003 — without these, adopt would stamp the ledger over a
+  // schema that never gained the row-local invariants.
+  const checks = await tx.execute<{ table_name: string; constraint_name: string }>(
+    sql`
+      SELECT c.relname AS table_name, con.conname AS constraint_name
+      FROM pg_catalog.pg_constraint con
+      JOIN pg_catalog.pg_class c ON c.oid = con.conrelid
+      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = ${ARTIFACTS_SCHEMA}
+        AND con.contype = 'c'
+    `,
+  );
+  const checkByTable = new Map<string, Set<string>>();
+  for (const row of checks) {
+    let names = checkByTable.get(row.table_name);
+    if (!names) {
+      names = new Set();
+      checkByTable.set(row.table_name, names);
+    }
+    names.add(row.constraint_name);
+  }
+  for (const { table, name } of EXPECTED_CHECK_CONSTRAINTS) {
+    const live = checkByTable.get(table);
+    if (!live?.has(name)) {
+      mismatches.push(
+        `missing CHECK constraint ${name} on ${ARTIFACTS_SCHEMA}.${table}`,
+      );
     }
   }
 
@@ -394,9 +458,10 @@ async function shapeMismatches(tx: ArtifactTx): Promise<string[]> {
  *
  * When the ledger is empty but package-owned objects already exist, the runner
  * fails closed with {@link MigrationAdoptError} unless `{ adopt: true }` is
- * passed and the live shape matches what the migrations would create. That
- * path records checksums without re-running DDL. Ledger checksum drift still
- * throws {@link MigrationChecksumError}.
+ * passed and the live shape matches what the migrations would create (tables,
+ * column types, required nullability, and named CHECK constraints). That path
+ * records checksums without re-running DDL. Ledger checksum drift still throws
+ * {@link MigrationChecksumError}.
  */
 export async function runArtifactMigrations(
   db: ArtifactDb,

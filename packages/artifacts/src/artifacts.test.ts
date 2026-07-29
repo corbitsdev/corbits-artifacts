@@ -74,7 +74,7 @@ describe("create", () => {
       files: { "index.html": "<p>hi</p>" },
     });
   });
-test("rejects oversize title and content before insert", async () => {
+  test("rejects oversize title and content before insert", async () => {
     const db = await testDb();
     await expect(
       db.transaction((tx) =>
