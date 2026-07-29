@@ -1,11 +1,11 @@
 // The one dependency rule left: nothing here may import the unpublished
 // @workbench/* scope — it does not exist on npm, so a leak makes the package
-// uninstallable for everyone outside the monorepo.
+// uninstallable for everyone outside this repository.
 import { execSync } from "node:child_process";
 
 try {
   const hits = execSync(
-    `grep -rn '@workbench/' src ../../examples --include='*.ts' || true`,
+    `grep -rn '@workbench/' src examples --include='*.ts' || true`,
     { cwd: new URL("..", import.meta.url).pathname, encoding: "utf8" },
   ).trim();
   if (hits) {

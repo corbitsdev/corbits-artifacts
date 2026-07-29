@@ -2,7 +2,7 @@
 
 How `@corbits/artifacts` is put together, and where its boundaries are. For
 install, the mount snippet, the route table and the response contracts, see the
-[package README](./packages/artifacts/README.md) — this document is about
+[package README](./README.md) — this document is about
 structure and reasoning, and does not repeat them.
 
 ## The shape of the thing
