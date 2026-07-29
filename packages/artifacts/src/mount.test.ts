@@ -353,8 +353,42 @@ describe("versions", () => {
 
     const history = (await (
       await app.request(`/artifacts/${row.id}/versions`)
-    ).json()) as { versions: { version: number }[] };
+    ).json()) as { versions: { version: number }[]; nextCursor: string | null };
     expect(history.versions.map((v) => v.version)).toEqual([2, 1]);
+    expect(history.nextCursor).toBeNull();
+  });
+
+  test("version history paginates with cursor and limit", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const row = await seedArtifact(db, { title: "Draft", content: "v1" });
+    await app.request(`/artifacts/${row.id}/versions`, json({ content: "v2" }));
+    await app.request(`/artifacts/${row.id}/versions`, json({ content: "v3" }));
+
+    const page1 = (await (
+      await app.request(`/artifacts/${row.id}/versions?limit=2`)
+    ).json()) as { versions: { version: number }[]; nextCursor: string | null };
+    expect(page1.versions.map((v) => v.version)).toEqual([3, 2]);
+    expect(page1.nextCursor).toBe("2");
+
+    const page2 = (await (
+      await app.request(`/artifacts/${row.id}/versions?limit=2&cursor=${page1.nextCursor}`)
+    ).json()) as { versions: { version: number }[]; nextCursor: string | null };
+    expect(page2.versions.map((v) => v.version)).toEqual([1]);
+    expect(page2.nextCursor).toBeNull();
+  });
+
+  test("oversize create title is 400", async () => {
+    const db = await testDb();
+    const res = await host(db).request(
+      "/artifacts",
+      json({
+        title: "x".repeat(513),
+        content: "ok",
+        mode: "text",
+      }),
+    );
+    expect(res.status).toBe(400);
   });
 
   test("a body with neither title nor content is 400", async () => {

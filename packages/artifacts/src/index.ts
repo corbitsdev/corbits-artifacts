@@ -38,6 +38,8 @@ export type { UploadRef } from "./content-store.js";
 export {
   ARTIFACT_ORIGINS,
   ArtifactNotFoundError,
+  ArtifactSizeError,
+  assertArtifactFieldSizes,
   createArtifact,
   DEFAULT_LIST_LIMIT,
   findArtifactByTitle,
@@ -46,6 +48,9 @@ export {
   listArtifacts,
   ListArtifactsQuery,
   listArtifactVersions,
+  ListArtifactVersionsQuery,
+  MAX_ARTIFACT_CONTENT_BYTES,
+  MAX_ARTIFACT_TITLE_LENGTH,
   MAX_LIST_LIMIT,
   serializeArtifact,
   serializeArtifactListItem,
@@ -55,8 +60,10 @@ export {
 } from "./artifacts.js";
 export type {
   ArtifactListRow,
+  ArtifactVersionListItem,
   CreateArtifactArgs,
   ListArtifactsFilters,
+  ListArtifactVersionsFilters,
   SerializedArtifact,
   SerializedArtifactBase,
   SerializedArtifactListItem,

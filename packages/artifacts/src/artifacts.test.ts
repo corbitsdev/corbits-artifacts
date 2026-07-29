@@ -2,10 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { and, eq } from "drizzle-orm";
 import {
   ArtifactNotFoundError,
+  ArtifactSizeError,
   createArtifact,
   findArtifactByTitle,
   getArtifactVersion,
   listArtifactVersions,
+  MAX_ARTIFACT_CONTENT_BYTES,
+  MAX_ARTIFACT_TITLE_LENGTH,
   normalizeSource,
   serializeArtifact,
   setArtifactArchived,
@@ -71,6 +74,34 @@ describe("create", () => {
       files: { "index.html": "<p>hi</p>" },
     });
   });
+test("rejects oversize title and content before insert", async () => {
+    const db = await testDb();
+    await expect(
+      db.transaction((tx) =>
+        createArtifact(tx, {
+          scope: SCOPE,
+          ownerPrincipalId: SCOPE.principalId,
+          kind: "document",
+          title: "x".repeat(MAX_ARTIFACT_TITLE_LENGTH + 1),
+          content: "ok",
+          source: { origin: "manual" },
+        }),
+      ),
+    ).rejects.toBeInstanceOf(ArtifactSizeError);
+
+    await expect(
+      db.transaction((tx) =>
+        createArtifact(tx, {
+          scope: SCOPE,
+          ownerPrincipalId: SCOPE.principalId,
+          kind: "document",
+          title: "ok",
+          content: "x".repeat(MAX_ARTIFACT_CONTENT_BYTES + 1),
+          source: { origin: "manual" },
+        }),
+      ),
+    ).rejects.toBeInstanceOf(ArtifactSizeError);
+  });
 });
 
 describe("versioning", () => {
@@ -87,9 +118,48 @@ describe("versioning", () => {
     expect(second.title).toBe("Draft");
 
     const history = await listArtifactVersions(db, row.id);
-    expect(history.map((h) => h.version)).toEqual([2, 1]);
+    expect(history.versions.map((h) => h.version)).toEqual([2, 1]);
+    expect(history.nextCursor).toBeNull();
     expect((await getArtifactVersion(db, row.id, 1))?.content).toBe("v1");
     expect((await getArtifactVersion(db, row.id, 2))?.content).toBe("v2");
+  });
+
+  test("paginates version history newest-first without content", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db, { title: "Draft", content: "v1" });
+    await writeArtifactVersion(db, { scope: SCOPE, artifactId: row.id, content: "v2" });
+    await writeArtifactVersion(db, { scope: SCOPE, artifactId: row.id, content: "v3" });
+
+    const page1 = await listArtifactVersions(db, row.id, { limit: 2 });
+    expect(page1.versions.map((v) => v.version)).toEqual([3, 2]);
+    expect(page1.versions[0]).not.toHaveProperty("content");
+    expect(page1.nextCursor).toBe("2");
+
+    const page2 = await listArtifactVersions(db, row.id, {
+      limit: 2,
+      cursor: Number(page1.nextCursor),
+    });
+    expect(page2.versions.map((v) => v.version)).toEqual([1]);
+    expect(page2.nextCursor).toBeNull();
+  });
+
+  test("rejects oversize revise fields", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db);
+    await expect(
+      writeArtifactVersion(db, {
+        scope: SCOPE,
+        artifactId: row.id,
+        title: "x".repeat(MAX_ARTIFACT_TITLE_LENGTH + 1),
+      }),
+    ).rejects.toBeInstanceOf(ArtifactSizeError);
+    await expect(
+      writeArtifactVersion(db, {
+        scope: SCOPE,
+        artifactId: row.id,
+        content: "x".repeat(MAX_ARTIFACT_CONTENT_BYTES + 1),
+      }),
+    ).rejects.toBeInstanceOf(ArtifactSizeError);
   });
 
   test("concurrent writers serialize into distinct versions", async () => {

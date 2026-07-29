@@ -5,12 +5,14 @@ import { describeRoute } from "hono-openapi";
 import type { ArtifactDb } from "./db.js";
 import {
   ArtifactNotFoundError,
+  ArtifactSizeError,
   createArtifact,
   enrich,
   getArtifact,
   listArtifacts,
   ListArtifactsQuery,
   listArtifactVersions,
+  ListArtifactVersionsQuery,
   serializeArtifact,
   serializeArtifactListItem,
   setArtifactArchived,
@@ -329,21 +331,31 @@ export function mountArtifacts<E extends Env>(
       if (!scope) return c.json({ error: "Tenant not accessible" }, 403);
 
       const isUrl = body.mode === "url";
-      const row = await db.transaction((tx) =>
-        createArtifact(tx, {
-          scope,
-          ownerPrincipalId: scope.principalId,
-          kind: body.kind ?? (isUrl ? "link" : "document"),
-          title: body.title,
-          content: body.content,
-          source: isUrl
-            ? { origin: "imported", url: body.content }
-            : { origin: "manual" },
-        }),
-      );
+      try {
+        const row = await db.transaction((tx) =>
+          createArtifact(tx, {
+            scope,
+            ownerPrincipalId: scope.principalId,
+            kind: body.kind ?? (isUrl ? "link" : "document"),
+            title: body.title,
+            content: body.content,
+            source: isUrl
+              ? { origin: "imported", url: body.content }
+              : { origin: "manual" },
+          }),
+        );
 
-      const [artifactJson] = await serializeCommitted(scope, [row]);
-      return c.json({ artifact: artifactJson }, 201);
+        const [artifactJson] = await serializeCommitted(scope, [row]);
+        return c.json({ artifact: artifactJson }, 201);
+      } catch (error) {
+        if (error instanceof ArtifactSizeError) {
+          return c.json({ error: error.message }, 400);
+        }
+        if (error instanceof WebSiteContentError) {
+          return c.json({ error: error.message }, 400);
+        }
+        throw error;
+      }
     },
   );
 
@@ -477,9 +489,12 @@ export function mountArtifacts<E extends Env>(
     describeRoute({
       tags: ["Artifacts"],
       summary: "List an artifact's version history",
+      description:
+        "Newest first. Paginated with the same limit defaults as list (cursor is the last version number returned).",
       parameters: [idParam],
       responses: {
-        200: { description: "Versions, newest first" },
+        200: { description: "Versions page, newest first" },
+        400: { description: "Invalid cursor or limit" },
         403: { description: "No resolvable principal" },
         404: { description: "Artifact not found" },
       },
@@ -487,7 +502,11 @@ export function mountArtifacts<E extends Env>(
     async (c) => {
       const loaded = await loadScoped(c);
       if ("response" in loaded) return loaded.response;
-      return c.json({ versions: await listArtifactVersions(db, loaded.row.id) });
+      const query = ListArtifactVersionsQuery(c.req.query());
+      if (query instanceof type.errors) {
+        return c.json({ error: query.summary }, 400);
+      }
+      return c.json(await listArtifactVersions(db, loaded.row.id, query));
     },
   );
 
@@ -529,6 +548,9 @@ export function mountArtifacts<E extends Env>(
       } catch (error) {
         if (error instanceof ArtifactNotFoundError) {
           return c.json({ error: "Artifact not found" }, 404);
+        }
+        if (error instanceof ArtifactSizeError) {
+          return c.json({ error: error.message }, 400);
         }
         if (error instanceof WebSiteContentError) {
           return c.json({ error: error.message }, 400);

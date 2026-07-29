@@ -11,6 +11,7 @@ import {
   inArray,
   isNotNull,
   isNull,
+  lt,
   lte,
   ne,
   or,
@@ -32,6 +33,46 @@ import {
  * would leak that an id is real.
  */
 export const SKILL_DRAFT_KIND = "skill-draft";
+
+/**
+ * Max title length (JavaScript string length) accepted on create/revise.
+ * Keep in sync with mount OpenAPI and package README.
+ */
+export const MAX_ARTIFACT_TITLE_LENGTH = 512;
+
+/**
+ * Max body size in UTF-8 bytes on create/revise. Sized above MAX_UPLOAD_BYTES
+ * so base64 data-URL expansion for file artifacts still fits, and above the
+ * web_site total budget.
+ */
+export const MAX_ARTIFACT_CONTENT_BYTES = 15 * 1024 * 1024;
+
+export class ArtifactSizeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ArtifactSizeError";
+  }
+}
+
+/** Reject oversize title/content before they hit the database. */
+export function assertArtifactFieldSizes(fields: {
+  title?: string;
+  content?: string;
+}): void {
+  if (fields.title !== undefined && fields.title.length > MAX_ARTIFACT_TITLE_LENGTH) {
+    throw new ArtifactSizeError(
+      `Artifact title exceeds the ${MAX_ARTIFACT_TITLE_LENGTH} character limit`,
+    );
+  }
+  if (fields.content !== undefined) {
+    const bytes = Buffer.byteLength(fields.content, "utf8");
+    if (bytes > MAX_ARTIFACT_CONTENT_BYTES) {
+      throw new ArtifactSizeError(
+        `Artifact content exceeds the ${MAX_ARTIFACT_CONTENT_BYTES} byte limit`,
+      );
+    }
+  }
+}
 
 /** Coarse producer classes. `unknown` covers rows written before provenance. */
 export const ARTIFACT_ORIGINS = [
@@ -158,6 +199,7 @@ export async function createArtifact(
     throw new Error("skill-draft artifacts are not created through this module");
   }
   const content = normalizeContentForKind(args.kind, args.content);
+  assertArtifactFieldSizes({ title: args.title, content });
   const now = new Date();
 
   const [row] = await tx
@@ -217,6 +259,9 @@ export async function writeArtifactVersion(
   if (args.title === undefined && args.content === undefined) {
     throw new Error("Provide content and/or title to revise the artifact");
   }
+  if (args.title !== undefined) {
+    assertArtifactFieldSizes({ title: args.title });
+  }
   const now = new Date();
 
   return await db.transaction(async (tx) => {
@@ -246,6 +291,9 @@ export async function writeArtifactVersion(
       args.content === undefined
         ? existing.content
         : normalizeContentForKind(existing.kind, args.content);
+    if (args.content !== undefined) {
+      assertArtifactFieldSizes({ content });
+    }
 
     await tx
       .update(artifact)
@@ -300,11 +348,34 @@ export async function getArtifactVersion(
   return row ?? null;
 }
 
+export type ArtifactVersionListItem = {
+  version: number;
+  title: string;
+  authorId: string;
+  createdAt: string;
+};
+
+export type ListArtifactVersionsFilters = {
+  cursor?: number;
+  limit?: number;
+};
+
+/**
+ * Version history, newest first, keyset-paginated by version number. Same
+ * limit defaults/clamps as listArtifacts. Does not project content.
+ */
 export async function listArtifactVersions(
   db: ArtifactDb,
   artifactId: string,
-): Promise<{ version: number; title: string; authorId: string; createdAt: string }[]> {
-  const rows = await db
+  filters: ListArtifactVersionsFilters = {},
+): Promise<{ versions: ArtifactVersionListItem[]; nextCursor: string | null }> {
+  const limit = filters.limit ?? DEFAULT_LIST_LIMIT;
+  const conditions: SQL[] = [eq(artifactVersion.artifactId, artifactId)];
+  if (filters.cursor !== undefined) {
+    conditions.push(lt(artifactVersion.version, filters.cursor));
+  }
+
+  const fetched = await db
     .select({
       version: artifactVersion.version,
       title: artifactVersion.title,
@@ -312,9 +383,18 @@ export async function listArtifactVersions(
       createdAt: artifactVersion.createdAt,
     })
     .from(artifactVersion)
-    .where(eq(artifactVersion.artifactId, artifactId))
-    .orderBy(desc(artifactVersion.version));
-  return rows.map((r) => ({ ...r, createdAt: r.createdAt.toISOString() }));
+    .where(and(...conditions))
+    .orderBy(desc(artifactVersion.version))
+    .limit(limit + 1);
+
+  const page = fetched.slice(0, limit);
+  const versions = page.map((r) => ({
+    ...r,
+    createdAt: r.createdAt.toISOString(),
+  }));
+  if (fetched.length <= limit) return { versions, nextCursor: null };
+  const last = page[page.length - 1]!;
+  return { versions, nextCursor: String(last.version) };
 }
 
 /**
@@ -427,6 +507,23 @@ export const ListArtifactsQuery = type({
   "archived?": "string",
 }).pipe(
   (q): ListArtifactsFilters => ({ ...q, archived: q.archived === "true" }),
+);
+
+/** GET /artifacts/:id/versions query — cursor is the last version seen (newest-first). */
+export const ListArtifactVersionsQuery = type({
+  "cursor?": type("string").pipe((raw, ctx) => {
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 1) {
+      return ctx.error("a positive integer version cursor");
+    }
+    return n;
+  }),
+  limit: ListLimit.default(String(DEFAULT_LIST_LIMIT)),
+}).pipe(
+  (q): ListArtifactVersionsFilters => ({
+    ...(q.cursor !== undefined ? { cursor: q.cursor } : {}),
+    limit: q.limit,
+  }),
 );
 
 /**
