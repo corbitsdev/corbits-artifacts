@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { sql, type SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
-import type { ArtifactDb } from "./db.js";
+import type { ArtifactDb, ArtifactTx } from "./db.js";
+
 import { ARTIFACTS_SCHEMA } from "./schema.js";
 
 // Own migration ledger, inside the package's own schema, so it never collides
@@ -150,6 +151,160 @@ export class MigrationChecksumError extends Error {
 }
 
 /**
+ * Thrown when the migration ledger is empty but package-owned objects already
+ * exist in the `artifacts` schema. Without an explicit `{ adopt: true }`, the
+ * runner fails closed rather than letting `CREATE IF NOT EXISTS` no-op and
+ * stamp a checksum over a shape it never verified. With `adopt: true`, the
+ * same error is thrown when the live shape does not match what the migrations
+ * would create.
+ */
+export class MigrationAdoptError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MigrationAdoptError";
+  }
+}
+
+/**
+ * Options for {@link runArtifactMigrations}.
+ *
+ * `adopt` is an operator escape hatch for the rare case where package tables
+ * already exist (restored dump, manual DDL, ledger dropped) and the operator
+ * has confirmed they match the expected shape. It is never set by default and
+ * must not be passed on ordinary boots.
+ */
+export type RunArtifactMigrationsOptions = {
+  adopt?: boolean;
+};
+
+/** Package-owned tables (excluding the ledger) and the columns each must have. */
+const EXPECTED_OWNED_SHAPE: Readonly<
+  Record<string, readonly { name: string; udt: string }[]>
+> = {
+  artifact: [
+    { name: "id", udt: "text" },
+    { name: "tenant_id", udt: "text" },
+    { name: "principal_id", udt: "text" },
+    { name: "owner_principal_id", udt: "text" },
+    { name: "kind", udt: "text" },
+    { name: "title", udt: "text" },
+    { name: "content", udt: "text" },
+    { name: "source", udt: "jsonb" },
+    { name: "version", udt: "int4" },
+    { name: "archived_at", udt: "timestamp" },
+    { name: "created_at", udt: "timestamp" },
+    { name: "updated_at", udt: "timestamp" },
+  ],
+  artifact_version: [
+    { name: "id", udt: "text" },
+    { name: "artifact_id", udt: "text" },
+    { name: "version", udt: "int4" },
+    { name: "title", udt: "text" },
+    { name: "content", udt: "text" },
+    { name: "author_id", udt: "text" },
+    { name: "created_at", udt: "timestamp" },
+  ],
+  upload: [
+    { name: "id", udt: "text" },
+    { name: "tenant_id", udt: "text" },
+    { name: "principal_id", udt: "text" },
+    { name: "filename", udt: "text" },
+    { name: "mime_type", udt: "text" },
+    { name: "content", udt: "bytea" },
+    { name: "size", udt: "int4" },
+    { name: "created_at", udt: "timestamp" },
+  ],
+  mail_attachment_ref: [
+    { name: "id", udt: "text" },
+    { name: "tenant_id", udt: "text" },
+    { name: "principal_id", udt: "text" },
+    { name: "instance_id", udt: "text" },
+    { name: "mail_id", udt: "text" },
+    { name: "artifact_id", udt: "text" },
+    { name: "name", udt: "text" },
+    { name: "mime_type", udt: "text" },
+    { name: "size", udt: "int4" },
+    { name: "created_at", udt: "timestamp" },
+  ],
+};
+
+async function listOwnedTables(tx: ArtifactTx): Promise<string[]> {
+
+  const rows = await tx.execute<{ table_name: string }>(sql`
+    SELECT table_name FROM information_schema.tables
+    WHERE table_schema = ${ARTIFACTS_SCHEMA}
+      AND table_type = 'BASE TABLE'
+      AND table_name <> ${LEDGER_TABLE}
+    ORDER BY table_name
+  `);
+  return rows.map((row) => row.table_name);
+}
+
+/**
+ * Compare live catalogue columns against the shape the migrations create.
+ * Returns a human-readable mismatch list (empty when compatible).
+ */
+async function shapeMismatches(tx: ArtifactTx): Promise<string[]> {
+
+  const owned = await listOwnedTables(tx);
+  const expectedTables = Object.keys(EXPECTED_OWNED_SHAPE).sort();
+  const mismatches: string[] = [];
+
+  const ownedSet = new Set(owned);
+  const expectedSet = new Set(expectedTables);
+  for (const table of expectedTables) {
+    if (!ownedSet.has(table)) {
+      mismatches.push(`missing table ${ARTIFACTS_SCHEMA}.${table}`);
+    }
+  }
+  for (const table of owned) {
+    if (!expectedSet.has(table)) {
+      mismatches.push(`unexpected table ${ARTIFACTS_SCHEMA}.${table}`);
+    }
+  }
+
+  if (mismatches.length > 0) return mismatches;
+
+  const columns = await tx.execute<{
+    table_name: string;
+    column_name: string;
+    udt_name: string;
+  }>(sql`
+    SELECT table_name, column_name, udt_name
+    FROM information_schema.columns
+    WHERE table_schema = ${ARTIFACTS_SCHEMA}
+      AND table_name <> ${LEDGER_TABLE}
+  `);
+
+  const byTable = new Map<string, Map<string, string>>();
+  for (const col of columns) {
+    let cols = byTable.get(col.table_name);
+    if (!cols) {
+      cols = new Map();
+      byTable.set(col.table_name, cols);
+    }
+    cols.set(col.column_name, col.udt_name);
+  }
+
+  for (const table of expectedTables) {
+    const expectedCols = EXPECTED_OWNED_SHAPE[table]!;
+    const live = byTable.get(table) ?? new Map();
+    for (const { name, udt } of expectedCols) {
+      const liveUdt = live.get(name);
+      if (liveUdt === undefined) {
+        mismatches.push(`missing column ${ARTIFACTS_SCHEMA}.${table}.${name}`);
+      } else if (liveUdt !== udt) {
+        mismatches.push(
+          `column ${ARTIFACTS_SCHEMA}.${table}.${name} has type ${liveUdt}, expected ${udt}`,
+        );
+      }
+    }
+  }
+
+  return mismatches;
+}
+
+/**
  * Idempotent migration runner. Safe to call on every boot, from every
  * instance: the whole run is ONE transaction whose first act is taking a
  * TRANSACTION-scoped advisory lock, so concurrent cold starts serialize on the
@@ -158,8 +313,19 @@ export class MigrationChecksumError extends Error {
  * IF NOT EXISTS statements without muting real warnings. Each migration
  * applies inside a savepoint together with its ledger row, so it can never be
  * recorded as applied with only some statements run.
+ *
+ * When the ledger is empty but package-owned objects already exist, the runner
+ * fails closed with {@link MigrationAdoptError} unless `{ adopt: true }` is
+ * passed and the live shape matches what the migrations would create. That
+ * path records checksums without re-running DDL. Ledger checksum drift still
+ * throws {@link MigrationChecksumError}.
  */
-export async function runArtifactMigrations(db: ArtifactDb): Promise<void> {
+export async function runArtifactMigrations(
+  db: ArtifactDb,
+  options: RunArtifactMigrationsOptions = {},
+): Promise<void> {
+  const adopt = options.adopt === true;
+
   await db.transaction(async (tx) => {
     await tx.execute(sql`SET LOCAL client_min_messages = warning`);
     await tx.execute(sql`SELECT pg_advisory_xact_lock(${LOCK_KEY})`);
@@ -180,6 +346,44 @@ export async function runArtifactMigrations(db: ArtifactDb): Promise<void> {
       sql`SELECT "id", "checksum" FROM ${LEDGER}`,
     );
     const appliedChecksums = new Map(applied.map((row) => [row.id, row.checksum]));
+
+    // Empty ledger + pre-existing owned objects: never let IF NOT EXISTS no-op
+    // and stamp a checksum. Fail closed, or adopt only after shape validation.
+    if (appliedChecksums.size === 0) {
+      const owned = await listOwnedTables(tx);
+      if (owned.length > 0) {
+        const mismatches = await shapeMismatches(tx);
+        if (mismatches.length > 0) {
+          throw new MigrationAdoptError(
+            `Package schema ${ARTIFACTS_SCHEMA} already has objects but the ` +
+              `migration ledger is empty, and the live shape is incompatible: ` +
+              `${mismatches.join("; ")}. Refusing to record a checksum over an ` +
+              `unverified schema. Drop the incompatible objects and re-run, or ` +
+              `repair the shape to match the package migrations before adopting.`,
+          );
+        }
+        if (!adopt) {
+          throw new MigrationAdoptError(
+            `Package schema ${ARTIFACTS_SCHEMA} already has objects ` +
+              `(${owned.join(", ")}) but the migration ledger is empty. ` +
+              `Refusing to silently adopt them. Re-run with ` +
+              `{ adopt: true } only after confirming the live shape matches ` +
+              `what the package migrations create, or drop the schema and let ` +
+              `the runner create it cleanly.`,
+          );
+        }
+        // Compatible shape + explicit adopt: record every migration checksum
+        // without re-running DDL (IF NOT EXISTS would only hide drift).
+        for (const migration of MIGRATIONS) {
+          const checksum = migrationChecksum(migration);
+          await tx.execute(sql`
+            INSERT INTO ${LEDGER} ("id", "checksum")
+            VALUES (${migration.id}, ${checksum})
+          `);
+        }
+        return;
+      }
+    }
 
     for (const migration of MIGRATIONS) {
       const checksum = migrationChecksum(migration);

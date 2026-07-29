@@ -2,7 +2,9 @@
 export { mountArtifacts } from "./mount.js";
 export type { MountArtifactsOpts } from "./mount.js";
 
-export { runArtifactMigrations, MigrationChecksumError } from "./migrations.js";
+export { runArtifactMigrations, MigrationChecksumError, MigrationAdoptError } from "./migrations.js";
+export type { RunArtifactMigrationsOptions } from "./migrations.js";
+
 
 export { createArtifactDb } from "./db.js";
 export type { ArtifactDb, ArtifactTx } from "./db.js";
@@ -74,6 +76,9 @@ export type { Download, DownloadFailure } from "./download.js";
 
 export {
   listMailAttachmentRefs,
+  MAIL_ATTACHABLE_KINDS,
+  MailAttachmentKindError,
+  MAX_MAIL_ATTACHMENT_BYTES,
   MAX_MAIL_ATTACHMENTS_PER_MAIL,
   saveMailAttachmentRefs,
 } from "./mail-attachments.js";
@@ -94,6 +99,7 @@ export {
   summarizeWebSiteContent,
   WEB_SITE_KIND,
   WEB_SITE_MAX_FILES,
+  WEB_SITE_MAX_PATH_LENGTH,
   WEB_SITE_MAX_TOTAL_BYTES,
   WebSiteContentError,
 } from "./web-site.js";

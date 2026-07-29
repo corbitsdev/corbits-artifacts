@@ -6,12 +6,16 @@ import postgres from "postgres";
 import { createArtifactDb } from "./db.js";
 import {
   migrationChecksum,
+  MigrationAdoptError,
   MigrationChecksumError,
   MIGRATIONS,
   runArtifactMigrations,
 } from "./migrations.js";
 import * as schema from "./schema.js";
-import { DATABASE_URL } from "./test-helpers.js";
+import {
+  assertDestructiveArtifactTestsAllowed,
+  DATABASE_URL,
+} from "./test-helpers.js";
 
 const SCHEMA = "artifacts";
 const LEDGER = "migrations";
@@ -69,6 +73,7 @@ describe("migrations", () => {
   // the lock, not the IF NOT EXISTS, that makes the runner safe to call from
   // every instance at once.
   test("concurrent first boots against a fresh database all succeed", async () => {
+    assertDestructiveArtifactTestsAllowed(DATABASE_URL);
     await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
     // Each handle is its own pool, so all four genuinely believe they are the
     // first boot.
@@ -301,6 +306,7 @@ describe("migrations", () => {
   test("the migrations create exactly the tables schema.ts declares, no more, no less", async () => {
     // The package schema is dropped and rebuilt from empty, so the migrations
     // are its only writer and the comparison is an EQUALITY.
+    assertDestructiveArtifactTestsAllowed(DATABASE_URL);
     await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
     await runArtifactMigrations(db);
     const tables = await db.execute<{ table_name: string }>(sql`
@@ -312,5 +318,100 @@ describe("migrations", () => {
       .filter((name) => name !== LEDGER)
       .sort();
     expect(created).toEqual(DECLARED_TABLES);
+  });
+
+  /**
+   * Empty ledger + pre-existing package objects is the AUDIT-013 footgun:
+   * `CREATE IF NOT EXISTS` no-ops and a naive runner would still stamp the
+   * current checksum, so boot "succeeds" while the live shape is wrong.
+   * These three cases pin the adopt-or-fail contract.
+   */
+  test("clean install still migrates when the package schema is empty", async () => {
+    assertDestructiveArtifactTestsAllowed(DATABASE_URL);
+    await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
+    await runArtifactMigrations(db);
+
+    const ledger = await db.execute<{ id: string; checksum: string }>(
+      sql`SELECT "id", "checksum" FROM ${sql.identifier(SCHEMA)}.${sql.identifier(LEDGER)} ORDER BY "id"`,
+    );
+    expect(ledger.map((r) => r.id)).toEqual(MIGRATIONS.map((m) => m.id));
+    for (const row of ledger) {
+      const migration = MIGRATIONS.find((m) => m.id === row.id)!;
+      expect(row.checksum).toBe(migrationChecksum(migration));
+    }
+  });
+
+  test("empty ledger + wrong shape fails closed and does not write a checksum", async () => {
+    assertDestructiveArtifactTestsAllowed(DATABASE_URL);
+    await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
+    // Partial / wrong object: schema + a table that is not the package shape.
+    await db.execute(sql`CREATE SCHEMA ${sql.identifier(SCHEMA)}`);
+    await db.execute(sql`
+      CREATE TABLE ${sql.identifier(SCHEMA)}."artifact" (
+        "id" text PRIMARY KEY,
+        "not_the_real_shape" text
+      )
+    `);
+
+    await expect(runArtifactMigrations(db)).rejects.toThrow(MigrationAdoptError);
+    await expect(
+      runArtifactMigrations(db, { adopt: true }),
+    ).rejects.toThrow(MigrationAdoptError);
+
+    // No ledger row may have been recorded — including a ledger that was
+    // created mid-run and then rolled back with the failed transaction.
+    const ledgerTables = await db.execute<{ n: number }>(sql`
+      SELECT count(*)::int AS n FROM information_schema.tables
+      WHERE table_schema = ${SCHEMA} AND table_name = ${LEDGER}
+    `);
+    expect(ledgerTables[0]!.n).toBe(0);
+
+    // And the wrong object is still the only package table — runner must not
+    // have half-applied real DDL around it.
+    const tables = await db.execute<{ table_name: string }>(sql`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = ${SCHEMA}
+    `);
+    expect(tables.map((t) => t.table_name).sort()).toEqual(["artifact"]);
+  });
+
+  test("empty ledger + compatible shape requires explicit adopt; adopt records checksums without re-DDL", async () => {
+    assertDestructiveArtifactTestsAllowed(DATABASE_URL);
+    await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
+    // Build a correct shape the honest way, then erase the ledger so the next
+    // boot sees "objects present, ledger empty" — the adopt path's input.
+    await runArtifactMigrations(db);
+    await db.execute(
+      sql`DROP TABLE ${sql.identifier(SCHEMA)}.${sql.identifier(LEDGER)}`,
+    );
+
+    // Without the flag: fail closed even though the shape is right. Silent
+    // adoption is how a wrong-but-lucky shape used to get a checksum stamp.
+    await expect(runArtifactMigrations(db)).rejects.toThrow(MigrationAdoptError);
+
+    const stillEmpty = await db.execute<{ n: number }>(sql`
+      SELECT count(*)::int AS n FROM information_schema.tables
+      WHERE table_schema = ${SCHEMA} AND table_name = ${LEDGER}
+    `);
+    expect(stillEmpty[0]!.n).toBe(0);
+
+    // With the flag: shape validates, ledger is written, objects stay put.
+    await runArtifactMigrations(db, { adopt: true });
+
+    const ledger = await db.execute<{ id: string; checksum: string }>(
+      sql`SELECT "id", "checksum" FROM ${sql.identifier(SCHEMA)}.${sql.identifier(LEDGER)} ORDER BY "id"`,
+    );
+    expect(ledger.map((r) => r.id)).toEqual(MIGRATIONS.map((m) => m.id));
+    for (const row of ledger) {
+      const migration = MIGRATIONS.find((m) => m.id === row.id)!;
+      expect(row.checksum).toBe(migrationChecksum(migration));
+    }
+
+    // Re-run (no adopt needed once ledgered) remains a quiet no-op.
+    await runArtifactMigrations(db);
+    const again = await db.execute<{ id: string }>(
+      sql`SELECT "id" FROM ${sql.identifier(SCHEMA)}.${sql.identifier(LEDGER)}`,
+    );
+    expect(again.length).toBe(MIGRATIONS.length);
   });
 });
