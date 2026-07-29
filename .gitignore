@@ -9,3 +9,8 @@ coverage/
 # npm pack output
 *.tgz
 .worktrees/
+
+# Dispatch orchestration artifacts (local agent runs)
+dispatch/
+.agent-state/
+.intercode/
