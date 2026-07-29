@@ -119,8 +119,17 @@ last version number returned (newest-first). Version rows omit content; use
 `GET /api/artifacts/:id?version=N` (or `getArtifactVersion`) for a pinned body.
 
 **Write size limits:** create and revise reject titles longer than 512 characters and
-content larger than 15 MiB UTF-8 (`ArtifactSizeError` / HTTP 400). Upload byte caps remain
-on the multipart path.
+content larger than 15 MiB UTF-8 (`ArtifactSizeError` / HTTP 400). JSON mutators also
+refuse a declared `Content-Length` over that same 15 MiB ceiling with HTTP 413 before
+buffering the body; missing `Content-Length` still streams into the parser. **Hosts
+should set a global request body limit upstream** of this mount (Hono middleware, Bun
+server, reverse proxy) — the package check is a best-effort edge guard, not a substitute
+for a host-level cap. Upload byte caps remain on the multipart path.
+
+**Auth before body:** mutating JSON routes (`POST /api/artifacts`,
+`POST /api/artifacts/:id/versions`, `POST …/mail-attachments`) resolve the principal
+before parsing the body, so an unauthenticated caller gets 403 without learning whether
+the JSON was well-formed. Upload already auth'd first.
 
 ### Two response contracts
 

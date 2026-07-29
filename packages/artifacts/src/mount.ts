@@ -13,6 +13,7 @@ import {
   ListArtifactsQuery,
   listArtifactVersions,
   ListArtifactVersionsQuery,
+  MAX_ARTIFACT_CONTENT_BYTES,
   serializeArtifact,
   serializeArtifactListItem,
   setArtifactArchived,
@@ -180,6 +181,18 @@ export function mountArtifacts<E extends Env>(
 
   const readJson = (c: Ctx): Promise<unknown> => c.req.json().catch(() => null);
 
+  /**
+   * Coarse HTTP body ceiling for JSON mutators, reusing the content-byte constant.
+   * Only acts when Content-Length is present; missing length still streams into
+   * `readJson`, so hosts must set a global request body limit upstream.
+   */
+  function contentLengthOverCeiling(c: Ctx): boolean {
+    const raw = c.req.header("content-length");
+    if (raw === undefined || raw === "") return false;
+    const n = Number(raw);
+    return Number.isFinite(n) && n > MAX_ARTIFACT_CONTENT_BYTES;
+  }
+
   async function serialize(
     scope: ResolvedPrincipal,
     rows: ArtifactRow[],
@@ -319,16 +332,27 @@ export function mountArtifacts<E extends Env>(
         201: { description: "Artifact created" },
         400: { description: "Invalid request body" },
         403: { description: "Tenant not accessible" },
+        413: { description: "Declared Content-Length over the content ceiling" },
       },
     }),
     async (c) => {
+      // Principal before body: unauthenticated callers get 403 without learning
+      // whether the JSON was well-formed.
+      const scope = await scopeFor(c);
+      if (!scope) return c.json({ error: "Tenant not accessible" }, 403);
+      if (contentLengthOverCeiling(c)) {
+        return c.json(
+          {
+            error: `Request body exceeds the ${MAX_ARTIFACT_CONTENT_BYTES} byte limit`,
+          },
+          413,
+        );
+      }
+
       const raw = await readJson(c);
       if (raw === null) return c.json({ error: "Invalid JSON body" }, 400);
       const body = CreateArtifactRequest(raw);
       if (body instanceof type.errors) return c.json({ error: body.summary }, 400);
-
-      const scope = await scopeFor(c);
-      if (!scope) return c.json({ error: "Tenant not accessible" }, 403);
 
       const isUrl = body.mode === "url";
       try {
@@ -523,19 +547,29 @@ export function mountArtifacts<E extends Env>(
         400: { description: "Invalid request body or content" },
         403: { description: "No resolvable principal, or not the owner" },
         404: { description: "Artifact not found" },
+        413: { description: "Declared Content-Length over the content ceiling" },
       },
     }),
     async (c) => {
-      const raw = await readJson(c);
-      if (raw === null) return c.json({ error: "Invalid JSON body" }, 400);
-      const body = ReviseArtifactRequest(raw);
-      if (body instanceof type.errors) return c.json({ error: body.summary }, 400);
-
+      // loadScoped resolves the principal before any body parse.
       const loaded = await loadScoped(c);
       if ("response" in loaded) return loaded.response;
       if (!(await canMutate(loaded.row, loaded.scope))) {
         return c.json({ error: "Forbidden" }, 403);
       }
+      if (contentLengthOverCeiling(c)) {
+        return c.json(
+          {
+            error: `Request body exceeds the ${MAX_ARTIFACT_CONTENT_BYTES} byte limit`,
+          },
+          413,
+        );
+      }
+
+      const raw = await readJson(c);
+      if (raw === null) return c.json({ error: "Invalid JSON body" }, 400);
+      const body = ReviseArtifactRequest(raw);
+      if (body instanceof type.errors) return c.json({ error: body.summary }, 400);
       try {
         return c.json(
           await writeArtifactVersion(db, {
@@ -688,14 +722,23 @@ export function mountArtifacts<E extends Env>(
         },
         403: { description: "Tenant not accessible" },
         404: { description: "A referenced artifact is not visible to the caller" },
+        413: { description: "Declared Content-Length over the content ceiling" },
       },
     }),
     async (c) => {
+      const scope = await scopeFor(c);
+      if (!scope) return c.json({ error: "Tenant not accessible" }, 403);
+      if (contentLengthOverCeiling(c)) {
+        return c.json(
+          {
+            error: `Request body exceeds the ${MAX_ARTIFACT_CONTENT_BYTES} byte limit`,
+          },
+          413,
+        );
+      }
       const raw = await readJson(c);
       const body = SaveMailAttachmentRefsSchema(raw);
       if (body instanceof type.errors) return c.json({ error: body.summary }, 400);
-      const scope = await scopeFor(c);
-      if (!scope) return c.json({ error: "Tenant not accessible" }, 403);
       try {
         await saveMailAttachmentRefs(db, {
           scope,
