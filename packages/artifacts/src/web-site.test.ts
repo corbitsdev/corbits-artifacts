@@ -6,6 +6,8 @@ import {
   serializeWebSiteContent,
   summarizeWebSiteContent,
   WEB_SITE_MAX_FILES,
+  WEB_SITE_MAX_PATH_LENGTH,
+  WEB_SITE_MAX_TOTAL_BYTES,
   WebSiteContentError,
 } from "./web-site.js";
 import { anonymousIdentity } from "./ports.js";
@@ -52,6 +54,26 @@ describe("content validation", () => {
   test("enforces the total-size ceiling", () => {
     expect(() =>
       normalizeWebSiteContent({ files: { "index.html": "x".repeat(4_500_001) } }),
+    ).toThrow(/total size exceeds/);
+  });
+
+  test("refuses a path longer than WEB_SITE_MAX_PATH_LENGTH", () => {
+    const longName = "a".repeat(WEB_SITE_MAX_PATH_LENGTH + 1);
+    expect(() => normalizeWebSitePath(longName)).toThrow(WebSiteContentError);
+    expect(() => normalizeWebSitePath(longName)).toThrow(/path exceeds max length/);
+    // Empty body must not let an over-long path slip through.
+    expect(() =>
+      normalizeWebSiteContent({ files: { [longName]: "" } }),
+    ).toThrow(/path exceeds max length/);
+  });
+
+  test("counts path bytes toward the total-size ceiling (empty-body paths cannot bypass)", () => {
+    // Body alone is under the ceiling; body + path UTF-8 exceeds it.
+    // Without counting path bytes, this payload would be accepted.
+    const path = "p".repeat(200);
+    const body = "x".repeat(WEB_SITE_MAX_TOTAL_BYTES - 100);
+    expect(() =>
+      normalizeWebSiteContent({ files: { [path]: body } }),
     ).toThrow(/total size exceeds/);
   });
 

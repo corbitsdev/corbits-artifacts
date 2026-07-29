@@ -6,6 +6,8 @@ export const WEB_SITE_KIND = "web_site";
 
 export const WEB_SITE_MAX_FILES = 64;
 export const WEB_SITE_MAX_TOTAL_BYTES = 4_500_000;
+/** Max length (UTF-16 code units) of a normalized web_site file path. */
+export const WEB_SITE_MAX_PATH_LENGTH = 1024;
 
 export const WebSiteContentSchema = type({
   "entry?": "string",
@@ -39,6 +41,11 @@ export function normalizeWebSitePath(path: string): string {
       throw new WebSiteContentError(`invalid path (empty segment): ${path}`);
     }
   }
+  if (normalized.length > WEB_SITE_MAX_PATH_LENGTH) {
+    throw new WebSiteContentError(
+      `path exceeds max length (${WEB_SITE_MAX_PATH_LENGTH}): ${path.length} characters`,
+    );
+  }
   return normalized;
 }
 
@@ -58,7 +65,8 @@ export function normalizeWebSiteContent(
       );
     }
     files[path] = fileContent;
-    total += byteLength(fileContent);
+    // Path UTF-8 counts toward the total so empty-body huge keys cannot bypass.
+    total += byteLength(path) + byteLength(fileContent);
   }
 
   const paths = Object.keys(files);
