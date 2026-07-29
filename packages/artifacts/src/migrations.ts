@@ -150,6 +150,50 @@ export const MIGRATIONS: Migration[] = [
       `,
     ],
   },
+  {
+    // Cheap row-local invariants. tenant_id was nullable in 0001 so a restored
+    // dump can still hold orphans; refuse to SET NOT NULL over them and tell the
+    // operator to assign a tenant or delete the rows first. Version/size CHECKs
+    // are single-column and free at write time. Principal↔tenant alignment is
+    // deliberately host-owned (resolvePrincipal) — a multi-table trigger into
+    // public.principal is out of scope and would couple write path latency to
+    // the control plane.
+    id: "0003_schema_invariants",
+    statements: [
+      sql`
+        DO $guard$
+        BEGIN
+          IF EXISTS (
+            SELECT 1 FROM "artifacts"."artifact" WHERE "tenant_id" IS NULL
+          ) THEN
+            RAISE EXCEPTION
+              'Cannot apply 0003_schema_invariants: artifacts.artifact has rows with null tenant_id. Assign a valid tenant or delete those rows, then re-run migrations.';
+          END IF;
+        END
+        $guard$
+      `,
+      sql`
+        ALTER TABLE "artifacts"."artifact"
+          ALTER COLUMN "tenant_id" SET NOT NULL
+      `,
+      sql`
+        ALTER TABLE "artifacts"."artifact"
+          ADD CONSTRAINT "artifact_version_gte_1" CHECK ("version" >= 1)
+      `,
+      sql`
+        ALTER TABLE "artifacts"."artifact_version"
+          ADD CONSTRAINT "artifact_version_version_gte_1" CHECK ("version" >= 1)
+      `,
+      sql`
+        ALTER TABLE "artifacts"."upload"
+          ADD CONSTRAINT "upload_size_gte_0" CHECK ("size" >= 0)
+      `,
+      sql`
+        ALTER TABLE "artifacts"."mail_attachment_ref"
+          ADD CONSTRAINT "mail_attachment_ref_size_gte_0" CHECK ("size" >= 0)
+      `,
+    ],
+  },
 ];
 
 // Advisory locks are namespaced by this integer alone; deliberately arbitrary

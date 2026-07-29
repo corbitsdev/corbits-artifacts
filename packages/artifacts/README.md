@@ -100,7 +100,7 @@ happen in major versions.
 | `POST /api/artifacts` | Human import — link a URL or paste text |
 | `POST /api/artifacts/upload` | multipart import. An optional `generatedBy` form field is stored as `source.generatedBy`, a free-form display label nothing here reads back |
 | `GET /api/artifacts/:id` | Deep link (archived artifacts still load) |
-| `GET`/`POST /api/artifacts/:id/versions` | Version history and revision |
+| `GET`/`POST /api/artifacts/:id/versions` | Version history (paginated, no content bodies) and revision |
 | `POST /api/artifacts/:id/(un)archive` | Idempotent soft-hide |
 | `GET /api/artifacts/:id/download` | One path over three storage conventions |
 | `…/api/instances/:id/mail-attachments` | Artifact↔message associations |
@@ -112,6 +112,15 @@ Every route carries `describeRoute`, so it appears in the host's `/openapi.json`
 previously rendered list rows from the list payload must load bodies via
 `GET /api/artifacts/:id`, download, or the read tools. Search still matches title and
 content server-side; only the response projection changes.
+
+**Version history pagination:** `GET /api/artifacts/:id/versions` returns
+`{ versions, nextCursor }` with the same default/max limit clamps as list. Cursor is the
+last version number returned (newest-first). Version rows omit content; use
+`GET /api/artifacts/:id?version=N` (or `getArtifactVersion`) for a pinned body.
+
+**Write size limits:** create and revise reject titles longer than 512 characters and
+content larger than 15 MiB UTF-8 (`ArtifactSizeError` / HTTP 400). Upload byte caps remain
+on the multipart path.
 
 ### Two response contracts
 
@@ -195,9 +204,12 @@ blob, then inline data URL, then downloadable text (`csv-export`). Bytes are ser
 ## Schema and migrations
 
 Four tables — `artifact`, `artifact_version`, `upload`, `mail_attachment_ref` — in the
-package-owned `artifacts` Postgres schema. `tenant_id` and the principal columns are
-hard foreign keys into Interchange's `public.tenant` / `public.principal`, so the
-host's own migrations must run first.
+package-owned `artifacts` Postgres schema. `tenant_id` is required (`NOT NULL`) and,
+with the principal columns, is a hard foreign key into Interchange's
+`public.tenant` / `public.principal`, so the host's own migrations must run first.
+Version columns CHECK ≥ 1; size columns CHECK ≥ 0. Whether a principal belongs to
+the stamped tenant is **host-owned** via `resolvePrincipal` — the package does not
+install multi-table triggers for that alignment (see ARCHITECTURE.md).
 
 `runArtifactMigrations(db)` is idempotent, advisory-locked, creates and owns the
 `artifacts` Postgres schema, and keeps its own ledger

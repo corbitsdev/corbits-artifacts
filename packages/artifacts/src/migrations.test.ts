@@ -414,4 +414,158 @@ describe("migrations", () => {
     );
     expect(again.length).toBe(MIGRATIONS.length);
   });
+
+  /**
+   * DB invariants: tenant_id is required on every artifact row; version and size
+   * stay non-negative. Principal↔tenant alignment is host-owned (resolvePrincipal)
+   * — no multi-table trigger here.
+   */
+  test("null tenant_id on artifact is rejected after migrations", async () => {
+    await runArtifactMigrations(db);
+    const failure = await db
+      .execute(sql`
+        INSERT INTO "artifacts"."artifact"
+          ("tenant_id", "kind", "title", "content", "version")
+        VALUES (NULL, 'document', 'orphan', 'body', 1)
+      `)
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(failure).not.toBeNull();
+    expect(String((failure as { cause?: unknown }).cause)).toMatch(
+      /null value in column "tenant_id"/,
+    );
+  });
+
+  test("version and size CHECK constraints reject impossible values", async () => {
+    await runArtifactMigrations(db);
+
+    const badArtifactVersion = await db
+      .execute(sql`
+        INSERT INTO "artifacts"."artifact"
+          ("tenant_id", "kind", "title", "content", "version")
+        VALUES ('acme', 'document', 'bad-ver', 'body', 0)
+      `)
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(badArtifactVersion).not.toBeNull();
+    expect(String((badArtifactVersion as { cause?: unknown }).cause)).toMatch(
+      /artifact_version_gte_1|check constraint/i,
+    );
+
+    // A legal artifact so we can try a bad history row and a bad upload.
+    const [row] = await db.execute<{ id: string }>(sql`
+      INSERT INTO "artifacts"."artifact"
+        ("tenant_id", "kind", "title", "content", "version")
+      VALUES ('acme', 'document', 'ok', 'body', 1)
+      RETURNING "id"
+    `);
+
+    const badHistory = await db
+      .execute(sql`
+        INSERT INTO "artifacts"."artifact_version"
+          ("artifact_id", "version", "title", "content", "author_id")
+        VALUES (${row!.id}, 0, 'ok', 'body', 'user-1')
+      `)
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(badHistory).not.toBeNull();
+    expect(String((badHistory as { cause?: unknown }).cause)).toMatch(
+      /artifact_version_version_gte_1|check constraint/i,
+    );
+
+    const badUpload = await db
+      .execute(sql`
+        INSERT INTO "artifacts"."upload"
+          ("tenant_id", "filename", "mime_type", "content", "size")
+        VALUES ('acme', 'x.bin', 'application/octet-stream', decode('00', 'hex'), -1)
+      `)
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(badUpload).not.toBeNull();
+    expect(String((badUpload as { cause?: unknown }).cause)).toMatch(
+      /upload_size_gte_0|check constraint/i,
+    );
+
+    const badRef = await db
+      .execute(sql`
+        INSERT INTO "artifacts"."mail_attachment_ref"
+          ("tenant_id", "instance_id", "mail_id", "artifact_id",
+           "name", "mime_type", "size")
+        VALUES ('acme', 'inst', 'mail', ${row!.id}, 'a.bin',
+                'application/octet-stream', -1)
+      `)
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(badRef).not.toBeNull();
+    expect(String((badRef as { cause?: unknown }).cause)).toMatch(
+      /mail_attachment_ref_size_gte_0|check constraint/i,
+    );
+  });
+
+  test("migration fails clearly when null tenant_id rows already exist", async () => {
+    assertDestructiveArtifactTestsAllowed(DATABASE_URL);
+    await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
+
+    // Apply only the baseline + timestamptz migrations so tenant_id is still
+    // nullable, plant a null-tenant row, then attempt the full runner (which
+    // must include the invariants migration).
+    const preInvariant = MIGRATIONS.filter(
+      (m) => m.id === "0001_artifacts" || m.id === "0002_timestamptz",
+    );
+    expect(preInvariant.length).toBe(2);
+    expect(MIGRATIONS.some((m) => m.id === "0003_schema_invariants")).toBe(true);
+
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`CREATE SCHEMA IF NOT EXISTS ${sql.identifier(SCHEMA)}`);
+      await tx.execute(sql`
+        CREATE TABLE IF NOT EXISTS ${sql.identifier(SCHEMA)}.${sql.identifier(LEDGER)} (
+          "id" text PRIMARY KEY,
+          "checksum" text NOT NULL,
+          "applied_at" timestamptz NOT NULL DEFAULT now()
+        )
+      `);
+      for (const migration of preInvariant) {
+        for (const statement of migration.statements) {
+          await tx.execute(statement);
+        }
+        await tx.execute(sql`
+          INSERT INTO ${sql.identifier(SCHEMA)}.${sql.identifier(LEDGER)}
+            ("id", "checksum")
+          VALUES (${migration.id}, ${migrationChecksum(migration)})
+        `);
+      }
+    });
+
+    await db.execute(sql`
+      INSERT INTO "artifacts"."artifact"
+        ("tenant_id", "kind", "title", "content", "version")
+      VALUES (NULL, 'document', 'orphan', 'body', 1)
+    `);
+
+    const failure = await runArtifactMigrations(db).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(failure).not.toBeNull();
+    expect(String(failure)).toMatch(/null tenant_id/i);
+
+    // The invariants migration must not be stamped when the guard fails.
+    const ledger = await db.execute<{ id: string }>(
+      sql`SELECT "id" FROM ${sql.identifier(SCHEMA)}.${sql.identifier(LEDGER)} ORDER BY "id"`,
+    );
+    expect(ledger.map((r) => r.id)).toEqual([
+      "0001_artifacts",
+      "0002_timestamptz",
+    ]);
+  });
 });
