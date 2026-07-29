@@ -371,7 +371,7 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
 
   return {
     db,
-    tenant,
+    tenantId: tenant,
     agentPrincipal,
     scope: () => ({
       tenantId: tenant,

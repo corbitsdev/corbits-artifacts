@@ -197,7 +197,7 @@ describe("list: keyset paging, creatorKind, and the archived toggle", () => {
     await host.db.execute(sql`
       INSERT INTO "artifacts"."artifact" ("tenant_id", "principal_id", "owner_principal_id",
         "kind", "title", "content", "source", "version")
-      VALUES (${host.tenant}, ${host.agentPrincipal}, ${host.agentPrincipal}, 'document',
+      VALUES (${host.tenantId}, ${host.agentPrincipal}, ${host.agentPrincipal}, 'document',
         'Agent memo', 'written by an agent', '{"origin":"agent"}'::jsonb, 1)
     `);
 
@@ -455,7 +455,7 @@ describe("pdf parsing is the host's, and the module's contract with it holds", (
     const row = await host.db.transaction((tx) =>
       createFileArtifact(tx, InlineContentStore, {
         scope: host.scope(),
-        ownerPrincipalId: host.scope().principal,
+        ownerPrincipalId: host.scope().principalId,
         filename: "report.pdf",
         mimeType: "application/pdf",
         bytes: PDF,
@@ -484,7 +484,7 @@ describe("pdf parsing is the host's, and the module's contract with it holds", (
       host.db.transaction((tx) =>
         createFileArtifact(tx, InlineContentStore, {
           scope: host.scope(),
-          ownerPrincipalId: host.scope().principal,
+          ownerPrincipalId: host.scope().principalId,
           filename: "logo.svg",
           mimeType: "image/svg+xml",
           bytes: new Uint8Array(Buffer.from("<svg/>")),
@@ -503,7 +503,7 @@ describe("a skill-draft is invisible over the mounted host", () => {
     const [draft] = await host.db.execute<{ id: string }>(sql`
       INSERT INTO "artifacts"."artifact" ("tenant_id", "principal_id", "owner_principal_id",
         "kind", "title", "content", "source", "version")
-      VALUES (${host.tenant}, ${draftAuthor}, ${draftAuthor}, 'skill-draft', 'Scratch',
+      VALUES (${host.tenantId}, ${draftAuthor}, ${draftAuthor}, 'skill-draft', 'Scratch',
         'draft body', '{"origin":"agent"}'::jsonb, 1)
       RETURNING "id"
     `);
