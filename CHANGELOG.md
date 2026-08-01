@@ -17,6 +17,16 @@ always called out under their own heading.
   resolve TypeScript sources via the `bun` export condition; Node consumers
   continue to use the built `dist/` from `npm pack` / a published release.
 
+### Breaking
+
+- `mountArtifacts` takes `Hono<TenantEnv>`, reads the host-provided tenant and
+  principal context natively, and requires the host's Interchange `RequireGrant`
+  middleware. The `resolvePrincipal`, `isAdmin`, and `identity` options and the
+  `Identity` / `anonymousIdentity` exports are not part of the package surface.
+- Serialized artifact rows expose `ownerPrincipalId` without an `ownerName`.
+  Artifact lists no longer accept `creatorKind`, and tool reads are always
+  confined to the caller's tenant without a `tenantId` override.
+
 ### 0.1.0 — first release
 
 Initial public release. Nothing has been published before this, so everything is
@@ -24,10 +34,10 @@ new; the list below is what the surface consists of rather than what changed.
 
 - `mountArtifacts(app, opts)` — mounts artifacts, versions and uploads on a
   host's existing Hono app: tenant-scoped list with keyset paging and
-  query/kind/owner/creator-kind/date filters, human import of a link or pasted
-  text, multipart upload, deep-link detail, version history and revision,
-  idempotent soft archive and unarchive, a single download path, and
-  artifact↔message attachment refs. Every route carries OpenAPI metadata.
+  query/kind/owner/date filters, human import of a link or pasted text,
+  multipart upload, deep-link detail, version history and revision, idempotent
+  soft archive and unarchive, a single download path, and artifact↔message
+  attachment refs. Every route carries OpenAPI metadata.
 - `runArtifactMigrations(db)` — idempotent, advisory-locked, checksum-guarded,
   with its own ledger table (`artifacts.migrations`) and silent re-runs. Safe to
   call on every boot of every replica. All tables live in the package-owned
@@ -38,10 +48,10 @@ new; the list below is what the surface consists of rather than what changed.
 - `ContentStore` port with two shipped implementations, `InlineContentStore`
   (bytea side-table) and `DataUrlContentStore` (inline `data:` URL), both
   passing the same suite.
-- Host options: `resolvePrincipal`, plus `isAdmin`, `identity` and
-  `decorate`, each with a fail-closed default.
-- Agent-facing tool definitions with windowed artifact reads, and the `web_site`
-  artifact kind.
+- Host options: required `db`, `contentStore`, and `requireGrant`, plus optional
+  display-only `decorate` and `uploadPolicy` behavior.
+- Agent-facing tool definitions with tenant-confined windowed artifact reads,
+  and the `web_site` artifact kind.
 - Requires `@intx/*` 0.2.2 or newer, Node 22+ or Bun 1.1+, and Postgres 13+.
   (`@intx/*` 0.1.2 does not install — its deps pin the unpublished
   `@intx/*@0.0.0` — and ships raw TypeScript.)
