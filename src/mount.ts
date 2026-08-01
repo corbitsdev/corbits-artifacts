@@ -1,7 +1,9 @@
 import "./arktype.js";
 import { type } from "arktype";
-import type { Context, Env, Hono } from "hono";
+import type { Context, Hono } from "hono";
+import type { MiddlewareHandler } from "hono";
 import { describeRoute } from "hono-openapi";
+import { idResource, type RequireGrant, type TenantEnv } from "@intx/hub-api";
 import type { ArtifactDb } from "./db.js";
 import {
   ArtifactNotFoundError,
@@ -32,12 +34,7 @@ import {
   SaveMailAttachmentRefsSchema,
 } from "./mail-attachments.js";
 import type { ArtifactRow } from "./schema.js";
-import {
-  anonymousIdentity,
-  type ResolvedPrincipal,
-  type ContentStore,
-  type Identity,
-} from "./ports.js";
+import type { ResolvedPrincipal, ContentStore } from "./ports.js";
 import {
   ARTIFACT_UPLOAD_POLICY,
   contentDispositionHeader,
@@ -55,21 +52,13 @@ export type MountArtifactsOpts = {
   db: ArtifactDb;
   contentStore: ContentStore;
   /**
-   * Who the request runs as. `ctx` is `unknown` on purpose — the seam never
-   * reaches into Hono's context typing — and the signature is identical to
-   * `@corbits/mailbox-core`'s, so a host mounting both passes the same function.
-   *
-   * The resolved tenant is authoritative: there is no caller-supplied tenant
-   * override, so a request can only ever reach the tenant its own session
-   * resolves to.
+   * The host's grant middleware factory (Interchange `createRequireGrant`).
+   * Authorize is the host's responsibility: artifact-core implements no owner,
+   * agent-owner, membership, or admin policy. The mutating routes that act on
+   * one artifact are guarded with `requireGrant(idResource("artifact", "id"),
+   * <action>)`.
    */
-  resolvePrincipal: (
-    ctx: unknown,
-  ) => Promise<ResolvedPrincipal | null> | ResolvedPrincipal | null;
-  /** Whether this principal is a tenant admin. Defaults to nobody being an admin. */
-  isAdmin?: (scope: ResolvedPrincipal) => Promise<boolean>;
-  /** Defaults to no directory. */
-  identity?: Identity;
+  requireGrant: RequireGrant;
   /**
    * A DISPLAY-ONLY decorator: it may add fields to the serialized rows and
    * must never affect what is returned or who may see it. Defaults to a no-op.
@@ -150,36 +139,56 @@ const idParam = {
 /**
  * Mount the artifact routes onto a host Hono app.
  *
- * Generic over `E extends Env` and returning `Hono<E>` so it composes with a
- * host app that carries its own environment (an Interchange `createApp`
- * returns `Hono<AppEnv>`, not a bare `Hono`).
+ * Takes `Hono<TenantEnv>` so it composes with a host app mounted beneath
+ * Interchange's auth + tenant middleware, which puts the resolved `tenant` and
+ * `principal` on the context. The host owns principal resolution and grants;
+ * this package reads the principal from context and authorizes the mutating
+ * routes through the host's `requireGrant`.
  *
- * With no resolvable principal, collection reads answer an empty 200 while
+ * With no principal on the context, collection reads answer an empty 200 while
  * detail reads and mutations answer 403 — the same rule every `@corbits/*-core`
- * package follows. See "The no-identity contract" in the README for why.
+ * package follows. See "No principal on the context" in the README for why.
  */
-export function mountArtifacts<E extends Env>(
-  app: Hono<E>,
+export function mountArtifacts(
+  app: Hono<TenantEnv>,
   opts: MountArtifactsOpts,
-): Hono<E> {
+): Hono<TenantEnv> {
   const {
     db,
     contentStore,
-    resolvePrincipal,
-    isAdmin = async () => false,
-    identity = anonymousIdentity,
+    requireGrant,
     decorate = async () => {},
     uploadPolicy = ARTIFACT_UPLOAD_POLICY,
   } = opts;
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the handler
-  // context is the host's, never this package's, so it stays untyped here and
-  // is handed to `resolvePrincipal` as `unknown`.
-  type Ctx = Context<any, any, any>;
+  // The handler context is TenantEnv. `principal` (and `tenant`) is placed by
+  // Interchange's middleware; nothing here resolves it.
+  type Ctx = Context<TenantEnv, any, any>;
 
-  const scopeFor = (c: Ctx) => resolvePrincipal(c);
+  /**
+   * Read the authenticated principal the host placed on the context. Returns
+   * null when the host's auth/tenant middleware did not resolve one — the
+   * signed-out case each route class handles per the no-principal contract.
+   */
+  const scopeFor = (c: Ctx): ResolvedPrincipal | null => {
+    const principal = c.get("principal");
+    if (!principal) return null;
+    return { tenantId: principal.tenantId, principalId: principal.id };
+  };
 
   const readJson = (c: Ctx): Promise<unknown> => c.req.json().catch(() => null);
+
+  /**
+   * Reject the request when the host has not put a principal on the context.
+   * Must run BEFORE `requireGrant`: Interchange's middleware reads
+   * `principal.id` without its own null guard, so on an unresolved context it
+   * throws and the host sees a 500 rather than the 403 this package answers
+   * everywhere else for a signed-out caller.
+   */
+  const principalRequired: MiddlewareHandler<TenantEnv> = async (c, next) => {
+    if (!c.get("principal")) return c.json({ error: "Forbidden" }, 403);
+    await next();
+  };
 
   /**
    * Coarse HTTP body ceiling for JSON mutators, reusing the content-byte constant.
@@ -198,7 +207,7 @@ export function mountArtifacts<E extends Env>(
     rows: ArtifactRow[],
   ): Promise<SerializedArtifact[]> {
     const serialized = rows.map(serializeArtifact);
-    await enrich(identity, decorate, scope.tenantId, serialized);
+    await enrich(decorate, scope.tenantId, serialized);
     return serialized;
   }
 
@@ -208,7 +217,7 @@ export function mountArtifacts<E extends Env>(
     rows: ArtifactListRow[],
   ): Promise<SerializedArtifactListItem[]> {
     const serialized = rows.map(serializeArtifactListItem);
-    await enrich(identity, decorate, scope.tenantId, serialized);
+    await enrich(decorate, scope.tenantId, serialized);
     return serialized;
   }
 
@@ -258,7 +267,7 @@ export function mountArtifacts<E extends Env>(
       tags: ["Artifacts"],
       summary: "List artifacts in the caller's tenant",
       description:
-        "Newest-updated first by default. Supports query/kind/owner/creatorKind/date filters, an `updatedAt__id` keyset cursor, and an archived-only toggle. skill-draft artifacts are never listed. List is discovery only: each item omits `content` (fetch the body via GET /artifacts/:id, download, or tools).",
+        "Newest-updated first by default. Supports query/kind/owner/date filters, an `updatedAt__id` keyset cursor, and an archived-only toggle. skill-draft artifacts are never listed. List is discovery only: each item omits `content` (fetch the body via GET /artifacts/:id, download, or tools).",
       parameters: [
         { name: "query", in: "query", required: false, schema: { type: "string" } },
         { name: "sort", in: "query", required: false, schema: { type: "string" } },
@@ -268,12 +277,6 @@ export function mountArtifacts<E extends Env>(
           in: "query",
           required: false,
           schema: { type: "string" },
-        },
-        {
-          name: "creatorKind",
-          in: "query",
-          required: false,
-          schema: { type: "string", enum: ["user", "agent"] },
         },
         {
           name: "createdAfter",
@@ -313,7 +316,7 @@ export function mountArtifacts<E extends Env>(
       const scope = await scopeFor(c);
       if (!scope) return c.json({ artifacts: [], nextCursor: null });
 
-      const page = await listArtifacts(db, identity, scope.tenantId, filters);
+      const page = await listArtifacts(db, scope.tenantId, filters);
       return c.json({
         artifacts: await serializeList(scope, page.rows),
         nextCursor: page.nextCursor,
@@ -545,18 +548,17 @@ export function mountArtifacts<E extends Env>(
       responses: {
         200: { description: "New version created" },
         400: { description: "Invalid request body or content" },
-        403: { description: "No resolvable principal, or not the owner" },
+        403: { description: "No resolvable principal, or not permitted" },
         404: { description: "Artifact not found" },
         413: { description: "Declared Content-Length over the content ceiling" },
       },
     }),
+    principalRequired,
+    requireGrant(idResource("artifact", "id"), "write"),
     async (c) => {
       // loadScoped resolves the principal before any body parse.
       const loaded = await loadScoped(c);
       if ("response" in loaded) return loaded.response;
-      if (!(await canMutate(loaded.row, loaded.scope))) {
-        return c.json({ error: "Forbidden" }, 403);
-      }
       if (contentLengthOverCeiling(c)) {
         return c.json(
           {
@@ -594,32 +596,10 @@ export function mountArtifacts<E extends Env>(
     },
   );
 
-  /**
-   * The mutation authz rule, consulted by revise and archive alike. Allowed for
-   * the principal-exact owner; for the member who owns the agent that produced
-   * it (agent artifacts are owned by a synthetic principal, so resolve it
-   * back); or for a tenant admin.
-   */
-  async function canMutate(
-    row: ArtifactRow,
-    scope: ResolvedPrincipal,
-  ): Promise<boolean> {
-    if (row.ownerPrincipalId === scope.principalId) return true;
-    if (row.ownerPrincipalId !== null) {
-      const ownerMember = await identity.ownerMemberPrincipalId({
-        tenantId: scope.tenantId,
-        principalId: row.ownerPrincipalId,
-      });
-      if (ownerMember !== null && ownerMember === scope.principalId) return true;
-    }
-    return await isAdmin(scope);
-  }
-
   async function setArchived(c: Ctx, archive: boolean) {
     const loaded = await loadScoped(c);
     if ("response" in loaded) return loaded.response;
     const { row, scope } = loaded;
-    if (!(await canMutate(row, scope))) return c.json({ error: "Forbidden" }, 403);
 
     const updated = await setArtifactArchived(db, row, archive);
     const [artifactJson] = await serializeCommitted(scope, [updated]);
@@ -640,6 +620,8 @@ export function mountArtifacts<E extends Env>(
         404: { description: "Artifact not found" },
       },
     }),
+    principalRequired,
+    requireGrant(idResource("artifact", "id"), "archive"),
     (c) => setArchived(c, true),
   );
 
@@ -656,6 +638,8 @@ export function mountArtifacts<E extends Env>(
         404: { description: "Artifact not found" },
       },
     }),
+    principalRequired,
+    requireGrant(idResource("artifact", "id"), "archive"),
     (c) => setArchived(c, false),
   );
 

@@ -14,9 +14,8 @@ import {
   SAFE_ENCODED_BUDGET,
   windowContent,
 } from "./tools.js";
-import { fakeIdentity, seedArtifact, seedSkillDraft, SCOPE, testDb } from "./test-helpers.js";
+import { seedArtifact, seedSkillDraft, SCOPE, testDb } from "./test-helpers.js";
 
-const identity = fakeIdentity();
 const base = { artifactId: "a1", title: "T", kind: "document", version: 1 };
 const encoded = (value: unknown) => JSON.stringify(value, null, 2).length;
 
@@ -72,7 +71,7 @@ describe("artifact_read", () => {
     const row = await seedArtifact(db, { title: "Doc", content: "v1" });
     await writeArtifactVersion(db, { scope: SCOPE, artifactId: row.id, content: "v2" });
 
-    const result = await readArtifact(db, identity, { scope: SCOPE, artifactId: row.id });
+    const result = await readArtifact(db, { scope: SCOPE, artifactId: row.id });
     expect(result).toMatchObject({ version: 2, content: "v2" });
   });
 
@@ -86,7 +85,7 @@ describe("artifact_read", () => {
       content: "v2",
     });
 
-    const result = await readArtifact(db, identity, {
+    const result = await readArtifact(db, {
       scope: SCOPE,
       artifactId: row.id,
       version: 1,
@@ -98,7 +97,7 @@ describe("artifact_read", () => {
     const db = await testDb();
     const row = await seedArtifact(db);
     await expect(
-      readArtifact(db, identity, { scope: SCOPE, artifactId: row.id, version: 7 }),
+      readArtifact(db, { scope: SCOPE, artifactId: row.id, version: 7 }),
     ).rejects.toThrow(/Version 7 not found/);
   });
 
@@ -106,38 +105,15 @@ describe("artifact_read", () => {
     const db = await testDb();
     const id = await seedSkillDraft(db, "scratch");
     await expect(
-      readArtifact(db, identity, { scope: SCOPE, artifactId: id }),
+      readArtifact(db, { scope: SCOPE, artifactId: id }),
     ).rejects.toBeInstanceOf(ArtifactNotFoundError);
   });
 
-  test("a cross-tenant read fails closed when the owner is not a member there", async () => {
+  test("an artifact in another tenant is not found", async () => {
     const db = await testDb();
     const row = await seedArtifact(db, { tenantId: "other" });
     await expect(
-      readArtifact(db, identity, {
-        scope: SCOPE,
-        artifactId: row.id,
-        tenantId: "other",
-      }),
-    ).rejects.toBeInstanceOf(ArtifactNotFoundError);
-  });
-
-  test("a cross-tenant read succeeds when the owner IS a member there", async () => {
-    const db = await testDb();
-    const row = await seedArtifact(db, { tenantId: "other", content: "shared" });
-    const result = await readArtifact(
-      db,
-      fakeIdentity({ ownerIsMemberOfTenant: async () => true }),
-      { scope: SCOPE, artifactId: row.id, tenantId: "other" },
-    );
-    expect(result).toMatchObject({ content: "shared" });
-  });
-
-  test("an artifact in another tenant is invisible without naming that tenant", async () => {
-    const db = await testDb();
-    const row = await seedArtifact(db, { tenantId: "other" });
-    await expect(
-      readArtifact(db, identity, { scope: SCOPE, artifactId: row.id }),
+      readArtifact(db, { scope: SCOPE, artifactId: row.id }),
     ).rejects.toBeInstanceOf(ArtifactNotFoundError);
   });
 });
@@ -152,7 +128,7 @@ describe("web_site reads", () => {
     const db = await testDb();
     const row = await seedArtifact(db, { kind: "web_site", content: site });
 
-    const result = await readArtifact(db, identity, { scope: SCOPE, artifactId: row.id });
+    const result = await readArtifact(db, { scope: SCOPE, artifactId: row.id });
     expect(result).toMatchObject({
       summary: {
         kind: "web_site",
@@ -171,7 +147,7 @@ describe("web_site reads", () => {
     const db = await testDb();
     const row = await seedArtifact(db, { kind: "web_site", content: site });
 
-    const result = await readArtifact(db, identity, {
+    const result = await readArtifact(db, {
       scope: SCOPE,
       artifactId: row.id,
       path: "/style.css",
@@ -184,10 +160,10 @@ describe("web_site reads", () => {
     const row = await seedArtifact(db, { kind: "web_site", content: site });
 
     await expect(
-      readArtifact(db, identity, { scope: SCOPE, artifactId: row.id, path: "nope.js" }),
+      readArtifact(db, { scope: SCOPE, artifactId: row.id, path: "nope.js" }),
     ).rejects.toThrow(/File not found in web_site artifact/);
     await expect(
-      readArtifact(db, identity, {
+      readArtifact(db, {
         scope: SCOPE,
         artifactId: row.id,
         path: "../secret",
@@ -199,7 +175,7 @@ describe("web_site reads", () => {
     const db = await testDb();
     const row = await seedArtifact(db, { kind: "web_site", content: site });
     await expect(
-      readArtifactChunk(db, identity, { scope: SCOPE, artifactId: row.id }),
+      readArtifactChunk(db, { scope: SCOPE, artifactId: row.id }),
     ).rejects.toThrow(/use artifact_read/);
   });
 });
@@ -209,7 +185,7 @@ describe("artifact_read_chunk", () => {
     const db = await testDb();
     const row = await seedArtifact(db, { content: "abcdefghij" });
 
-    const result = await readArtifactChunk(db, identity, {
+    const result = await readArtifactChunk(db, {
       scope: SCOPE,
       artifactId: row.id,
       offset: 3,
@@ -226,7 +202,7 @@ describe("artifact_read_chunk", () => {
     const row = await seedArtifact(db, { content: "original" });
     await writeArtifactVersion(db, { scope: SCOPE, artifactId: row.id, content: "revised" });
 
-    const result = await readArtifactChunk(db, identity, {
+    const result = await readArtifactChunk(db, {
       scope: SCOPE,
       artifactId: row.id,
       version: 1,
@@ -335,7 +311,7 @@ describe("artifact_link_file", () => {
   test("a linked artifact is readable through artifact_read", async () => {
     const db = await testDb();
     const row = await linkFileArtifact(db, linkArgs({ preview: "Slide 1: revenue" }));
-    const read = await readArtifact(db, identity, { scope: SCOPE, artifactId: row.id });
+    const read = await readArtifact(db, { scope: SCOPE, artifactId: row.id });
     expect(read).toMatchObject({ title: "Quarterly deck", version: 1, content: "Slide 1: revenue" });
   });
 });

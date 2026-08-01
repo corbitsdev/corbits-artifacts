@@ -8,6 +8,7 @@
         "@hono/standard-validator": "^0.2.3",
       },
       "devDependencies": {
+        "@intx/hub-api": "0.2.2",
         "@intx/types": "0.2.2",
         "@types/bun": "1.1.14",
         "@types/node": "22.10.5",
@@ -19,6 +20,7 @@
         "typescript": "5.7.2",
       },
       "peerDependencies": {
+        "@intx/hub-api": "^0.2.2",
         "@intx/types": "^0.2.2",
         "arktype": "^2.1.29",
         "drizzle-orm": "^0.45.2",

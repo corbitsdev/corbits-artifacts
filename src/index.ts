@@ -5,7 +5,6 @@ export type { MountArtifactsOpts } from "./mount.js";
 export { runArtifactMigrations, MigrationChecksumError, MigrationAdoptError } from "./migrations.js";
 export type { RunArtifactMigrationsOptions } from "./migrations.js";
 
-
 export { createArtifactDb } from "./db.js";
 export type { ArtifactDb, ArtifactTx } from "./db.js";
 
@@ -23,12 +22,10 @@ export type {
   MailAttachmentRefRow,
 } from "./schema.js";
 
-export { anonymousIdentity } from "./ports.js";
 export type {
   ResolvedPrincipal,
   ContentStore,
   FileBlob,
-  Identity,
   StoredFile,
 } from "./ports.js";
 

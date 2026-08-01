@@ -8,7 +8,6 @@ import {
   getTableColumns,
   gte,
   ilike,
-  inArray,
   isNotNull,
   isNull,
   lt,
@@ -20,7 +19,7 @@ import {
 } from "drizzle-orm";
 import type { ArtifactDb, ArtifactTx } from "./db.js";
 import { artifact, artifactVersion, type ArtifactRow } from "./schema.js";
-import type { ResolvedPrincipal, Identity } from "./ports.js";
+import type { ResolvedPrincipal } from "./ports.js";
 import {
   parseWebSiteContentJson,
   serializeWebSiteContent,
@@ -117,7 +116,6 @@ export type SerializedArtifactBase = {
   source: Record<string, unknown> & { origin: string };
   version: number;
   ownerPrincipalId: string | null;
-  ownerName: string | null;
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -147,7 +145,6 @@ function serializeArtifactBase(
     source: normalizeSource(row.source),
     version: row.version,
     ownerPrincipalId: row.ownerPrincipalId,
-    ownerName: null,
     archivedAt: row.archivedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -452,7 +449,6 @@ export type ListArtifactsFilters = {
   sort?: string;
   kind?: string;
   ownerPrincipalId?: string;
-  creatorKind?: "user" | "agent";
   createdAfter?: Date;
   createdBefore?: Date;
   cursor?: { at: string; id: string };
@@ -499,7 +495,6 @@ export const ListArtifactsQuery = type({
   "sort?": "'newest' | 'oldest'",
   "kind?": "string",
   "ownerPrincipalId?": "string",
-  "creatorKind?": "'user' | 'agent'",
   "createdAfter?": dateBound(false),
   "createdBefore?": dateBound(true),
   "cursor?": ListCursor,
@@ -553,7 +548,6 @@ function cursorCondition(
 
 export async function listArtifacts(
   db: ArtifactDb,
-  identity: Identity,
   tenantId: string,
   filters: ListArtifactsFilters,
 ): Promise<{ rows: ArtifactListRow[]; nextCursor: string | null }> {
@@ -579,15 +573,6 @@ export async function listArtifacts(
   if (filters.kind) conditions.push(eq(artifact.kind, filters.kind));
   if (filters.ownerPrincipalId) {
     conditions.push(eq(artifact.ownerPrincipalId, filters.ownerPrincipalId));
-  }
-  if (filters.creatorKind) {
-    // Creator kind is a facet of the owner principal, not a column here, so it
-    // folds in as an ownerPrincipalId membership test. NO matching principals
-    // must exclude everything, not fall through to unfiltered.
-    const ids = await identity.principalIdsByKind(tenantId, filters.creatorKind);
-    conditions.push(
-      ids.length > 0 ? inArray(artifact.ownerPrincipalId, ids) : sql`false`,
-    );
   }
   if (filters.createdAfter !== undefined) {
     conditions.push(gte(artifact.createdAt, filters.createdAfter));
@@ -646,26 +631,15 @@ export async function findArtifactByTitle(
 }
 
 /**
- * Attach owner display names and run the display-only provenance decorator.
- * One call so no surface can serialize a row and forget half the enrichment.
- * Accepts list items (no content) and detail rows alike.
+ * Run the display-only provenance decorator over serialized rows. One call so
+ * no surface can serialize a row and forget the decorator. Accepts list items
+ * (no content) and detail rows alike; display enrichment never affects what is
+ * returned or who may see it.
  */
 export async function enrich(
-  identity: Identity,
   decorate: (tenantId: string, rows: readonly SerializedArtifactBase[]) => Promise<void>,
   tenantId: string,
   rows: SerializedArtifactBase[],
 ): Promise<void> {
-  const ownerIds = [
-    ...new Set(rows.map((r) => r.ownerPrincipalId).filter((id) => id !== null)),
-  ];
-  if (ownerIds.length > 0) {
-    const names = await identity.ownerNames(tenantId, ownerIds);
-    for (const row of rows) {
-      if (row.ownerPrincipalId !== null) {
-        row.ownerName = names.get(row.ownerPrincipalId) ?? null;
-      }
-    }
-  }
   await decorate(tenantId, rows);
 }
