@@ -57,11 +57,10 @@ describe("import a URL, read it back, revise it, read the history", () => {
     artifactId = created.artifact.id;
   });
 
-  test("the identity seam resolves the owner's name from the host directory", async () => {
+  test("the detail route serves back the imported source origin", async () => {
     const detail = await json<{
-      artifact: { ownerName: string | null; source: Record<string, unknown> };
+      artifact: { source: Record<string, unknown> };
     }>(await host.request(`/api/artifacts/${artifactId}`));
-    expect(detail.artifact.ownerName).toBe("Alice Ash");
     expect(detail.artifact.source.origin).toBe("imported");
   });
 
@@ -101,7 +100,7 @@ describe.each<[string, ContentStore]>([
   let uploaded: Uploaded[];
 
   beforeAll(async () => {
-    app = host.buildApp(store, async () => false);
+    app = host.buildApp(store);
     const form = new FormData();
     form.append("files", new File([PNG], "chart.png", { type: "image/png" }));
     form.append("files", new File([PDF], "deck.pdf", { type: "application/pdf" }));
@@ -173,7 +172,7 @@ describe("an unsupported upload is refused, leaving nothing behind", () => {
   });
 });
 
-describe("list: keyset paging, creatorKind, and the archived toggle", () => {
+describe("list: keyset paging and the archived toggle", () => {
   test("a keyset cursor is minted and the next page repeats nothing", async () => {
     const page1 = await json<{ artifacts: { id: string }[]; nextCursor: string | null }>(
       await host.request("/api/artifacts?limit=2"),
@@ -190,27 +189,6 @@ describe("list: keyset paging, creatorKind, and the archived toggle", () => {
       page1.artifacts.some((b) => b.id === a.id),
     );
     expect(overlap).toEqual([]);
-  });
-
-  test("creatorKind resolves through the identity seam", async () => {
-    // An agent-owned artifact, so creatorKind has something to separate.
-    await host.db.execute(sql`
-      INSERT INTO "artifacts"."artifact" ("tenant_id", "principal_id", "owner_principal_id",
-        "kind", "title", "content", "source", "version")
-      VALUES (${host.tenantId}, ${host.agentPrincipal}, ${host.agentPrincipal}, 'document',
-        'Agent memo', 'written by an agent', '{"origin":"agent"}'::jsonb, 1)
-    `);
-
-    const agentOnly = await json<{ artifacts: { title: string }[] }>(
-      await host.request("/api/artifacts?creatorKind=agent"),
-    );
-    expect(agentOnly.artifacts.map((a) => a.title)).toEqual(["Agent memo"]);
-
-    const humanOnly = await json<{ artifacts: { title: string }[] }>(
-      await host.request("/api/artifacts?creatorKind=user"),
-    );
-    expect(humanOnly.artifacts.length).toBeGreaterThan(0);
-    expect(humanOnly.artifacts.some((a) => a.title === "Agent memo")).toBe(false);
   });
 });
 
@@ -243,38 +221,35 @@ describe("archive is a soft-hide, not a revocation", () => {
   });
 });
 
-describe("a non-owner is refused unless the host's authz seam says admin", () => {
-  test("a non-owner, non-admin member is refused 403", async () => {
-    host.setSession({ userId: "user-bob" });
-    const res = await host.request(`/api/artifacts/${artifactId}/archive`, { method: "POST" });
+describe("host grant authorization", () => {
+  test("a denied grant returns 403 and leaves archived_at null", async () => {
+    const app = host.buildApp(InlineContentStore, () => false);
+    const res = await app.request(`/api/artifacts/${artifactId}/archive`, { method: "POST" });
     expect(res.status).toBe(403);
-  });
 
-  test("the same member succeeds once the authz seam grants admin", async () => {
-    const adminApp = host.buildApp(InlineContentStore, async () => true);
-    const res = await adminApp.request(`/api/artifacts/${artifactId}/archive`, {
-      method: "POST",
-    });
-    expect(res.status).toBe(200);
-    await adminApp.request(`/api/artifacts/${artifactId}/unarchive`, { method: "POST" });
-    host.setSession({ userId: "user-alice" });
-  });
-
-  test("the member who owns the producing agent may administer its artifact", async () => {
-    const [agentRow] = await host.db.execute<{ id: string }>(
-      sql`SELECT "id" FROM "artifacts"."artifact" WHERE "title" = 'Agent memo' LIMIT 1`,
+    const [row] = await host.db.execute<{ archived_at: string | null }>(
+      sql`SELECT "archived_at" FROM "artifacts"."artifact" WHERE "id" = ${artifactId}`,
     );
-    host.setSession({ userId: "user-alice" });
-    expect(
-      (await host.request(`/api/artifacts/${agentRow!.id}/archive`, { method: "POST" })).status,
-    ).toBe(200);
+    expect(row!.archived_at).toBeNull();
+  });
 
-    host.setSession({ userId: "user-bob" });
+  test("an allowed grant receives the resource and action and archives", async () => {
+    const checks: { resource: string; action: string }[] = [];
+    const app = host.buildApp(InlineContentStore, (resource, action) => {
+      checks.push({ resource, action });
+      return true;
+    });
+
+    const res = await app.request(`/api/artifacts/${artifactId}/archive`, { method: "POST" });
+    expect(res.status).toBe(200);
+    expect(checks).toContainEqual({
+      resource: `artifact:${artifactId}`,
+      action: "archive",
+    });
+
     expect(
-      (await host.request(`/api/artifacts/${agentRow!.id}/unarchive`, { method: "POST" }))
-        .status,
-    ).toBe(403);
-    host.setSession({ userId: "user-alice" });
+      (await app.request(`/api/artifacts/${artifactId}/unarchive`, { method: "POST" })).status,
+    ).toBe(200);
   });
 });
 
