@@ -99,6 +99,7 @@ export {
   linkFileArtifact,
   readArtifact,
   readArtifactChunk,
+  windowContent,
 } from "./tools.js";
 export type { ArtifactReadResult, ArtifactToolDefinition } from "./tools.js";
 
