@@ -26,6 +26,15 @@ always called out under their own heading.
   Interchange's own `grant` table, and its default `requireGrant` is the
   platform's real `createRequireGrant` over that table rather than a
   default-allow stub — see ARCHITECTURE.md's "Grant provisioning" section.
+- Single-artifact write routes (`POST .../versions`, `POST .../archive`,
+  `POST .../unarchive`) now resolve existence/tenant/skill-draft (the same
+  check `loadScoped` does) BEFORE running `requireGrant`, not after. A real,
+  resource-specific grant evaluator has no existence check of its own — it
+  denies a ghost id or another tenant's artifact with the same `403` it would
+  give for a real row the caller lacks permission on, which a default-allow
+  stub can never surface. This restores the documented "a caller who cannot
+  see the artifact gets 404" guarantee for write routes running a real grant
+  check, matching what already held for reads.
 
 ### Breaking
 

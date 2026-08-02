@@ -147,7 +147,11 @@ for a host-level cap. Upload byte caps remain on the multipart path.
 `POST /api/artifacts/:id/versions`, `POST …/mail-attachments`) read the principal from
 context before parsing the body, so an unauthenticated caller gets 403 without learning
 whether the JSON was well-formed. Upload already auth'd first. Single-artifact write
-routes also run the host's `requireGrant` after a principal is present.
+routes run existence/tenant/skill-draft resolution (the same check `loadScoped` does)
+before the host's `requireGrant`, and only run `requireGrant` once that has confirmed a
+real, visible row — so `requireGrant` is answering "is this permitted," never "does this
+exist," and a caller who cannot see the row gets `404` however a real grant evaluator
+would answer for it.
 
 ### Two response contracts
 

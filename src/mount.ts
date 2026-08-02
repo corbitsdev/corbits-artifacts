@@ -207,6 +207,33 @@ export function mountArtifacts(
   };
 
   /**
+   * Confirm the id names a real, in-tenant, non-skill-draft artifact — or
+   * answer the same 404 `loadScoped` does — BEFORE `requireGrant` runs.
+   *
+   * Must run between `principalRequired` and `requireGrant`: a real
+   * `requireGrant` (Interchange's `authorize()`) has no existence check of its
+   * own — it just asks whether the caller holds a grant naming the resource
+   * string built from the URL param, real artifact or not. A ghost id, a
+   * skill-draft, and another tenant's artifact all name a resource the caller
+   * holds no grant for, so without this check they would deny with the SAME
+   * 403 a real artifact the caller merely lacks permission on gets — losing
+   * the one thing single-artifact routes guarantee: a caller who cannot see
+   * the artifact gets 404, not "403 because you don't own something (real or
+   * not)". A stub `requireGrant` that always allows never surfaced this,
+   * because it never got the chance to deny before `loadScoped` ran.
+   */
+  const artifactExists: MiddlewareHandler<TenantEnv> = async (c, next) => {
+    const scope = await scopeFor(c);
+    // principalRequired already ran; a null scope here would mean it didn't.
+    if (!scope) return c.json({ error: "Forbidden" }, 403);
+    const row = await getArtifact(db, c.req.param("id")!);
+    if (!row || row.kind === SKILL_DRAFT_KIND || row.tenantId !== scope.tenantId) {
+      return c.json({ error: "Artifact not found" }, 404);
+    }
+    await next();
+  };
+
+  /**
    * Coarse HTTP body ceiling for JSON mutators, reusing the content-byte constant.
    * Only acts when Content-Length is present; missing length still streams into
    * `readJson`, so hosts must set a global request body limit upstream.
@@ -572,6 +599,7 @@ export function mountArtifacts(
       },
     }),
     principalRequired,
+    artifactExists,
     requireGrant(idResource("artifact", "id"), "write"),
     async (c) => {
       // loadScoped resolves the principal before any body parse.
@@ -639,6 +667,7 @@ export function mountArtifacts(
       },
     }),
     principalRequired,
+    artifactExists,
     requireGrant(idResource("artifact", "id"), "archive"),
     (c) => setArchived(c, true),
   );
@@ -657,6 +686,7 @@ export function mountArtifacts(
       },
     }),
     principalRequired,
+    artifactExists,
     requireGrant(idResource("artifact", "id"), "archive"),
     (c) => setArchived(c, false),
   );

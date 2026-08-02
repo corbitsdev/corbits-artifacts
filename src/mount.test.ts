@@ -773,6 +773,33 @@ describe("authorization through the real platform grant evaluator", () => {
       (await app.request(`/artifacts/${row.id}/archive`, { method: "POST" })).status,
     ).toBe(403);
   });
+
+  // A real grant evaluator has no existence check of its own — it denies a
+  // ghost id or a cross-tenant artifact with the SAME 403 it gives a real row
+  // the caller lacks permission on. Without checking existence first, this
+  // would collapse "not permitted" and "not found" into one signal, and a
+  // caller could no longer tell (from the write routes) whether an id names
+  // anything at all — the existence oracle every 404 on this package guards
+  // against. `artifactExists` runs before `requireGrant` precisely so a
+  // caller with zero grants still gets 404, not 403, for ids that name
+  // nothing they could ever see.
+  test("a ghost id and a cross-tenant id are still 404 through a zero-grant evaluator, not 403", async () => {
+    const db = await testDb();
+    const app = hostWithGrants(db, OWNER, []);
+    const foreign = await seedArtifact(db, { tenantId: "other" });
+
+    for (const [cause, id] of [
+      ["ghost id", "00000000-0000-4000-8000-000000000000"],
+      ["cross-tenant", foreign.id],
+    ] as [string, string][]) {
+      const res = await app.request(`/artifacts/${id}/versions`, json({ content: "x" }));
+      expect({ cause, status: res.status, body: await res.json() }).toEqual({
+        cause,
+        status: 404,
+        body: { error: "Artifact not found" },
+      });
+    }
+  });
 });
 
 /**
