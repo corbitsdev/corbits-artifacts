@@ -20,10 +20,11 @@ always called out under their own heading.
   concurrent callers for the same triple always converge on one artifact —
   the first to acquire the lock creates it, every other caller revises the
   row the first one just committed. A uniqueness constraint on
-  `(tenant_id, title, kind)` was considered instead but rejected for now: this
-  package cannot verify that no existing tenant already has duplicate
-  `(title, kind)` rows, and a migration that fails on real data is worse than
-  the race it would close. See the "Find-or-version" section of
+  `(tenant_id, title, kind)` was considered instead but rejected:
+  `createArtifact` is a public, unconditional insert used directly by the
+  import route, uploads, and `artifact_link_file`, and a shared title across
+  independent creates on those paths is normal, not a bug a schema
+  constraint should forbid. See the "Find-or-version" section of
   ARCHITECTURE.md.
 
 ### Changed
