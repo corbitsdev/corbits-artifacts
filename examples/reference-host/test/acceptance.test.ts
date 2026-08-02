@@ -253,6 +253,67 @@ describe("host grant authorization", () => {
   });
 });
 
+/**
+ * The block above proves WIRING against a bare-predicate `authorize`. This
+ * one is the worked example: `host.request` (no `authorize` override) runs
+ * the real `createRequireGrant` backed by `@intx/db`'s `grant` table — the
+ * exact evaluator a production host runs. Nothing here stubs authorization.
+ *
+ * `artifactId`'s ownership grant was minted by `grantOwnership` (this host's
+ * `onArtifactCreated` hook) in the SAME transaction as its creation, back in
+ * the very first "a URL import creates the artifact" test — this block only
+ * spends it, and shows the row it spent.
+ */
+describe("ownership-derived grants: real provisioning, real refusal", () => {
+  test("the grant minted on create names the creator, the artifact, write and archive", async () => {
+    const rows = await host.db.execute<{
+      principal_id: string;
+      resource: string;
+      action: string;
+      origin: string;
+    }>(sql`
+      SELECT "principal_id", "resource", "action", "origin" FROM "grant"
+      WHERE "resource" = ${`artifact:${artifactId}`} ORDER BY "action"
+    `);
+    expect(rows.map((r) => ({ action: r.action, origin: r.origin }))).toEqual([
+      { action: "archive", origin: "creator" },
+      { action: "write", origin: "creator" },
+    ]);
+    expect(new Set(rows.map((r) => r.principal_id)).size).toBe(1);
+  });
+
+  test("Bob, a co-tenant with no grant on Alice's artifact, is refused", async () => {
+    host.setSession({ userId: "user-bob" });
+    try {
+      const revise = await host.request(
+        `/api/artifacts/${artifactId}/versions`,
+        postJson({ content: "bob was here" }),
+      );
+      expect(revise.status).toBe(403);
+      const archive = await host.request(`/api/artifacts/${artifactId}/archive`, {
+        method: "POST",
+      });
+      expect(archive.status).toBe(403);
+    } finally {
+      host.setSession({ userId: "user-alice" });
+    }
+
+    const [row] = await host.db.execute<{ content: string; archived_at: string | null }>(
+      sql`SELECT "content", "archived_at" FROM "artifacts"."artifact" WHERE "id" = ${artifactId}`,
+    );
+    expect(row!.content).not.toBe("bob was here");
+    expect(row!.archived_at).toBeNull();
+  });
+
+  test("Alice, the creator, still succeeds through the same real grant check", async () => {
+    const res = await host.request(
+      `/api/artifacts/${artifactId}/versions`,
+      postJson({ content: "alice, for real this time" }),
+    );
+    expect(res.status).toBe(200);
+  });
+});
+
 // The cross-core no-member asymmetry: collection reads answer empty, anything
 // that names one artifact refuses.
 describe("no session", () => {

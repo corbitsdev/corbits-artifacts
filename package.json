@@ -73,6 +73,7 @@
     "postgres": "^3.4.9"
   },
   "devDependencies": {
+    "@intx/authz": "0.2.2",
     "@intx/hub-api": "0.2.2",
     "@intx/types": "0.2.2",
     "@types/bun": "1.1.14",

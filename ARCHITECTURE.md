@@ -62,12 +62,32 @@ The principal's tenant is authoritative — there is no caller-supplied tenant
 override anywhere in the route or tool surface. Tool reads always stay inside
 `scope.tenantId`.
 
-## Two custom seams
+**This is a decision, not an oversight.** The prior `Identity` port let
+`readArtifact` / `readArtifactChunk` take a `tenantId` argument and cross into
+it when `identity.ownerIsMemberOfTenant(scope, tenantId)` said the caller's
+owner belonged there — a membership check this package invented and owned.
+That is exactly the kind of policy this PR removes. It is not replaced by a
+grant check, and won't be by a later one either: Interchange's `GrantStore`
+resolves a principal's grants **within one tenant**
+(`collectGrants(principalId, tenantId)`; `@intx/db`'s implementation filters
+`grant` rows by `tenant_id`, and a principal is itself a row scoped to one
+tenant). There is no platform primitive for "principal P, home tenant A, holds
+a grant readable from tenant B" to check — inventing one here would mean this
+package building a second, bespoke cross-tenant authorization concept on top
+of the platform's, which is the precise failure mode "authorization is the
+host's job" is meant to prevent. If a real product need for cross-tenant
+artifact reads shows up, it belongs in Interchange's grant model, not
+re-derived per package.
 
-Beyond the host's native context and grants, this package exposes **two**
-extension seams: the substrate (`ContentStore`) and a display-only decorator
-(`decorate` / provenance). Authorization is not a custom seam — it is the host's
-Interchange `RequireGrant`.
+## Three custom seams
+
+Beyond the host's native context and grants, this package exposes **three**
+extension seams: the substrate (`ContentStore`), a display-only decorator
+(`decorate` / provenance), and a grant-provisioning hook (`onArtifactCreated`).
+Authorization is not a custom seam — it is the host's Interchange `RequireGrant`;
+`onArtifactCreated` is not authorization either, it is the write side of the
+same idea — the host deciding what makes its grant model true, this package
+only handing it the row and the scope that made it.
 
 ## The options
 
@@ -80,6 +100,7 @@ callback.
 | `requireGrant` | Host-owned Interchange grant middleware factory. Single-artifact mutations (revise, archive/unarchive, …) run `requireGrant(idResource("artifact", "id"), <action>)`. | none — required |
 | `contentStore` | Where an artifact's file bytes live (`ContentStore`). | none — required |
 | `decorate` | A **display-only** decorator over serialized rows (provenance labels, host joins). | no-op |
+| `onArtifactCreated` | Host hook run inside the same transaction as artifact creation — where a host mints grants for the row it just made. | no-op |
 
 `decorate`'s display-only status is a contract, not a convention: it may add
 fields to rows on their way out and must never affect *what* is returned or
@@ -87,6 +108,25 @@ fields to rows on their way out and must never affect *what* is returned or
 couple it to a schema it must not know, so the host supplies the decorator.
 Clients that need an owner display name resolve `ownerPrincipalId` themselves;
 this package never ships directory names on the wire.
+
+### Grant provisioning (`onArtifactCreated`)
+
+Checking a grant (`requireGrant`) and minting one (`onArtifactCreated`) are the
+same host responsibility looked at from both ends: this package neither
+invents authorization policy nor decides who a newly created row belongs to
+for grant purposes — it hands the host the row, inside the transaction that
+made it durable, and the host decides.
+
+`examples/reference-host` provisions a real `creator`-origin grant on create —
+`write` and `archive` on `artifact:<id>` for the creating principal, inserted
+into Interchange's own `grant` table via `@intx/db`'s schema, in the same
+transaction as the artifact row. Its `buildApp`'s default `requireGrant` is the
+platform's real `createRequireGrant` over that same table (via
+`createGrantStore`), not a stub — a principal with no matching row is refused,
+exactly as in production. See `grantOwnership` in
+`examples/reference-host/src/index.ts` and the "ownership-derived grants"
+scenarios in its acceptance suite for the end-to-end proof: the creator
+succeeds, a co-tenant with no grant does not.
 
 ### ContentStore
 

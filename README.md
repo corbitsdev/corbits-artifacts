@@ -96,6 +96,7 @@ never safety.
 | `contentStore` | **yes** | `InlineContentStore` for a minimal host |
 | `requireGrant` | **yes** | The host's Interchange grant middleware factory. Archive/unarchive and other single-artifact mutations authorize through `requireGrant(idResource("artifact", "id"), …)`. This package implements no owner, agent-owner, membership, or admin policy. |
 | `decorate` | no | No-op — rows carry no decoration. Display-only by contract, so it can never change what is returned or who sees it. Clients resolve display names from `ownerPrincipalId` when they need them. |
+| `onArtifactCreated` | no | No-op. Runs inside the same transaction as artifact creation, once per row — the seam a host uses to provision grants (e.g. a `creator`-origin grant on `artifact:<id>` for `write`/`archive`) for the row it just made. See `examples/reference-host`'s `grantOwnership` for a worked example against a real grant store. |
 | `uploadPolicy` | no | `ARTIFACT_UPLOAD_POLICY` — the standard document/image/spreadsheet allowlist. |
 
 Who the request runs as is **not** an option: the host's auth/tenant middleware puts

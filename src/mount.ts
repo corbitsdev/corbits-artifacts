@@ -4,7 +4,7 @@ import type { Context, Hono } from "hono";
 import type { MiddlewareHandler } from "hono";
 import { describeRoute } from "hono-openapi";
 import { idResource, type RequireGrant, type TenantEnv } from "@intx/hub-api";
-import type { ArtifactDb } from "./db.js";
+import type { ArtifactDb, ArtifactTx } from "./db.js";
 import {
   ArtifactNotFoundError,
   ArtifactSizeError,
@@ -68,6 +68,21 @@ export type MountArtifactsOpts = {
   decorate?: (
     tenantId: string,
     rows: readonly SerializedArtifactBase[],
+  ) => Promise<void>;
+  /**
+   * Host hook run INSIDE the same transaction as artifact creation, once per
+   * row (`POST /artifacts` once, `POST /artifacts/upload` once per file).
+   * This is the seam a host uses to provision whatever grants make its
+   * authorization model true — for example, a `creator`-origin grant on
+   * `artifact:<id>` for `write` and `archive` so the caller who just made the
+   * row can revise and archive it. artifact-core mints no grants itself:
+   * provisioning, like checking, is the host's job. Defaults to a no-op, so a
+   * host with no grant model omitting this behaves exactly as before.
+   */
+  onArtifactCreated?: (
+    tx: ArtifactTx,
+    row: ArtifactRow,
+    scope: ResolvedPrincipal,
   ) => Promise<void>;
   /** Which files `POST /artifacts/upload` accepts. */
   uploadPolicy?: UploadPolicy;
@@ -158,6 +173,7 @@ export function mountArtifacts(
     contentStore,
     requireGrant,
     decorate = async () => {},
+    onArtifactCreated = async () => {},
     uploadPolicy = ARTIFACT_UPLOAD_POLICY,
   } = opts;
 
@@ -359,8 +375,8 @@ export function mountArtifacts(
 
       const isUrl = body.mode === "url";
       try {
-        const row = await db.transaction((tx) =>
-          createArtifact(tx, {
+        const row = await db.transaction(async (tx) => {
+          const created = await createArtifact(tx, {
             scope,
             ownerPrincipalId: scope.principalId,
             kind: body.kind ?? (isUrl ? "link" : "document"),
@@ -369,8 +385,10 @@ export function mountArtifacts(
             source: isUrl
               ? { origin: "imported", url: body.content }
               : { origin: "manual" },
-          }),
-        );
+          });
+          await onArtifactCreated(tx, created, scope);
+          return created;
+        });
 
         const [artifactJson] = await serializeCommitted(scope, [row]);
         return c.json({ artifact: artifactJson }, 201);
@@ -461,17 +479,17 @@ export function mountArtifacts(
         rows = await db.transaction(async (tx) => {
           const created: ArtifactRow[] = [];
           for (const file of files) {
-            created.push(
-              await createFileArtifact(tx, contentStore, {
-                scope,
-                ownerPrincipalId,
-                filename: file.name,
-                mimeType: effectiveUploadMime(file, uploadPolicy),
-                policy: uploadPolicy,
-                bytes: new Uint8Array(await file.arrayBuffer()),
-                ...(generatedBy !== undefined ? { generatedBy } : {}),
-              }),
-            );
+            const row = await createFileArtifact(tx, contentStore, {
+              scope,
+              ownerPrincipalId,
+              filename: file.name,
+              mimeType: effectiveUploadMime(file, uploadPolicy),
+              policy: uploadPolicy,
+              bytes: new Uint8Array(await file.arrayBuffer()),
+              ...(generatedBy !== undefined ? { generatedBy } : {}),
+            });
+            await onArtifactCreated(tx, row, scope);
+            created.push(row);
           }
           return created;
         });

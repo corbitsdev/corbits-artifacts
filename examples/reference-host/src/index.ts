@@ -4,8 +4,11 @@
 // The host is the real thing: hub routes, the hub request logger and the hub
 // session middleware are all live. Artifact routes nest under `/api` on a
 // `Hono<TenantEnv>` that places the seeded tenant/principal on the context
-// from the hub session user, and authorizes through a host-supplied
-// `RequireGrant` (existence-blind, default allow for this test host).
+// from the hub session user, and authorizes through the platform's real
+// `createRequireGrant` backed by the real `grant` table — a caller with no
+// matching grant row is refused, same as production. `buildApp`'s optional
+// `authorize` still lets a test force a specific answer without provisioning
+// rows for it.
 //
 // This module only BUILDS the host. The acceptance scenarios live in
 // `test/acceptance.test.ts` and run under `bun test`, so they are collected by
@@ -15,10 +18,11 @@ import { sql } from "drizzle-orm";
 import { Hono } from "hono";
 import {
   createApp,
+  createRequireGrant,
   type RequireGrant,
   type TenantEnv,
 } from "@intx/hub-api";
-import { createDB, runMigrations, schema as intxSchema } from "@intx/db";
+import { createDB, createGrantStore, runMigrations, schema as intxSchema } from "@intx/db";
 // Interchange owns its id scheme; the host mints its OWN control-plane rows
 // with it rather than inventing a second one.
 import { generateId } from "@intx/hub-common";
@@ -33,6 +37,8 @@ import {
   mountArtifacts,
   runArtifactMigrations,
   type ArtifactDb,
+  type ArtifactRow,
+  type ArtifactTx,
   type ResolvedPrincipal,
   type ContentStore,
   type SerializedArtifactBase,
@@ -63,6 +69,36 @@ async function decorate(_tenantId: string, rows: readonly SerializedArtifactBase
   }
 }
 
+/**
+ * The worked example this host owes the next `@corbits/*-core` package: what
+ * a "the artifact's owner may write to it" grant actually IS, and who mints
+ * it. `@corbits/artifacts` provisions nothing itself — this runs through
+ * `mountArtifacts`'s `onArtifactCreated` hook, inside the same transaction as
+ * the row it grants on, so a grant never outlives (or fails to accompany) the
+ * artifact it names.
+ *
+ * `origin: "creator"` is the platform's own vocabulary for exactly this case
+ * (see `@intx/types/authz`'s `GrantRule.origin`) — the host is not inventing
+ * a policy layer, it is recording, in the platform's own grant table, the
+ * one fact this module already decided: `scope.principalId` made this row.
+ */
+async function grantOwnership(tx: ArtifactTx, row: ArtifactRow, scope: ResolvedPrincipal) {
+  const resource = `artifact:${row.id}`;
+  await tx.insert(intxSchema.grant).values(
+    (["write", "archive"] as const).map((action) => ({
+      id: generateId("grant"),
+      tenantId: scope.tenantId,
+      principalId: scope.principalId,
+      roleId: null,
+      resource,
+      action,
+      effect: "allow" as const,
+      origin: "creator" as const,
+      conditions: null,
+    })),
+  );
+}
+
 export type Session = { userId: string } | null;
 
 export type ReferenceHost = {
@@ -80,7 +116,7 @@ export type ReferenceHost = {
   scope: () => ResolvedPrincipal;
   /** Who the hub's session middleware will report. `null` means signed out. */
   setSession: (session: Session) => void;
-  /** Request the default host (InlineContentStore, default-allow grants). */
+  /** Request the default host (InlineContentStore, real DB-backed grants). */
   request: (path: string, init?: RequestInit) => Promise<Response>;
   /** Build another host over a different ContentStore or grant answer. */
   buildApp: (
@@ -279,32 +315,39 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
       }
       await next();
     });
-    // Existence-blind test RequireGrant: resolve string/function resources,
-    // default allow, structured 403 on deny. Greybeard-approved for this host.
-    const requireGrant: RequireGrant = (resource, action) => async (c, next) => {
-      const resolved =
-        typeof resource === "function"
-          ? resource({ param: (name) => c.req.param(name) })
-          : resource;
-      const allowed = (authorize ?? (() => true))(resolved, action);
-      if (!allowed) {
-        return c.json(
-          {
-            error: {
-              code: "forbidden",
-              message: "forbidden",
-            },
-          },
-          403,
-        );
-      }
-      return next();
-    };
+    // The real evaluator: the platform's own `createRequireGrant`, backed by
+    // the real `grant` table via `createGrantStore(db)`. No existence-blind,
+    // no default-allow — a caller with no matching row in `grant` is refused,
+    // same as production. `authorize` remains for tests that want to force a
+    // specific answer without provisioning rows for it (e.g. "deny always").
+    const requireGrant: RequireGrant =
+      authorize === undefined
+        ? createRequireGrant({ grantStore: createGrantStore(hub.db), conditionRegistry: {} })
+        : (resource, action) => async (c, next) => {
+            const resolved =
+              typeof resource === "function"
+                ? resource({ param: (name) => c.req.param(name) })
+                : resource;
+            const allowed = authorize(resolved, action);
+            if (!allowed) {
+              return c.json(
+                {
+                  error: {
+                    code: "forbidden",
+                    message: "forbidden",
+                  },
+                },
+                403,
+              );
+            }
+            return next();
+          };
     mountArtifacts(api, {
       db,
       contentStore,
       requireGrant,
       decorate,
+      onArtifactCreated: grantOwnership,
     });
     const mounted = app.route("/api", api);
     // `Hono#request` may answer synchronously; normalize to a promise so every
