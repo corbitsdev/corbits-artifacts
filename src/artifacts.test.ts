@@ -5,6 +5,7 @@ import {
   ArtifactSizeError,
   createArtifact,
   findArtifactByTitle,
+  findOrVersionArtifact,
   getArtifactVersion,
   listArtifactVersions,
   MAX_ARTIFACT_CONTENT_BYTES,
@@ -321,6 +322,121 @@ describe("find by title", () => {
     expect((await findArtifactByTitle(db, "acme", "Same", "csv-export"))?.artifactId).toBe(
       csv.id,
     );
+  });
+});
+
+describe("find-or-version", () => {
+  test("creates when no match exists", async () => {
+    const db = await testDb();
+    const result = await findOrVersionArtifact(db, {
+      scope: SCOPE,
+      ownerPrincipalId: SCOPE.principalId,
+      kind: "document",
+      title: "Report",
+      content: "v1",
+      source: { origin: "agent" },
+    });
+
+    expect(result.outcome).toBe("created");
+    expect(result.artifact.version).toBe(1);
+    expect(result.artifact.content).toBe("v1");
+  });
+
+  test("revises the existing match instead of creating a second artifact", async () => {
+    const db = await testDb();
+    const seeded = await seedArtifact(db, { title: "Report", content: "v1" });
+
+    const result = await findOrVersionArtifact(db, {
+      scope: SCOPE,
+      ownerPrincipalId: SCOPE.principalId,
+      kind: "document",
+      title: "Report",
+      content: "v2",
+      source: { origin: "agent" },
+    });
+
+    expect(result.outcome).toBe("revised");
+    expect(result.artifact.id).toBe(seeded.id);
+    expect(result.artifact.version).toBe(2);
+    expect(result.artifact.content).toBe("v2");
+
+    const rows = await db.select().from(artifact).where(eq(artifact.tenantId, "acme"));
+    expect(rows.length).toBe(1);
+  });
+
+  test("a different kind with the same title creates a separate artifact", async () => {
+    const db = await testDb();
+    await seedArtifact(db, { title: "Report", kind: "document" });
+
+    const result = await findOrVersionArtifact(db, {
+      scope: SCOPE,
+      ownerPrincipalId: SCOPE.principalId,
+      kind: "csv-export",
+      title: "Report",
+      content: "csv body",
+      source: { origin: "agent" },
+    });
+
+    expect(result.outcome).toBe("created");
+    const rows = await db.select().from(artifact).where(eq(artifact.title, "Report"));
+    expect(rows.length).toBe(2);
+  });
+
+  test("an archived match does not get silently revived — a fresh artifact is created", async () => {
+    const db = await testDb();
+    const archived = await seedArtifact(db, { title: "Report" });
+    await setArtifactArchived(db, archived, true);
+
+    const result = await findOrVersionArtifact(db, {
+      scope: SCOPE,
+      ownerPrincipalId: SCOPE.principalId,
+      kind: "document",
+      title: "Report",
+      content: "fresh",
+      source: { origin: "agent" },
+    });
+
+    expect(result.outcome).toBe("created");
+    expect(result.artifact.id).not.toBe(archived.id);
+  });
+
+  // The race the ticket describes: two callers both see "no match" under a
+  // plain read-then-write, and both create. The advisory lock this helper
+  // takes must serialize them instead, so the second caller's lookup runs
+  // AFTER the first caller's write is committed and finds it.
+  test("concurrent calls for the same (tenant, kind, title) converge on one artifact", async () => {
+    const db = await testDb();
+
+    const [first, second] = await Promise.all([
+      findOrVersionArtifact(db, {
+        scope: SCOPE,
+        ownerPrincipalId: SCOPE.principalId,
+        kind: "document",
+        title: "Report",
+        content: "from first",
+        source: { origin: "agent" },
+      }),
+      findOrVersionArtifact(db, {
+        scope: SCOPE,
+        ownerPrincipalId: SCOPE.principalId,
+        kind: "document",
+        title: "Report",
+        content: "from second",
+        source: { origin: "agent" },
+      }),
+    ]);
+
+    expect(first.artifact.id).toBe(second.artifact.id);
+    expect([first.outcome, second.outcome].sort()).toEqual(["created", "revised"]);
+    expect([first.artifact.version, second.artifact.version].sort()).toEqual([1, 2]);
+
+    const rows = await db.select().from(artifact).where(eq(artifact.tenantId, "acme"));
+    expect(rows.length).toBe(1);
+    const versions = await db
+      .select()
+      .from(artifactVersion)
+      .where(eq(artifactVersion.artifactId, first.artifact.id));
+    expect(versions.length).toBe(2);
   });
 });
 

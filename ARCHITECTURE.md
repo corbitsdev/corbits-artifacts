@@ -154,7 +154,7 @@ which store is installed.
 | File | Role |
 | --- | --- |
 | `mount.ts` | HTTP surface: parsing, validation, status codes; reads `TenantEnv` principal; wires host `requireGrant`. |
-| `artifacts.ts` | The core domain — create, revise, list, get, archive, serialize. |
+| `artifacts.ts` | The core domain — create, revise, find-or-version, list, get, archive, serialize. |
 | `uploads.ts` | `createFileArtifact`, the MIME policies, and the size caps. |
 | `download.ts` | One download path over the three storage conventions. |
 | `content-store.ts` | The two shipped `ContentStore` implementations. |
@@ -208,6 +208,32 @@ version fail loudly rather than corrupt history.
 
 **Archival is a soft hide.** `archived_at` null means visible; a timestamp means
 hidden from discovery. Deep links to archived artifacts still load.
+
+**Find-or-version is a package primitive, not a constraint.** The only
+uniqueness the schema enforces is `(artifact_id, version)` — there is no
+constraint on `(tenant_id, title, kind)`, so "find by title, create if
+absent, add a version if present" is not naturally atomic: a plain
+read-then-write of that pattern races, and two concurrent callers can both
+observe NOT FOUND and both create, leaving two artifacts with the same
+title. A uniqueness constraint on `(tenant_id, title, kind)` was considered
+and rejected for now — this package has no way to confirm that no tenant
+already holds duplicate `(title, kind)` rows created before this primitive
+existed, and a migration that fails partway through a production deploy over
+real duplicate data is a worse outage than the race it closes. Instead,
+`findOrVersionArtifact(db, args)` (in `artifacts.ts`) closes the race with a
+transaction-scoped advisory lock keyed by `hashtext(tenantId, kind, title)`,
+in its own lock-space namespace (the two-`int4`-argument form of
+`pg_advisory_xact_lock`, disjoint from the single-`bigint` form
+`runArtifactMigrations` uses). Collision semantics: whichever concurrent
+caller acquires the lock first creates the artifact; every other caller for
+the identical `(tenantId, kind, title)` blocks, then finds the row the
+winner just committed and revises it. Two overlapping callers always
+converge on ONE artifact with two versions, never two rows — callers for a
+different tenant, kind, or title never contend with each other. If the
+`(tenant_id, title, kind)` triple is later confirmed duplicate-free in
+production, a follow-up migration can still add the hard constraint; the
+helper's serialization would make that migration a no-op for any writer that
+already goes through it.
 
 **`upload` is never a standalone resource.** There is no `POST /uploads`; every
 upload eagerly mints its artifact, and the row is reachable only through

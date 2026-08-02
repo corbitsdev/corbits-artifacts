@@ -9,6 +9,23 @@ always called out under their own heading.
 
 ## [Unreleased]
 
+### Added
+
+- `findOrVersionArtifact(db, args)` — the atomic primitive behind "find an
+  artifact by title, create it if absent, add a version if present." The
+  schema's only uniqueness is `(artifactId, version)`; nothing constrains
+  `(tenantId, title, kind)`, so that common pattern raced between the read
+  and the write when hand-rolled outside the package. This closes the race
+  with a transaction-scoped advisory lock keyed on `(tenantId, kind, title)`:
+  concurrent callers for the same triple always converge on one artifact —
+  the first to acquire the lock creates it, every other caller revises the
+  row the first one just committed. A uniqueness constraint on
+  `(tenant_id, title, kind)` was considered instead but rejected for now: this
+  package cannot verify that no existing tenant already has duplicate
+  `(title, kind)` rows, and a migration that fails on real data is worse than
+  the race it would close. See the "Find-or-version" section of
+  ARCHITECTURE.md.
+
 ### Changed
 
 - The repository root **is** the `@corbits/artifacts` package. The previous

@@ -262,6 +262,15 @@ legacy zoneless columns with `USING col AT TIME ZONE 'UTC'` (existing walls were
 always documented as UTC). Do not edit shipped migrations to roll back — ship a
 new reverse cast if you must.
 
+`(tenant_id, title, kind)` is **not** a uniqueness constraint — only
+`(artifact_id, version)` is. Use `findOrVersionArtifact(db, args)` for "find
+by title, create if absent, add a version if present": it takes a
+transaction-scoped advisory lock so concurrent callers for the same
+`(tenantId, kind, title)` converge on one artifact instead of racing into
+two. See ARCHITECTURE.md's "Find-or-version" note for the collision
+semantics and why this is a package primitive rather than a schema
+constraint.
+
 ## Working on it
 
 ```sh
