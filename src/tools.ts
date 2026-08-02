@@ -7,7 +7,7 @@ import {
   SKILL_DRAFT_KIND,
 } from "./artifacts.js";
 import { artifact, type ArtifactRow } from "./schema.js";
-import type { ResolvedPrincipal, Identity } from "./ports.js";
+import type { ResolvedPrincipal } from "./ports.js";
 import {
   parseWebSiteContentJson,
   normalizeWebSitePath,
@@ -99,31 +99,24 @@ export function windowContent(
 }
 
 /**
- * Resolve an artifact for an agent read, honoring a version pin and an explicit
- * cross-tenant target. skill-draft reads as NOT FOUND, not forbidden.
+ * Resolve an artifact for an agent read, honoring a version pin. Reads are
+ * always confined to the caller's tenant; there is no tenant override. A
+ * skill-draft reads as NOT FOUND, not forbidden.
  */
 async function resolveForRead(
   db: ArtifactDb,
-  identity: Identity,
   args: {
     scope: ResolvedPrincipal;
     artifactId: string;
     version?: number;
-    tenantId?: string;
   },
 ): Promise<{ base: ReadBase; content: string }> {
-  const tenantId = args.tenantId ?? args.scope.tenantId;
-  if (
-    tenantId !== args.scope.tenantId &&
-    !(await identity.ownerIsMemberOfTenant(args.scope, tenantId))
-  ) {
-    throw new ArtifactNotFoundError(args.artifactId);
-  }
-
   const [row] = await db
     .select()
     .from(artifact)
-    .where(and(eq(artifact.id, args.artifactId), eq(artifact.tenantId, tenantId)))
+    .where(
+      and(eq(artifact.id, args.artifactId), eq(artifact.tenantId, args.scope.tenantId)),
+    )
     .limit(1);
   if (!row || row.kind === SKILL_DRAFT_KIND) {
     throw new ArtifactNotFoundError(args.artifactId);
@@ -165,16 +158,14 @@ async function resolveForRead(
  */
 export async function readArtifact(
   db: ArtifactDb,
-  identity: Identity,
   args: {
     scope: ResolvedPrincipal;
     artifactId: string;
     version?: number;
-    tenantId?: string;
     path?: string;
   },
 ): Promise<ArtifactReadResult | (ReadBase & { summary: WebSiteReadSummary })> {
-  const { base, content } = await resolveForRead(db, identity, args);
+  const { base, content } = await resolveForRead(db, args);
   if (base.kind !== WEB_SITE_KIND) return windowContent(base, content);
 
   if (args.path === undefined) {
@@ -191,17 +182,15 @@ export async function readArtifact(
 /** `artifact_read_chunk`: one bounded character range. Not for `web_site`. */
 export async function readArtifactChunk(
   db: ArtifactDb,
-  identity: Identity,
   args: {
     scope: ResolvedPrincipal;
     artifactId: string;
     version?: number;
-    tenantId?: string;
     offset?: number;
     limit?: number;
   },
 ): Promise<ArtifactReadResult> {
-  const { base, content } = await resolveForRead(db, identity, args);
+  const { base, content } = await resolveForRead(db, args);
   if (base.kind === WEB_SITE_KIND) {
     throw new Error(
       "artifact_read_chunk does not support web_site artifacts; use artifact_read for a summary or pass path to read one file",
@@ -339,11 +328,6 @@ export const ARTIFACT_TOOL_DEFINITIONS: readonly ArtifactToolDefinition[] = [
           type: "number",
           description: "Optional version to read. Defaults to the latest.",
         },
-        tenantId: {
-          type: "string",
-          description:
-            "Optional tenant the artifact lives in. Defaults to your own tenant.",
-        },
         path: {
           type: "string",
           description:
@@ -373,10 +357,6 @@ export const ARTIFACT_TOOL_DEFINITIONS: readonly ArtifactToolDefinition[] = [
         version: {
           type: "number",
           description: "Optional version to read. Defaults to the latest.",
-        },
-        tenantId: {
-          type: "string",
-          description: "Optional tenant the artifact lives in.",
         },
       },
       required: ["artifactId"],

@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { sql } from "drizzle-orm";
 import { Hono } from "hono";
+import { createRequireGrant, type RequireGrant, type TenantEnv } from "@intx/hub-api";
+import { createInMemoryGrantStore } from "@intx/authz";
+import type { GrantRule } from "@intx/types/authz";
 import { mountArtifacts } from "./mount.js";
 import { InlineContentStore } from "./content-store.js";
 import {
@@ -15,25 +18,112 @@ import {
 } from "./uploads.js";
 import type { ArtifactDb } from "./db.js";
 import type { MountArtifactsOpts } from "./mount.js";
-import type { ResolvedPrincipal, Identity } from "./ports.js";
-import { fakeIdentity, seedArtifact, seedSkillDraft, SCOPE, testDb } from "./test-helpers.js";
+import type { ResolvedPrincipal } from "./ports.js";
+import { seedArtifact, seedSkillDraft, SCOPE, testDb } from "./test-helpers.js";
+
+/** Places tenant/principal on the context the way a real host's session
+ * middleware does, without pinning it to any one `requireGrant` wiring. */
+function withPrincipal(app: Hono<TenantEnv>, principal: ResolvedPrincipal | null) {
+  app.use("*", async (c, next) => {
+    if (principal !== null) {
+      const now = new Date(0);
+      c.set("tenant", {
+        id: principal.tenantId,
+        name: principal.tenantId,
+        slug: principal.tenantId,
+        domain: `${principal.tenantId}.example`,
+        parentId: null,
+        config: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+      c.set("principal", {
+        id: principal.principalId,
+        tenantId: principal.tenantId,
+        kind: "user",
+        refId: principal.principalId,
+        status: "active",
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+    await next();
+  });
+  return app;
+}
+
+/** A grant minted for exactly one resource/action/principal — deny is simply
+ * not minting the matching one, which is how the real store discriminates. */
+function grantRule(over: Partial<GrantRule> & Pick<GrantRule, "resource" | "action" | "principalId">): GrantRule {
+  return {
+    id: `grant-${over.resource}-${over.action}-${over.principalId}`,
+    effect: "allow",
+    origin: "creator",
+    conditions: null,
+    expiresAt: null,
+    roleId: null,
+    ...over,
+  };
+}
 
 type HostOpts = {
   principal?: ResolvedPrincipal | null;
-  identity?: Identity;
-  isAdmin?: MountArtifactsOpts["isAdmin"];
+  authorize?: (resource: string, action: string) => boolean;
   decorate?: MountArtifactsOpts["decorate"];
+  contentStore?: MountArtifactsOpts["contentStore"];
 };
 
 function host(db: ArtifactDb, opts: HostOpts = {}) {
-  const app = new Hono();
+  const app = new Hono<TenantEnv>();
   const principal = opts.principal === undefined ? SCOPE : opts.principal;
+  app.use("*", async (c, next) => {
+    if (principal !== null) {
+      const now = new Date(0);
+      c.set("tenant", {
+        id: principal.tenantId,
+        name: principal.tenantId,
+        slug: principal.tenantId,
+        domain: `${principal.tenantId}.example`,
+        parentId: null,
+        config: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+      c.set("principal", {
+        id: principal.principalId,
+        tenantId: principal.tenantId,
+        kind: "user",
+        refId: principal.principalId,
+        status: "active",
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+    await next();
+  });
+  const requireGrant: RequireGrant = (resource, action) => async (c, next) => {
+    const resolved =
+      typeof resource === "function"
+        ? resource({ param: (name) => c.req.param(name) })
+        : resource;
+    const allowed = (opts.authorize ?? (() => true))(resolved, action);
+    if (!allowed) {
+      return c.json(
+        {
+          error: {
+            code: "forbidden",
+            message: "forbidden",
+          },
+        },
+        403,
+      );
+    }
+    return next();
+  };
   return mountArtifacts(app, {
     db,
-    contentStore: InlineContentStore,
-    resolvePrincipal: () => principal,
-    identity: opts.identity ?? fakeIdentity(),
-    ...(opts.isAdmin ? { isAdmin: opts.isAdmin } : {}),
+    contentStore: opts.contentStore ?? InlineContentStore,
+    requireGrant,
     ...(opts.decorate ? { decorate: opts.decorate } : {}),
   });
 }
@@ -189,15 +279,12 @@ describe("GET /artifacts", () => {
     expect(detail.artifact.content).toBe(large);
   });
 
-  test("attaches owner names and runs the display-only provenance decorator", async () => {
+  test("runs the display-only provenance decorator", async () => {
     const db = await testDb();
     await seedArtifact(db, { title: "Doc" });
 
     const decorated: string[] = [];
     const app = host(db, {
-      identity: fakeIdentity({
-        ownerNames: async (_tenant, ids) => new Map(ids.map((id) => [id, `Name of ${id}`])),
-      }),
       decorate: async (tenantId, rows) => {
         decorated.push(tenantId);
         for (const row of rows) {
@@ -210,7 +297,6 @@ describe("GET /artifacts", () => {
       artifacts: Record<string, unknown>[];
     };
     expect(body.artifacts[0]).toMatchObject({
-      ownerName: "Name of user-1",
       sessionName: "Weekly brief",
     });
     expect(decorated).toEqual(["acme"]);
@@ -252,10 +338,9 @@ describe("GET /artifacts", () => {
     expect("sessionName" in byTitle.get("Hand written")!).toBe(false);
   });
 
-  test("rejects a bad creatorKind and a bad cursor with 400", async () => {
+  test("rejects a bad cursor and a bad date with 400", async () => {
     const db = await testDb();
     const app = host(db);
-    expect((await app.request("/artifacts?creatorKind=robot")).status).toBe(400);
     expect((await app.request("/artifacts?cursor=garbage")).status).toBe(400);
     expect((await app.request("/artifacts?createdAfter=nonsense")).status).toBe(400);
   });
@@ -550,13 +635,19 @@ describe("versions", () => {
 });
 
 describe("archive authorization", () => {
-  const post = (app: Hono, id: string, verb: string) =>
+  const post = (app: Hono<TenantEnv>, id: string, verb: string) =>
     app.request(`/artifacts/${id}/${verb}`, { method: "POST" });
 
-  test("the exact owner may archive and unarchive", async () => {
+  test("allow records checks for archive and unarchive", async () => {
     const db = await testDb();
-    const app = host(db);
     const row = await seedArtifact(db);
+    const checks: { resource: string; action: string }[] = [];
+    const app = host(db, {
+      authorize: (resource, action) => {
+        checks.push({ resource, action });
+        return true;
+      },
+    });
 
     const archived = await post(app, row.id, "archive");
     expect(archived.status).toBe(200);
@@ -564,31 +655,24 @@ describe("archive authorization", () => {
 
     const restored = await post(app, row.id, "unarchive");
     expect(((await restored.json()) as any).artifact.archivedAt).toBeNull();
+
+    expect(checks).toEqual([
+      { resource: `artifact:${row.id}`, action: "archive" },
+      { resource: `artifact:${row.id}`, action: "archive" },
+    ]);
   });
 
-  test("a non-owner without admin is refused", async () => {
+  test("deny authorize false expects 403 and leaves archived_at null", async () => {
     const db = await testDb();
-    const row = await seedArtifact(db, { ownerPrincipalId: "someone-else" });
-    expect((await post(host(db), row.id, "archive")).status).toBe(403);
-  });
+    const row = await seedArtifact(db);
+    const app = host(db, { authorize: () => false });
 
-  test("the member who owns the producing agent may archive", async () => {
-    const db = await testDb();
-    const row = await seedArtifact(db, { ownerPrincipalId: "agent-9" });
-    const app = host(db, {
-      identity: fakeIdentity({
-        ownerMemberPrincipalId: async (scope) =>
-          scope.principalId === "agent-9" ? "user-1" : null,
-      }),
-    });
-    expect((await post(app, row.id, "archive")).status).toBe(200);
-  });
+    expect((await post(app, row.id, "archive")).status).toBe(403);
 
-  test("an admin may archive anyone's artifact via the authz seam", async () => {
-    const db = await testDb();
-    const row = await seedArtifact(db, { ownerPrincipalId: "someone-else" });
-    const app = host(db, { isAdmin: async () => true });
-    expect((await post(app, row.id, "archive")).status).toBe(200);
+    const rows = await db.execute<{ archived_at: Date | null }>(
+      sql`SELECT "archived_at" FROM "artifacts"."artifact" WHERE "id" = ${row.id}`,
+    );
+    expect(rows[0]!.archived_at).toBeNull();
   });
 
   test("archiving is idempotent over the route", async () => {
@@ -599,6 +683,193 @@ describe("archive authorization", () => {
     const first = (await (await post(app, row.id, "archive")).json()) as any;
     const second = (await (await post(app, row.id, "archive")).json()) as any;
     expect(second.artifact.archivedAt).toBe(first.artifact.archivedAt);
+  });
+});
+
+/**
+ * `archive authorization` above proves WIRING: the package calls whatever
+ * `requireGrant` it is handed with the right resource/action and honors the
+ * answer. It says nothing about whether a real grant check would refuse
+ * anyone, because its stub `authorize` is a bare predicate the test itself
+ * chooses the answer for.
+ *
+ * This block runs the SAME routes through `createRequireGrant` +
+ * `createInMemoryGrantStore` from the platform's own `@intx/hub-api` /
+ * `@intx/authz` — the exact evaluator a real host runs in production, not a
+ * reimplementation of it. Grants are looked up by `principalId`, so a caller
+ * who was never minted one is refused on the merits, not because a test typed
+ * `() => false`.
+ */
+describe("authorization through the real platform grant evaluator", () => {
+  const OWNER: ResolvedPrincipal = SCOPE;
+  const NON_OWNER: ResolvedPrincipal = { tenantId: SCOPE.tenantId, principalId: "someone-else" };
+
+  function hostWithGrants(
+    db: ArtifactDb,
+    principal: ResolvedPrincipal | null,
+    grants: GrantRule[],
+  ) {
+    const requireGrant = createRequireGrant({
+      grantStore: createInMemoryGrantStore(grants),
+      conditionRegistry: {},
+    });
+    return mountArtifacts(withPrincipal(new Hono<TenantEnv>(), principal), {
+      db,
+      contentStore: InlineContentStore,
+      requireGrant,
+    });
+  }
+
+  test("the owner's creator-origin grant allows write; a co-tenant with no grant is refused", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db, { content: "v1" });
+    const grants = [
+      grantRule({ resource: `artifact:${row.id}`, action: "write", principalId: OWNER.principalId }),
+    ];
+
+    const ownerRes = await hostWithGrants(db, OWNER, grants).request(
+      `/artifacts/${row.id}/versions`,
+      json({ content: "v2" }),
+    );
+    expect(ownerRes.status).toBe(200);
+
+    // Same grant list, same tenant, no grant naming this principal: the real
+    // evaluator finds nothing to match and fails closed, not open.
+    const intruderRes = await hostWithGrants(db, NON_OWNER, grants).request(
+      `/artifacts/${row.id}/versions`,
+      json({ content: "hijack" }),
+    );
+    expect(intruderRes.status).toBe(403);
+
+    const [current] = await db.execute<{ content: string }>(
+      sql`SELECT "content" FROM "artifacts"."artifact" WHERE "id" = ${row.id}`,
+    );
+    expect(current!.content).toBe("v2");
+  });
+
+  test("a grant for the wrong action does not authorize a different one", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db);
+    // The owner can write, but was never granted archive.
+    const grants = [
+      grantRule({ resource: `artifact:${row.id}`, action: "write", principalId: OWNER.principalId }),
+    ];
+    const app = hostWithGrants(db, OWNER, grants);
+
+    expect(
+      (await app.request(`/artifacts/${row.id}/archive`, { method: "POST" })).status,
+    ).toBe(403);
+    const [current] = await db.execute<{ archived_at: Date | null }>(
+      sql`SELECT "archived_at" FROM "artifacts"."artifact" WHERE "id" = ${row.id}`,
+    );
+    expect(current!.archived_at).toBeNull();
+  });
+
+  test("no grants at all refuses everyone, including the artifact's own owner", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db);
+    const app = hostWithGrants(db, OWNER, []);
+    expect(
+      (await app.request(`/artifacts/${row.id}/archive`, { method: "POST" })).status,
+    ).toBe(403);
+  });
+
+  // A real grant evaluator has no existence check of its own — it denies a
+  // ghost id or a cross-tenant artifact with the SAME 403 it gives a real row
+  // the caller lacks permission on. Without checking existence first, this
+  // would collapse "not permitted" and "not found" into one signal, and a
+  // caller could no longer tell (from the write routes) whether an id names
+  // anything at all — the existence oracle every 404 on this package guards
+  // against. `artifactExists` runs before `requireGrant` precisely so a
+  // caller with zero grants still gets 404, not 403, for ids that name
+  // nothing they could ever see.
+  test("a ghost id and a cross-tenant id are still 404 through a zero-grant evaluator, not 403", async () => {
+    const db = await testDb();
+    const app = hostWithGrants(db, OWNER, []);
+    const foreign = await seedArtifact(db, { tenantId: "other" });
+
+    for (const [cause, id] of [
+      ["ghost id", "00000000-0000-4000-8000-000000000000"],
+      ["cross-tenant", foreign.id],
+    ] as [string, string][]) {
+      const res = await app.request(`/artifacts/${id}/versions`, json({ content: "x" }));
+      expect({ cause, status: res.status, body: await res.json() }).toEqual({
+        cause,
+        status: 404,
+        body: { error: "Artifact not found" },
+      });
+    }
+  });
+});
+
+/**
+ * The other half of the wiring test above: `onArtifactCreated` is the seam a
+ * host uses to provision the grant that later authorizes the caller against
+ * the row it just made — see the reference host for a real one backed by
+ * `@intx/db`'s grant table. Here the point is narrower: the hook runs inside
+ * the SAME transaction as the insert, once per created row, with the row and
+ * the creating scope.
+ */
+describe("onArtifactCreated: the host's grant-provisioning seam", () => {
+  // These tests are about the hook, not authorization, so the grant check
+  // itself is a trivial always-allow — `requireGrant` isn't even reached by
+  // POST /artifacts or /artifacts/upload, which authorize nothing on create.
+  const allowAll: RequireGrant = () => async (_c, next) => next();
+
+  test("runs once with the created row and the creating scope", async () => {
+    const db = await testDb();
+    const seen: { row: { id: string }; scope: ResolvedPrincipal }[] = [];
+    const app = mountArtifacts(withPrincipal(new Hono<TenantEnv>(), SCOPE), {
+      db,
+      contentStore: InlineContentStore,
+      requireGrant: allowAll,
+      onArtifactCreated: async (_tx, row, scope) => {
+        seen.push({ row: { id: row.id }, scope });
+      },
+    });
+
+    const res = await app.request(
+      "/artifacts",
+      json({ mode: "text", title: "Provisioned", content: "body" }),
+    );
+    const body = (await res.json()) as { artifact: { id: string } };
+    expect(seen).toEqual([{ row: { id: body.artifact.id }, scope: SCOPE }]);
+  });
+
+  test("a throw inside the hook rolls back the artifact insert — no orphan row", async () => {
+    const db = await testDb();
+    const app = mountArtifacts(withPrincipal(new Hono<TenantEnv>(), SCOPE), {
+      db,
+      contentStore: InlineContentStore,
+      requireGrant: allowAll,
+      onArtifactCreated: async () => {
+        throw new Error("grant store is down");
+      },
+    });
+
+    await app.request("/artifacts", json({ mode: "text", title: "Orphan?", content: "body" }));
+    const rows = await listArtifacts(db, SCOPE.tenantId, {});
+    expect(rows.rows.length).toBe(0);
+  });
+
+  test("runs once per file on the upload route", async () => {
+    const db = await testDb();
+    const ids: string[] = [];
+    const app = mountArtifacts(withPrincipal(new Hono<TenantEnv>(), SCOPE), {
+      db,
+      contentStore: InlineContentStore,
+      requireGrant: allowAll,
+      onArtifactCreated: async (_tx, row) => {
+        ids.push(row.id);
+      },
+    });
+
+    const form = new FormData();
+    form.append("files", new File(["a"], "a.txt", { type: "text/plain" }));
+    form.append("files", new File(["b"], "b.txt", { type: "text/plain" }));
+    const res = await app.request("/artifacts/upload", { method: "POST", body: form });
+    const body = (await res.json()) as { artifacts: { id: string }[] };
+    expect(ids.sort()).toEqual(body.artifacts.map((a) => a.id).sort());
   });
 });
 
@@ -822,7 +1093,7 @@ describe("mail attachment references", () => {
       ).status,
     ).toBe(400);
     // The write is a mutation, so 403. The matching READ is a collection read
-    // and answers an empty 200 — see the no-identity route-class block below.
+    // and answers an empty 200 — see the no-principal route-class block below.
     expect(
       (
         await host(db, { principal: null }).request(
@@ -907,15 +1178,10 @@ describe("mail attachment references", () => {
 });
 
 describe("post-commit side effects never turn a committed write into a 500", () => {
-  // Enrichment runs against HOST-supplied seams after the transaction commits.
+  // Enrichment runs against HOST-supplied decorator after the transaction commits.
   // A throwing host must not make a durable mutation report failure: the client
   // would retry a write that already succeeded, and keep retrying forever.
   const exploding = {
-    identity: fakeIdentity({
-      ownerNames: async () => {
-        throw new Error("host directory is down");
-      },
-    }),
     decorate: async () => {
       throw new Error("host workflow lookup is down");
     },
@@ -930,10 +1196,9 @@ describe("post-commit side effects never turn a committed write into a 500", () 
       json({ mode: "text", title: "Survives", content: "body" }),
     );
     expect(res.status).toBe(201);
-    const body = (await res.json()) as { artifact: { id: string; ownerName: null } };
-    expect(body.artifact.ownerName).toBeNull();
+    const body = (await res.json()) as { artifact: { id: string } };
 
-    const rows = await listArtifacts(db, fakeIdentity(), SCOPE.tenantId, {});
+    const rows = await listArtifacts(db, SCOPE.tenantId, {});
     expect(rows.rows.map((r) => r.id)).toEqual([body.artifact.id]);
   });
 
@@ -966,7 +1231,7 @@ describe("post-commit side effects never turn a committed write into a 500", () 
 // The cross-core no-member asymmetry, asserted per route CLASS rather
 // than per happenstance, so a route added later has an obvious bucket to fall
 // into and this file fails if it lands in the wrong one.
-describe("no-identity response: every route matches the cross-core rule", () => {
+describe("no-principal response: every route matches the cross-core rule", () => {
   // Collection reads answer the truth — "you have none" — because the answer
   // names no resource and so discloses nothing.
   test("list/collection reads return an empty 200", async () => {
@@ -1044,24 +1309,32 @@ describe("no-identity response: every route matches the cross-core rule", () => 
   // would be the worse bug of the two.
   test("a refused mutation leaves nothing behind", async () => {
     const db = await testDb();
-    const before = await listArtifacts(db, fakeIdentity(), SCOPE.tenantId, {});
+    const before = await listArtifacts(db, SCOPE.tenantId, {});
     const app = host(db, { principal: null });
     await app.request("/artifacts", json({ mode: "text", title: "ghost", content: "b" }));
-    const after = await listArtifacts(db, fakeIdentity(), SCOPE.tenantId, {});
+    const after = await listArtifacts(db, SCOPE.tenantId, {});
     expect(after.rows.length).toBe(before.rows.length);
   });
 });
 
 describe("hardening regressions", () => {
-  test("revising someone else's artifact is 403, admin may", async () => {
+  test("write grant deny is 403; allow records artifact:id/write and returns 200", async () => {
     const db = await testDb();
-    const row = await seedArtifact(db, { ownerPrincipalId: "someone-else" });
-    const revise = (app: Hono) =>
+    const row = await seedArtifact(db);
+    const revise = (app: Hono<TenantEnv>) =>
       app.request(`/artifacts/${row.id}/versions`, json({ content: "hijack" }));
 
-    expect((await revise(host(db))).status).toBe(403);
-    const admin = host(db, { isAdmin: async () => true });
-    expect((await revise(admin)).status).toBe(200);
+    expect((await revise(host(db, { authorize: () => false }))).status).toBe(403);
+
+    const checks: { resource: string; action: string }[] = [];
+    const allowed = host(db, {
+      authorize: (resource, action) => {
+        checks.push({ resource, action });
+        return true;
+      },
+    });
+    expect((await revise(allowed)).status).toBe(200);
+    expect(checks).toEqual([{ resource: `artifact:${row.id}`, action: "write" }]);
   });
 
   test("revising a web_site with invalid content is 400, not 404", async () => {
@@ -1140,13 +1413,7 @@ describe("hardening regressions", () => {
         filename: "view.bin",
       }),
     };
-    const app = new Hono();
-    mountArtifacts(app, {
-      db,
-      contentStore: store,
-      resolvePrincipal: () => SCOPE,
-      identity: fakeIdentity(),
-    });
+    const app = host(db, { contentStore: store });
     const row = await seedArtifact(db, {
       kind: "file",
       source: { origin: "imported", upload: { id: "u-1", filename: "view.bin", mimeType: "application/octet-stream", size: 3 } },

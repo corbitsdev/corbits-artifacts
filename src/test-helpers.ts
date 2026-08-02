@@ -3,7 +3,6 @@ import { createArtifactDb, type ArtifactDb } from "../src/db.js";
 import { runArtifactMigrations } from "../src/migrations.js";
 import { createArtifact } from "../src/artifacts.js";
 import type { ArtifactRow } from "../src/schema.js";
-import type { Identity } from "../src/ports.js";
 
 export const DATABASE_URL =
   process.env.ARTIFACT_DATABASE_URL ??
@@ -186,17 +185,6 @@ export async function seedArtifact(
       source: overrides.source ?? { origin: "manual" },
     }),
   );
-}
-
-/** A directory that answers exactly what a test wires into it, nothing more. */
-export function fakeIdentity(overrides: Partial<Identity> = {}): Identity {
-  return {
-    ownerNames: async () => new Map(),
-    ownerMemberPrincipalId: async () => null,
-    principalIdsByKind: async () => [],
-    ownerIsMemberOfTenant: async () => false,
-    ...overrides,
-  };
 }
 
 /** Bypasses `createArtifact` so a test can plant a kind the module refuses to mint. */

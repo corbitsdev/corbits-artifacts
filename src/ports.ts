@@ -47,36 +47,3 @@ export type ContentStore = {
     artifact: { tenantId: string | null; source: unknown },
   ): Promise<FileBlob | null>;
 };
-
-/**
- * Identity: owner display names, and the agent→human resolution that lets the
- * member who owns a producing agent administer its artifacts.
- */
-export type Identity = {
-  /** Display names for owner principal ids. Missing ids simply stay unnamed. */
-  ownerNames(
-    tenantId: string,
-    ownerPrincipalIds: string[],
-  ): Promise<Map<string, string | null>>;
-  /** The human member principal behind an agent principal, or null. */
-  ownerMemberPrincipalId(scope: ResolvedPrincipal): Promise<string | null>;
-  /** Principal ids in a tenant whose creator kind matches. Drives `?creatorKind`. */
-  principalIdsByKind(tenantId: string, kind: "user" | "agent"): Promise<string[]>;
-  /**
-   * Whether the human behind this principal is an ACTIVE member of another
-   * tenant — the gate on a cross-tenant read. Must fail closed.
-   */
-  ownerIsMemberOfTenant(
-    scope: ResolvedPrincipal,
-    targetTenantId: string,
-  ): Promise<boolean>;
-};
-
-/** An identity for hosts with no directory: no names, no agent ownership,
- *  and no cross-tenant reads. */
-export const anonymousIdentity: Identity = {
-  ownerNames: async () => new Map(),
-  ownerMemberPrincipalId: async () => null,
-  principalIdsByKind: async () => [],
-  ownerIsMemberOfTenant: async () => false,
-};

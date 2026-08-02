@@ -351,7 +351,6 @@ describe("serialization", () => {
     expect(json.createdAt).toBe(row.createdAt.toISOString());
     expect(json.archivedAt).toBeNull();
     expect(json.ownerPrincipalId).toBeNull();
-    expect(json.ownerName).toBeNull();
   });
 });
 

@@ -479,8 +479,8 @@ describe("migrations", () => {
 
   /**
    * DB invariants: tenant_id is required on every artifact row; version and size
-   * stay non-negative. Principal↔tenant alignment is host-owned (resolvePrincipal)
-   * — no multi-table trigger here.
+   * stay non-negative. Principal↔tenant alignment is host middleware/context
+   * (TenantEnv) — no multi-table trigger here.
    */
   test("null tenant_id on artifact is rejected after migrations", async () => {
     await runArtifactMigrations(db);

@@ -10,7 +10,6 @@ import {
   WEB_SITE_MAX_TOTAL_BYTES,
   WebSiteContentError,
 } from "./web-site.js";
-import { anonymousIdentity } from "./ports.js";
 
 describe("path normalization", () => {
   test("strips leading slashes and converts backslashes", () => {
@@ -111,21 +110,5 @@ describe("summary", () => {
   test("counts bytes, not characters, for multi-byte content", () => {
     const raw = serializeWebSiteContent({ files: { "index.html": "é" } });
     expect(summarizeWebSiteContent(raw).totalBytes).toBe(2);
-  });
-});
-
-describe("default identity", () => {
-  test("the anonymous identity knows nobody and refuses cross-tenant reads", async () => {
-    expect(await anonymousIdentity.ownerNames("t", ["p"])).toEqual(new Map());
-    expect(
-      await anonymousIdentity.ownerMemberPrincipalId({ tenantId: "t", principalId: "p" }),
-    ).toBeNull();
-    expect(await anonymousIdentity.principalIdsByKind("t", "user")).toEqual([]);
-    expect(
-      await anonymousIdentity.ownerIsMemberOfTenant(
-        { tenantId: "t", principalId: "p" },
-        "other",
-      ),
-    ).toBe(false);
   });
 });

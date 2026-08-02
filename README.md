@@ -19,11 +19,12 @@ design rationale behind them.
 | Minimum `@intx/*` | **0.2.2** |
 
 Peer dependencies: `hono`, `hono-openapi`, `drizzle-orm`, `postgres`, `arktype`,
-`@intx/types`. They are peers rather than pinned deps because each is shared runtime
-state — a Hono app, a drizzle handle, a module-global registry — and a second copy in
-the tree does not error, it silently misbehaves.
+`@intx/types`, `@intx/hub-api`. They are peers rather than pinned deps because each is
+shared runtime state — a Hono app, a drizzle handle, Interchange's `TenantEnv` /
+`RequireGrant`, a module-global registry — and a second copy in the tree does not
+error, it silently misbehaves.
 
-Your **host** additionally needs `@intx/hub-api`, `@intx/db`, `@intx/hub-sessions` and
+Your **host** additionally needs `@intx/db`, `@intx/hub-sessions` and
 `@intx/hub-common` for `createApp`. This module imports none of them, so they are not
 peers here and npm will not warn you they are missing.
 
@@ -35,13 +36,15 @@ bun add github:corbitsdev/corbits-artifacts
 
 # Or with peers explicitly
 bun add github:corbitsdev/corbits-artifacts \
-  hono hono-openapi drizzle-orm postgres arktype @intx/types@^0.2.2
+  hono hono-openapi drizzle-orm postgres arktype \
+  @intx/types@^0.2.2 @intx/hub-api@^0.2.2
 ```
 
 ```bash
 # npm / pack
 npm install @corbits/artifacts \
-  hono hono-openapi drizzle-orm postgres arktype @intx/types@^0.2.2
+  hono hono-openapi drizzle-orm postgres arktype \
+  @intx/types@^0.2.2 @intx/hub-api@^0.2.2
 ```
 
 > **Not on npm yet.** Until the first release, consume it from git or an `npm pack`
@@ -52,26 +55,24 @@ npm install @corbits/artifacts \
 
 ```ts
 import { Hono } from "hono";
-import type { AppEnv } from "@intx/hub-api";
+import { createRequireGrant, type TenantEnv } from "@intx/hub-api";
 import {
   InlineContentStore,
   mountArtifacts,
   runArtifactMigrations,
-  type ResolvedPrincipal,
 } from "@corbits/artifacts";
 
 // Boot-time, once. Idempotent — safe on every boot of every replica.
 await runArtifactMigrations(hub.db);
 
-const api = new Hono<AppEnv>();
+// Host middleware places Interchange `tenant` and `principal` on the context
+// before these routes run. Mount takes Hono<TenantEnv> and reads them natively.
+const api = new Hono<TenantEnv>();
+const requireGrant = createRequireGrant({ grantStore, conditionRegistry });
 mountArtifacts(api, {
   db: hub.db,
   contentStore: InlineContentStore,
-  resolvePrincipal(ctx): ResolvedPrincipal | null {
-    const user = (ctx as Context<AppEnv>).get("user");
-    if (!user) return null;
-    return { tenantId: user.tenantId, principalId: user.id };
-  },
+  requireGrant,
 });
 app.route("/api", api);
 ```
@@ -81,7 +82,8 @@ serves its own routes under. No `/v1`, no vendor prefix.
 
 `examples/reference-host` in this repository is a complete `@intx/hub-api` host with
 this module mounted and the acceptance suite pointed at it. Start there if you need the
-whole `createApp` wiring.
+whole `createApp` wiring, including host middleware that sets `tenant`/`principal` and
+a host-owned `RequireGrant`.
 
 ## The options
 
@@ -92,11 +94,15 @@ never safety.
 | --- | --- | --- |
 | `db` | **yes** | The drizzle handle the host already has |
 | `contentStore` | **yes** | `InlineContentStore` for a minimal host |
-| `resolvePrincipal` | **yes** | `(ctx: unknown) => { tenantId, principalId } \| null`. Identical to `@corbits/mailbox-core`'s, so a host mounting both passes one function to both. The resolved tenant is authoritative — no caller-supplied override. |
-| `isAdmin` | no | Nobody is an admin — only the owner (and the member behind a producing agent) can archive. Nothing becomes more permissive. |
-| `identity` | no | `anonymousIdentity` — `ownerName` is `null`, `?creatorKind=` matches nothing, cross-tenant reads refused. |
-| `decorate` | no | No-op — rows carry no decoration. Display-only by contract, so it can never change what is returned or who sees it. |
+| `requireGrant` | **yes** | The host's Interchange grant middleware factory. Archive/unarchive and other single-artifact mutations authorize through `requireGrant(idResource("artifact", "id"), …)`. This package implements no owner, agent-owner, membership, or admin policy. |
+| `decorate` | no | No-op — rows carry no decoration. Display-only by contract, so it can never change what is returned or who sees it. Clients resolve display names from `ownerPrincipalId` when they need them. |
+| `onArtifactCreated` | no | No-op. Runs inside the same transaction as artifact creation, once per row — the seam a host uses to provision grants (e.g. a `creator`-origin grant on `artifact:<id>` for `write`/`archive`) for the row it just made. See `examples/reference-host`'s `grantOwnership` for a worked example against a real grant store. |
 | `uploadPolicy` | no | `ARTIFACT_UPLOAD_POLICY` — the standard document/image/spreadsheet allowlist. |
+
+Who the request runs as is **not** an option: the host's auth/tenant middleware puts
+`tenant` and `principal` on the `TenantEnv` context, and this package reads them. No
+principal on the context is the signed-out case (empty collection reads, `403`
+everywhere else).
 
 ### Compatibility
 
@@ -107,7 +113,7 @@ happen in major versions.
 
 | Surface | Behavior |
 | --- | --- |
-| `GET /api/artifacts` | Tenant-scoped list; query/kind/owner/creatorKind/date filters, keyset cursor, archived toggle. **Discovery only:** each item omits `content` (fetch bodies via detail, download, or tools) |
+| `GET /api/artifacts` | Tenant-scoped list; query/kind/owner/date filters, keyset cursor, archived toggle. **Discovery only:** each item omits `content` (fetch bodies via detail, download, or tools) |
 | `POST /api/artifacts` | Human import — link a URL or paste text |
 | `POST /api/artifacts/upload` | multipart import. An optional `generatedBy` form field is stored as `source.generatedBy`, a free-form display label nothing here reads back |
 | `GET /api/artifacts/:id` | Deep link (archived artifacts still load) |
@@ -138,14 +144,19 @@ server, reverse proxy) — the package check is a best-effort edge guard, not a 
 for a host-level cap. Upload byte caps remain on the multipart path.
 
 **Auth before body:** mutating JSON routes (`POST /api/artifacts`,
-`POST /api/artifacts/:id/versions`, `POST …/mail-attachments`) resolve the principal
-before parsing the body, so an unauthenticated caller gets 403 without learning whether
-the JSON was well-formed. Upload already auth'd first.
+`POST /api/artifacts/:id/versions`, `POST …/mail-attachments`) read the principal from
+context before parsing the body, so an unauthenticated caller gets 403 without learning
+whether the JSON was well-formed. Upload already auth'd first. Single-artifact write
+routes run existence/tenant/skill-draft resolution (the same check `loadScoped` does)
+before the host's `requireGrant`, and only run `requireGrant` once that has confirmed a
+real, visible row — so `requireGrant` is answering "is this permitted," never "does this
+exist," and a caller who cannot see the row gets `404` however a real grant evaluator
+would answer for it.
 
 ### Two response contracts
 
-**No resolvable principal** — the cross-core rule every `@corbits/*` package follows, so
-a host mounting several hands its client one policy rather than three:
+**No principal on the context** — the cross-core rule every `@corbits/*` package
+follows, so a host mounting several hands its client one policy rather than three:
 
 | Route class | Response | In this core |
 | --- | --- | --- |
@@ -157,14 +168,15 @@ specific resource, and whether it exists is not an unresolvable caller's to lear
 core exposes no stream today; the class is listed so a future one is classified by the
 rule rather than by guesswork.
 
-**Once a principal is resolved**, four causes collapse into one `404
+**Once a principal is on the context**, four causes collapse into one `404
 {"error":"Artifact not found"}` on all six single-artifact routes: the id was never
 minted, the id is not shaped like an id, the row is a `skill-draft`, or the row belongs
 to another tenant. A cross-tenant `403` would be an existence oracle — any account
 holder could walk ids and learn which name a real artifact somewhere in the deployment.
 
-Archive/unarchive still answer `403` for a caller who can see the artifact but may not
-administer it: an authorization decision about a row known to exist, not a disclosure.
+Archive/unarchive still answer `403` when the host's `requireGrant` denies the
+`archive` action on a row the caller can see: an authorization decision about a row
+known to exist, not a disclosure.
 
 ## Uploads: three allowlists, and who owns each
 
@@ -228,8 +240,9 @@ package-owned `artifacts` Postgres schema. `tenant_id` is required (`NOT NULL`) 
 with the principal columns, is a hard foreign key into Interchange's
 `public.tenant` / `public.principal`, so the host's own migrations must run first.
 Version columns CHECK ≥ 1; size columns CHECK ≥ 0. Whether a principal belongs to
-the stamped tenant is **host-owned** via `resolvePrincipal` — the package does not
-install multi-table triggers for that alignment (see ARCHITECTURE.md).
+the stamped tenant is **host-owned** via the middleware that places `tenant` and
+`principal` on the request context — the package does not install multi-table triggers
+for that alignment (see ARCHITECTURE.md).
 
 `runArtifactMigrations(db)` is idempotent, advisory-locked, creates and owns the
 `artifacts` Postgres schema, and keeps its own ledger

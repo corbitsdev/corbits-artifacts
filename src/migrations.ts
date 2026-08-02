@@ -155,7 +155,7 @@ export const MIGRATIONS: Migration[] = [
     // dump can still hold orphans; refuse to SET NOT NULL over them and tell the
     // operator to assign a tenant or delete the rows first. Version/size CHECKs
     // are single-column and free at write time. Principal↔tenant alignment is
-    // deliberately host-owned (resolvePrincipal) — a multi-table trigger into
+    // host middleware/context (TenantEnv) — a multi-table trigger into
     // public.principal is out of scope and would couple write path latency to
     // the control plane.
     id: "0003_schema_invariants",

@@ -24,63 +24,109 @@ Interchange serves its own routes under (`app.route("/api/me", …)`,
 `app.route("/api/tenants", …)`). No `/v1` segment, no vendor prefix.
 
 ```ts
-const api = new Hono<AppEnv>();
-mountArtifacts(api, { db, contentStore, resolvePrincipal });
+const api = new Hono<TenantEnv>();
+// Host middleware has already placed `tenant` and `principal` on the context.
+mountArtifacts(api, { db, contentStore, requireGrant });
 app.route("/api", api);
 ```
 
 which serves `/api/artifacts`, `/api/artifacts/:id`,
 `/api/artifacts/:id/versions`, `/api/artifacts/:id/download`, and
 `/api/instances/:instanceId/mail-attachments`. Nesting rather than teaching the
-core a base path keeps the frozen `mountX<E extends Env>(app, opts) => Hono<E>`
-seam untouched.
+core a base path keeps the mount free of a configurable base path.
 
-Everything else it needs arrives through `opts`. Nothing is reached for.
+Everything else it needs arrives through `opts` or the host's request context.
+Nothing is reached for.
 
 ## The mount seam
 
-`mountArtifacts<E extends Env>(app: Hono<E>, opts): Hono<E>` is generic over the
-host's Hono `Env`, so it composes with an app that carries its own environment
-rather than requiring a bare `Hono`.
+`mountArtifacts(app: Hono<TenantEnv>, opts): Hono<TenantEnv>` takes Interchange's
+`TenantEnv` so it composes with a host app mounted beneath Interchange auth +
+tenant middleware. The host places full `tenant` and `principal` rows on the
+context; this package reads them natively and never invents a second principal
+resolution path.
 
-Three options have no sensible default — `db`, `contentStore`,
-`resolvePrincipal` — and the rest degrade a *feature*, never safety, when
-omitted. The README's table of what a minimal host passes is the reference; what
-matters architecturally is that every default **fails closed**: no `isAdmin`
-means nobody is an admin, no `identity` means no directory and no cross-tenant
-reads, no `decorate` means no decoration.
+Three options have no sensible default — `db`, `contentStore`, `requireGrant` —
+and the rest degrade a *feature*, never safety, when omitted. The README's table
+of what a minimal host passes is the reference; what matters architecturally is
+that optional seams **fail closed**: no `decorate` means no decoration.
 
-What the package does **not** require of a host: no auth middleware, no session
-library, no UI. What it DOES require: Interchange's control plane —
-`public.tenant` and `public.principal` must exist before the migrations run,
-because the tables carry hard foreign keys into them.
+What the package does **not** require of a host: no session library, no UI, no
+directory, no owner/admin policy callback. What it DOES require: Interchange's
+control plane — `public.tenant` and `public.principal` must exist before the
+migrations run, because the tables carry hard foreign keys into them — and a
+host that puts the authenticated principal on `TenantEnv` and hands in its
+`RequireGrant`.
 
-`resolvePrincipal`'s signature is identical across the Corbits cores, so a host
-mounting more than one passes the same function to each. The resolved tenant is
-authoritative — there is no caller-supplied tenant override anywhere in the
-route surface.
+The principal's tenant is authoritative — there is no caller-supplied tenant
+override anywhere in the route or tool surface. Tool reads always stay inside
+`scope.tenantId`.
+
+**This is a decision, not an oversight.** The prior `Identity` port let
+`readArtifact` / `readArtifactChunk` take a `tenantId` argument and cross into
+it when `identity.ownerIsMemberOfTenant(scope, tenantId)` said the caller's
+owner belonged there — a membership check this package invented and owned.
+That is exactly the kind of policy this PR removes. It is not replaced by a
+grant check, and won't be by a later one either: Interchange's `GrantStore`
+resolves a principal's grants **within one tenant**
+(`collectGrants(principalId, tenantId)`; `@intx/db`'s implementation filters
+`grant` rows by `tenant_id`, and a principal is itself a row scoped to one
+tenant). There is no platform primitive for "principal P, home tenant A, holds
+a grant readable from tenant B" to check — inventing one here would mean this
+package building a second, bespoke cross-tenant authorization concept on top
+of the platform's, which is the precise failure mode "authorization is the
+host's job" is meant to prevent. If a real product need for cross-tenant
+artifact reads shows up, it belongs in Interchange's grant model, not
+re-derived per package.
+
+## Three custom seams
+
+Beyond the host's native context and grants, this package exposes **three**
+extension seams: the substrate (`ContentStore`), a display-only decorator
+(`decorate` / provenance), and a grant-provisioning hook (`onArtifactCreated`).
+Authorization is not a custom seam — it is the host's Interchange `RequireGrant`;
+`onArtifactCreated` is not authorization either, it is the write side of the
+same idea — the host deciding what makes its grant model true, this package
+only handing it the row and the scope that made it.
 
 ## The options
 
-`ContentStore` and `Identity` are types declared in `ports.ts`; the rest are
-plain `mountArtifacts` options. `resolvePrincipal` takes the host's request
-context as `unknown`.
+`ContentStore` is declared in `ports.ts`; the rest are plain `mountArtifacts`
+options. Who the request runs as is read from `TenantEnv`, not passed as a
+callback.
 
 | Option | What it is for | Default |
 | --- | --- | --- |
-| `resolvePrincipal` | Who the request runs as. Reads the host session; returns `null` when signed out. | none — required |
+| `requireGrant` | Host-owned Interchange grant middleware factory. Single-artifact mutations (revise, archive/unarchive, …) run `requireGrant(idResource("artifact", "id"), <action>)`. | none — required |
 | `contentStore` | Where an artifact's file bytes live (`ContentStore`). | none — required |
-| `isAdmin` | Whether a principal is a tenant admin. Only archive/unarchive consults it. | nobody is an admin |
-| `identity` | Owner display names, the agent→human ownership resolution, creator-kind principal sets, and cross-tenant membership (`Identity`). | `anonymousIdentity` |
-| `decorate` | A **display-only** decorator over serialized rows. | no-op |
+| `decorate` | A **display-only** decorator over serialized rows (provenance labels, host joins). | no-op |
+| `onArtifactCreated` | Host hook run inside the same transaction as artifact creation — where a host mints grants for the row it just made. | no-op |
 
 `decorate`'s display-only status is a contract, not a convention: it may add
 fields to rows on their way out and must never affect *what* is returned or
 *who* may see it. Joining a host's workflow tables inside this package would
 couple it to a schema it must not know, so the host supplies the decorator.
+Clients that need an owner display name resolve `ownerPrincipalId` themselves;
+this package never ships directory names on the wire.
 
-`Identity.ownerIsMemberOfTenant` gates cross-tenant reads and must fail closed;
-the shipped `anonymousIdentity` does.
+### Grant provisioning (`onArtifactCreated`)
+
+Checking a grant (`requireGrant`) and minting one (`onArtifactCreated`) are the
+same host responsibility looked at from both ends: this package neither
+invents authorization policy nor decides who a newly created row belongs to
+for grant purposes — it hands the host the row, inside the transaction that
+made it durable, and the host decides.
+
+`examples/reference-host` provisions a real `creator`-origin grant on create —
+`write` and `archive` on `artifact:<id>` for the creating principal, inserted
+into Interchange's own `grant` table via `@intx/db`'s schema, in the same
+transaction as the artifact row. Its `buildApp`'s default `requireGrant` is the
+platform's real `createRequireGrant` over that same table (via
+`createGrantStore`), not a stub — a principal with no matching row is refused,
+exactly as in production. See `grantOwnership` in
+`examples/reference-host/src/index.ts` and the "ownership-derived grants"
+scenarios in its acceptance suite for the end-to-end proof: the creator
+succeeds, a co-tenant with no grant does not.
 
 ### ContentStore
 
@@ -107,15 +153,15 @@ which store is installed.
 
 | File | Role |
 | --- | --- |
-| `mount.ts` | HTTP surface: parsing, validation, status codes. |
+| `mount.ts` | HTTP surface: parsing, validation, status codes; reads `TenantEnv` principal; wires host `requireGrant`. |
 | `artifacts.ts` | The core domain — create, revise, list, get, archive, serialize. |
 | `uploads.ts` | `createFileArtifact`, the MIME policies, and the size caps. |
 | `download.ts` | One download path over the three storage conventions. |
 | `content-store.ts` | The two shipped `ContentStore` implementations. |
-| `tools.ts` | Agent-facing tool definitions and windowed artifact reads. |
+| `tools.ts` | Agent-facing tool definitions and windowed artifact reads (caller tenant only). |
 | `web-site.ts` | The `web-site` kind's content encoding and validation. |
 | `mail-attachments.ts` | Artifact↔message associations. |
-| `ports.ts` | The `ContentStore` and `Identity` types, and the fail-closed `anonymousIdentity` default. |
+| `ports.ts` | The `ContentStore` type and the shared `ResolvedPrincipal` shape. |
 | `schema.ts` / `migrations.ts` | The four tables, and the DDL that creates them. |
 
 ## Data model
@@ -140,10 +186,10 @@ single-column constraints applied by a ledgered migration — free at write time
 the control plane independently; it does **not** enforce that `principal_id` (or
 `owner_principal_id`) belongs to the same tenant as `tenant_id`. A multi-table
 trigger or composite FK into `public.principal` would couple every write to a
-control-plane lookup and is deliberately out of scope. The host's
-`resolvePrincipal` is the authority: it returns the `(tenantId, principalId)`
-pair every route and tool write stamps, so a correctly mounted host never
-plants a cross-tenant principal. Operators cleaning legacy rows before the
+control-plane lookup and is deliberately out of scope. The host's middleware and
+context are the authority: routes stamp the `(tenantId, principalId)` pair from
+the Interchange `principal` already on `TenantEnv`, so a correctly mounted host
+never plants a cross-tenant principal. Operators cleaning legacy rows before the
 `tenant_id NOT NULL` migration must assign a valid tenant or delete orphans —
 the migration fails with an explicit message if null `tenant_id` rows remain.
 
@@ -234,9 +280,9 @@ upload **gate** (`createFileArtifact` takes `policy` as a required argument and
 refuses anything outside it before the `ContentStore` is touched); and the
 download path with its `nosniff`/`attachment` behaviour.
 
-Supplied by the host: the Hono app and the database handle; who the caller is;
-whether they are an admin; the directory, if there is one; provenance
-decoration; and a `ContentStore`.
+Supplied by the host: the `Hono<TenantEnv>` app and the database handle; the
+authenticated `tenant`/`principal` on the request context; the host's
+`RequireGrant`; display-only provenance decoration; and a `ContentStore`.
 
 ## Known limits
 

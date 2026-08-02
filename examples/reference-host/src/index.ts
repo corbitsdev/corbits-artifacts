@@ -2,21 +2,27 @@
 // (`createApp` from the published `@intx/hub-api`) against a real Postgres.
 //
 // The host is the real thing: hub routes, the hub request logger and the hub
-// session middleware are all live, and the artifact principal is resolved out
-// of the hub's own request context (`c.var.user`) rather than a local variable.
-// The identity/authz/decorate options are implemented against the host's OWN control plane
-// (interchange `principal` / `user` rows), which is the point: the module knows
-// nothing about them, the host supplies them.
+// session middleware are all live. Artifact routes nest under `/api` on a
+// `Hono<TenantEnv>` that places the seeded tenant/principal on the context
+// from the hub session user, and authorizes through the platform's real
+// `createRequireGrant` backed by the real `grant` table — a caller with no
+// matching grant row is refused, same as production. `buildApp`'s optional
+// `authorize` still lets a test force a specific answer without provisioning
+// rows for it.
 //
 // This module only BUILDS the host. The acceptance scenarios live in
 // `test/acceptance.test.ts` and run under `bun test`, so they are collected by
 // CI like any other test instead of being a hand-rolled assert script nothing
 // executes.
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { Hono } from "hono";
-import type { Context } from "hono";
-import { createApp, type AppEnv } from "@intx/hub-api";
-import { createDB, runMigrations, schema as intxSchema } from "@intx/db";
+import {
+  createApp,
+  createRequireGrant,
+  type RequireGrant,
+  type TenantEnv,
+} from "@intx/hub-api";
+import { createDB, createGrantStore, runMigrations, schema as intxSchema } from "@intx/db";
 // Interchange owns its id scheme; the host mints its OWN control-plane rows
 // with it rather than inventing a second one.
 import { generateId } from "@intx/hub-common";
@@ -31,9 +37,10 @@ import {
   mountArtifacts,
   runArtifactMigrations,
   type ArtifactDb,
+  type ArtifactRow,
+  type ArtifactTx,
   type ResolvedPrincipal,
   type ContentStore,
-  type Identity,
   type SerializedArtifactBase,
 } from "@corbits/artifacts";
 
@@ -54,87 +61,42 @@ function parsePostgresUrl(raw: string) {
   };
 }
 
-/** Identity, implemented against the host's own directory tables. */
-function createIdentity(db: ArtifactDb): Identity {
-  return {
-    async ownerNames(tenantId, ownerPrincipalIds) {
-      const principals = await db
-        .select({ id: intxSchema.principal.id, refId: intxSchema.principal.refId })
-        .from(intxSchema.principal)
-        .where(
-          and(
-            eq(intxSchema.principal.tenantId, tenantId),
-            inArray(intxSchema.principal.id, ownerPrincipalIds),
-          ),
-        );
-      const refIds = [...new Set(principals.map((p) => p.refId))];
-      const users =
-        refIds.length > 0
-          ? await db
-              .select({ id: intxSchema.user.id, name: intxSchema.user.name })
-              .from(intxSchema.user)
-              .where(inArray(intxSchema.user.id, refIds))
-          : [];
-      const nameByRefId = new Map(users.map((u) => [u.id, u.name]));
-      return new Map(principals.map((p) => [p.id, nameByRefId.get(p.refId) ?? null]));
-    },
-
-    async ownerMemberPrincipalId(scope) {
-      // An agent principal's refId names the human who owns it in this host.
-      const [agent] = await db
-        .select({ refId: intxSchema.principal.refId })
-        .from(intxSchema.principal)
-        .where(
-          and(
-            eq(intxSchema.principal.id, scope.principalId),
-            eq(intxSchema.principal.tenantId, scope.tenantId),
-            eq(intxSchema.principal.kind, "agent"),
-          ),
-        )
-        .limit(1);
-      if (!agent) return null;
-      const [member] = await db
-        .select({ id: intxSchema.principal.id })
-        .from(intxSchema.principal)
-        .where(
-          and(
-            eq(intxSchema.principal.tenantId, scope.tenantId),
-            eq(intxSchema.principal.kind, "user"),
-            eq(intxSchema.principal.refId, agent.refId),
-            eq(intxSchema.principal.status, "active"),
-          ),
-        )
-        .limit(1);
-      return member?.id ?? null;
-    },
-
-    async principalIdsByKind(tenantId, kind) {
-      const rows = await db
-        .select({ id: intxSchema.principal.id })
-        .from(intxSchema.principal)
-        .where(
-          and(
-            eq(intxSchema.principal.tenantId, tenantId),
-            eq(intxSchema.principal.kind, kind),
-          ),
-        );
-      return rows.map((r) => r.id);
-    },
-
-    // This host has exactly one tenant, so a cross-tenant read is always
-    // refused. A multi-tenant host would check active membership there.
-    async ownerIsMemberOfTenant() {
-      return false;
-    },
-  };
-}
-
 /** Display-only decorator. Adds a label, never changes what is returned. */
 async function decorate(_tenantId: string, rows: readonly SerializedArtifactBase[]) {
   for (const row of rows) {
     (row as Record<string, unknown>).generatedByLabel =
       typeof row.source.generatedBy === "string" ? row.source.generatedBy : null;
   }
+}
+
+/**
+ * The worked example this host owes the next `@corbits/*-core` package: what
+ * a "the artifact's owner may write to it" grant actually IS, and who mints
+ * it. `@corbits/artifacts` provisions nothing itself — this runs through
+ * `mountArtifacts`'s `onArtifactCreated` hook, inside the same transaction as
+ * the row it grants on, so a grant never outlives (or fails to accompany) the
+ * artifact it names.
+ *
+ * `origin: "creator"` is the platform's own vocabulary for exactly this case
+ * (see `@intx/types/authz`'s `GrantRule.origin`) — the host is not inventing
+ * a policy layer, it is recording, in the platform's own grant table, the
+ * one fact this module already decided: `scope.principalId` made this row.
+ */
+async function grantOwnership(tx: ArtifactTx, row: ArtifactRow, scope: ResolvedPrincipal) {
+  const resource = `artifact:${row.id}`;
+  await tx.insert(intxSchema.grant).values(
+    (["write", "archive"] as const).map((action) => ({
+      id: generateId("grant"),
+      tenantId: scope.tenantId,
+      principalId: scope.principalId,
+      roleId: null,
+      resource,
+      action,
+      effect: "allow" as const,
+      origin: "creator" as const,
+      conditions: null,
+    })),
+  );
 }
 
 export type Session = { userId: string } | null;
@@ -146,20 +108,20 @@ export type ReferenceHost = {
   /** Principal id of the agent Alice owns. */
   agentPrincipal: string;
   /**
-   * The scope a host-owned surface runs as — the same `ResolvedPrincipal` the
-   * mounted routes resolve for Alice. A host that owns its own file-minting
-   * route (a chat attachment divert, a workflow's generated PDF) calls
+   * The scope a host-owned surface runs as — the same principal the mounted
+   * routes resolve for Alice. A host that owns its own file-minting route
+   * (a chat attachment divert, a workflow's generated PDF) calls
    * `createFileArtifact` with this.
    */
   scope: () => ResolvedPrincipal;
   /** Who the hub's session middleware will report. `null` means signed out. */
   setSession: (session: Session) => void;
-  /** Request the default host (InlineContentStore, nobody is admin). */
+  /** Request the default host (InlineContentStore, real DB-backed grants). */
   request: (path: string, init?: RequestInit) => Promise<Response>;
-  /** Build another host over a different ContentStore or authz answer. */
+  /** Build another host over a different ContentStore or grant answer. */
   buildApp: (
     contentStore: ContentStore,
-    isAdmin: () => Promise<boolean>,
+    authorize?: (resource: string, action: string) => boolean,
   ) => { request: (path: string, init?: RequestInit) => Promise<Response> };
   close: () => Promise<void>;
 };
@@ -218,9 +180,8 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
   await db.execute(sql`DELETE FROM "user" WHERE "id" IN ('user-alice', 'user-bob')`);
 
   // Seed the host's own control plane: a tenant, two humans, and one agent
-  // owned by Alice. Note the contrast — interchange's `principal` has a real FK
-  // to `tenant`, while @corbits/artifacts holds the tenant BY VALUE and so needs
-  // nothing to exist here at all.
+  // owned by Alice. Returning full rows so TenantEnv middleware can place them
+  // on the request context without a second lookup.
   const [tenantRow] = await db
     .insert(intxSchema.tenant)
     .values({
@@ -229,8 +190,8 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
       slug: "reference",
       domain: "reference.example",
     })
-    .returning({ id: intxSchema.tenant.id });
-  const tenant = tenantRow!.id;
+    .returning();
+  const tenant = tenantRow!;
 
   await db.insert(intxSchema.user).values([
     {
@@ -246,31 +207,27 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
     .values([
       {
         id: generateId("principal"),
-        tenantId: tenant,
+        tenantId: tenant.id,
         kind: "user",
         refId: "user-alice",
         status: "active",
       },
       {
         id: generateId("principal"),
-        tenantId: tenant,
+        tenantId: tenant.id,
         kind: "user",
         refId: "user-bob",
         status: "active",
       },
       {
         id: generateId("principal"),
-        tenantId: tenant,
+        tenantId: tenant.id,
         kind: "agent",
         refId: "user-alice",
         status: "active",
       },
     ])
-    .returning({
-      id: intxSchema.principal.id,
-      kind: intxSchema.principal.kind,
-      refId: intxSchema.principal.refId,
-    });
+    .returning();
 
   const agentPrincipal = principals.find(
     (p) => p.kind === "agent" && p.refId === "user-alice",
@@ -301,15 +258,6 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
     };
   };
 
-  // The exact signature @corbits/mailbox-core takes, so a host mounting both
-  // cores hands the same function to both.
-  function resolvePrincipal(ctx: unknown): ResolvedPrincipal | null {
-    const user = (ctx as Context<AppEnv>).get("user");
-    if (!user) return null;
-    const principal = principals.find((p) => p.kind === "user" && p.refId === user.id);
-    return principal ? { tenantId: tenant, principalId: principal.id } : null;
-  }
-
   // A bare Interchange host: real sidecar router, real event-collector
   // registry. It runs no agent sessions, so its SessionService refuses every
   // launch verb rather than pretending to serve it.
@@ -329,10 +277,11 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
     endSession: refuse("endSession"),
   };
 
-  const identity = createIdentity(db);
-
   /** Build a host app with one ContentStore backend mounted. */
-  function buildApp(contentStore: ContentStore, isAdmin: () => Promise<boolean>) {
+  function buildApp(
+    contentStore: ContentStore,
+    authorize?: (resource: string, action: string) => boolean,
+  ) {
     const app = createApp({
       getSession,
       authHandler: () => new Response("", { status: 404 }),
@@ -349,14 +298,56 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
     // routes root-relative (`/artifacts*`, `/instances/:id/mail-attachments`),
     // so the host nests them in a sub-app and routes that at `/api`. Served
     // paths: `/api/artifacts*` — no `/v1` segment, no vendor prefix.
-    const api = new Hono<AppEnv>();
+    const api = new Hono<TenantEnv>();
+    // Place full tenant/principal rows from the hub session user. Signed-out
+    // (or unknown) callers leave the context empty so mountArtifacts applies
+    // the no-principal contract.
+    api.use("*", async (c, next) => {
+      const user = c.get("user");
+      if (user) {
+        const principal = principals.find(
+          (p) => p.kind === "user" && p.refId === user.id && p.status === "active",
+        );
+        if (principal) {
+          c.set("tenant", tenant);
+          c.set("principal", principal);
+        }
+      }
+      await next();
+    });
+    // The real evaluator: the platform's own `createRequireGrant`, backed by
+    // the real `grant` table via `createGrantStore(db)`. No existence-blind,
+    // no default-allow — a caller with no matching row in `grant` is refused,
+    // same as production. `authorize` remains for tests that want to force a
+    // specific answer without provisioning rows for it (e.g. "deny always").
+    const requireGrant: RequireGrant =
+      authorize === undefined
+        ? createRequireGrant({ grantStore: createGrantStore(hub.db), conditionRegistry: {} })
+        : (resource, action) => async (c, next) => {
+            const resolved =
+              typeof resource === "function"
+                ? resource({ param: (name) => c.req.param(name) })
+                : resource;
+            const allowed = authorize(resolved, action);
+            if (!allowed) {
+              return c.json(
+                {
+                  error: {
+                    code: "forbidden",
+                    message: "forbidden",
+                  },
+                },
+                403,
+              );
+            }
+            return next();
+          };
     mountArtifacts(api, {
       db,
       contentStore,
-      resolvePrincipal,
-      isAdmin,
-      identity,
+      requireGrant,
       decorate,
+      onArtifactCreated: grantOwnership,
     });
     const mounted = app.route("/api", api);
     // `Hono#request` may answer synchronously; normalize to a promise so every
@@ -367,14 +358,14 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
     };
   }
 
-  const defaultApp = buildApp(InlineContentStore, async () => false);
+  const defaultApp = buildApp(InlineContentStore);
 
   return {
     db,
-    tenantId: tenant,
+    tenantId: tenant.id,
     agentPrincipal,
     scope: () => ({
-      tenantId: tenant,
+      tenantId: tenant.id,
       principalId: principals.find((p) => p.kind === "user" && p.refId === "user-alice")!
         .id,
     }),
