@@ -187,6 +187,15 @@ export type CreateArtifactArgs = {
  * Create an artifact AND its version 1 in one transaction. Version 1 is
  * eager, never lazy: a pinned read of version 1 must resolve for every
  * artifact, including one that is never revised.
+ *
+ * Deliberately does no by-title lookup, so it never dedupes against an
+ * existing artifact of the same `(tenantId, kind, title)` — correct for its
+ * three current callers, which each mean "make a new one" regardless of what
+ * already has this title: the `POST /artifacts` route (`mount.ts`), the
+ * `artifact_link_file` tool (`linkFileArtifact` in `tools.ts`), and file
+ * uploads (`createFileArtifact` in `uploads.ts`). A caller that instead wants
+ * "find by title, or create if absent" — converging on one artifact instead
+ * of letting duplicates pile up — should use {@link findOrVersionArtifact}.
  */
 export async function createArtifact(
   tx: ArtifactTx,
@@ -236,13 +245,78 @@ export class ArtifactNotFoundError extends Error {
 }
 
 /**
- * Revise an artifact: bump `version`, append a history row. The artifact row is
- * locked `FOR UPDATE` so concurrent writers serialize instead of both computing
- * the same next version; the (artifactId, version) unique index is the second
- * half of that guard.
+ * The lock-and-write core of a revision, sharing a caller-supplied `tx` so it
+ * composes with a lock already held on that transaction (see
+ * `findOrVersionArtifact`) instead of opening a second one. The artifact row
+ * is locked `FOR UPDATE` so concurrent writers on the same id serialize
+ * instead of both computing the same next version; the (artifactId, version)
+ * unique index is the second half of that guard.
  *
  * Archived and skill-draft artifacts present as NOT FOUND — an agent holding a
  * stale id must not silently revise something the user put away.
+ */
+async function reviseArtifactVersion(
+  tx: ArtifactTx,
+  args: {
+    scope: ResolvedPrincipal;
+    artifactId: string;
+    title?: string;
+    content?: string;
+  },
+  now: Date,
+): Promise<ArtifactRow> {
+  const [existing] = await tx
+    .select()
+    .from(artifact)
+    .where(
+      and(
+        eq(artifact.id, args.artifactId),
+        eq(artifact.tenantId, args.scope.tenantId),
+      ),
+    )
+    .for("update")
+    .limit(1);
+
+  if (
+    !existing ||
+    existing.archivedAt !== null ||
+    existing.kind === SKILL_DRAFT_KIND
+  ) {
+    throw new ArtifactNotFoundError(args.artifactId);
+  }
+
+  const version = existing.version + 1;
+  const title = args.title ?? existing.title;
+  const content =
+    args.content === undefined
+      ? existing.content
+      : normalizeContentForKind(existing.kind, args.content);
+  if (args.content !== undefined) {
+    assertArtifactFieldSizes({ content });
+  }
+
+  const [updated] = await tx
+    .update(artifact)
+    .set({ title, content, version, updatedAt: now })
+    .where(eq(artifact.id, args.artifactId))
+    .returning();
+  if (!updated) throw new ArtifactNotFoundError(args.artifactId);
+
+  await tx.insert(artifactVersion).values({
+    artifactId: args.artifactId,
+    version,
+    title,
+    content,
+    authorId: args.scope.principalId,
+    createdAt: now,
+  });
+
+  return updated;
+}
+
+/**
+ * Revise an artifact: bump `version`, append a history row. See
+ * {@link reviseArtifactVersion} for the locking behavior.
  */
 export async function writeArtifactVersion(
   db: ArtifactDb,
@@ -262,51 +336,8 @@ export async function writeArtifactVersion(
   const now = new Date();
 
   return await db.transaction(async (tx) => {
-    const [existing] = await tx
-      .select()
-      .from(artifact)
-      .where(
-        and(
-          eq(artifact.id, args.artifactId),
-          eq(artifact.tenantId, args.scope.tenantId),
-        ),
-      )
-      .for("update")
-      .limit(1);
-
-    if (
-      !existing ||
-      existing.archivedAt !== null ||
-      existing.kind === SKILL_DRAFT_KIND
-    ) {
-      throw new ArtifactNotFoundError(args.artifactId);
-    }
-
-    const version = existing.version + 1;
-    const title = args.title ?? existing.title;
-    const content =
-      args.content === undefined
-        ? existing.content
-        : normalizeContentForKind(existing.kind, args.content);
-    if (args.content !== undefined) {
-      assertArtifactFieldSizes({ content });
-    }
-
-    await tx
-      .update(artifact)
-      .set({ title, content, version, updatedAt: now })
-      .where(eq(artifact.id, args.artifactId));
-
-    await tx.insert(artifactVersion).values({
-      artifactId: args.artifactId,
-      version,
-      title,
-      content,
-      authorId: args.scope.principalId,
-      createdAt: now,
-    });
-
-    return { artifactId: args.artifactId, version, title };
+    const row = await reviseArtifactVersion(tx, args, now);
+    return { artifactId: row.id, version: row.version, title: row.title };
   });
 }
 
@@ -605,9 +636,14 @@ export async function listArtifacts(
   return { rows, nextCursor: `${last.cursorAt}__${last.id}` };
 }
 
-/** Most recently updated visible artifact with this exact title, or null. */
-export async function findArtifactByTitle(
-  db: ArtifactDb,
+/**
+ * Shared by `findArtifactByTitle` and `findOrVersionArtifact` — the latter
+ * runs it against a transaction that already holds the find-or-version
+ * advisory lock, so it takes `ArtifactDb | ArtifactTx` rather than forcing a
+ * second, unlocked read.
+ */
+async function selectArtifactByTitle(
+  queryable: ArtifactDb | ArtifactTx,
   tenantId: string,
   title: string,
   kind?: string,
@@ -621,13 +657,126 @@ export async function findArtifactByTitle(
   ];
   if (kind !== undefined) conditions.push(eq(artifact.kind, kind));
 
-  const [row] = await db
+  const [row] = await queryable
     .select({ id: artifact.id, version: artifact.version })
     .from(artifact)
     .where(and(...conditions))
     .orderBy(desc(artifact.updatedAt))
     .limit(1);
   return row ? { artifactId: row.id, version: row.version } : null;
+}
+
+/** Most recently updated visible artifact with this exact title, or null. */
+export async function findArtifactByTitle(
+  db: ArtifactDb,
+  tenantId: string,
+  title: string,
+  kind?: string,
+): Promise<{ artifactId: string; version: number } | null> {
+  return selectArtifactByTitle(db, tenantId, title, kind);
+}
+
+/**
+ * Postgres advisory locks taken with the two-`int4`-argument form use a
+ * lock space that never collides with the single-`bigint`-argument form
+ * `runArtifactMigrations` uses (see `migrations.ts`'s `LOCK_KEY`) — Postgres
+ * guarantees the two spaces are disjoint. This namespace is therefore
+ * `findOrVersionArtifact`'s alone; it must never change (a live change would
+ * let a deployed writer stop serializing against an in-flight one).
+ */
+const FIND_OR_VERSION_LOCK_NAMESPACE = 0x0a27_1f05;
+
+export type FindOrVersionArtifactArgs = {
+  scope: ResolvedPrincipal;
+  /** The human who owns a newly created artifact; null for agents with no owning member. Ignored on the revise path — the existing artifact keeps its owner. */
+  ownerPrincipalId: string | null;
+  kind: string;
+  title: string;
+  content: string;
+  /** Ignored on the revise path — only a fresh artifact's provenance. */
+  source: Record<string, unknown>;
+};
+
+export type FindOrVersionArtifactResult = {
+  artifact: ArtifactRow;
+  /** Whether this call minted a new artifact or appended a version to one that already existed. */
+  outcome: "created" | "revised";
+};
+
+/**
+ * The atomic primitive behind "find an artifact by title, create it if
+ * absent, add a version if present." The schema's only uniqueness is
+ * (artifactId, version) — nothing constrains (tenantId, title, kind) — so a
+ * plain read-then-write of that pattern races: two callers can both see NOT
+ * FOUND and both create, leaving two artifacts with the same title. This
+ * closes that race INSIDE the package instead of leaving every consumer to
+ * hand-roll its own locking (as at least one already had to, with a database
+ * advisory lock wrapping the same lookup-and-write).
+ *
+ * The whole lookup-then-write runs in one transaction, serialized on a
+ * transaction-scoped advisory lock keyed by `(tenantId, kind, title)` (via
+ * `hashtext`, in the namespace above) — so two concurrent calls for the same
+ * triple never both pass the "does it exist" check before either writes.
+ *
+ * Collision semantics: the caller that acquires the lock first creates the
+ * artifact; every other concurrent caller for the same `(tenantId, kind,
+ * title)` blocks on the lock, then — once it can proceed — finds the row the
+ * first caller just committed and revises it instead of creating a second
+ * one. Two overlapping callers therefore always converge on ONE artifact:
+ * the first call's content becomes version 1, and the second's becomes
+ * version 2 (in whichever order the lock grants), never two rows with the
+ * same title. A caller for a *different* tenant, kind, or title is never
+ * blocked by this lock — the key is scoped to the exact triple.
+ *
+ * Archived and skill-draft artifacts are invisible to the lookup, same as
+ * `findArtifactByTitle`: an archived match does not get silently revived, and
+ * a skill-draft is never adopted as the target of a public write. Both cases
+ * create a fresh artifact instead.
+ */
+export async function findOrVersionArtifact(
+  db: ArtifactDb,
+  args: FindOrVersionArtifactArgs,
+): Promise<FindOrVersionArtifactResult> {
+  return await db.transaction(async (tx) => {
+    // Unit-separator-joined so ("ab", "c", "d") cannot hash the same as
+    // ("a", "bc", "d"). A collision would only cost an unrelated writer a
+    // needless wait, never an incorrect result -- the query below re-checks
+    // by real column equality -- but there is no reason to invite one.
+    const lockKey = `${args.scope.tenantId}${args.kind}${args.title}`;
+    await tx.execute(sql`
+      SELECT pg_advisory_xact_lock(${FIND_OR_VERSION_LOCK_NAMESPACE}, hashtext(${lockKey}))
+    `);
+
+    const existing = await selectArtifactByTitle(
+      tx,
+      args.scope.tenantId,
+      args.title,
+      args.kind,
+    );
+
+    if (existing) {
+      const row = await reviseArtifactVersion(
+        tx,
+        {
+          scope: args.scope,
+          artifactId: existing.artifactId,
+          content: args.content,
+        },
+        new Date(),
+      );
+      return { artifact: row, outcome: "revised" };
+    }
+
+    const row = await createArtifact(tx, {
+      scope: args.scope,
+      ownerPrincipalId: args.ownerPrincipalId,
+      kind: args.kind,
+      title: args.title,
+      content: args.content,
+      source: args.source,
+    });
+    return { artifact: row, outcome: "created" };
+  });
 }
 
 /**

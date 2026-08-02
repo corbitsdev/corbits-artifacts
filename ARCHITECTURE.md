@@ -154,7 +154,7 @@ which store is installed.
 | File | Role |
 | --- | --- |
 | `mount.ts` | HTTP surface: parsing, validation, status codes; reads `TenantEnv` principal; wires host `requireGrant`. |
-| `artifacts.ts` | The core domain — create, revise, list, get, archive, serialize. |
+| `artifacts.ts` | The core domain — create, revise, find-or-version, list, get, archive, serialize. |
 | `uploads.ts` | `createFileArtifact`, the MIME policies, and the size caps. |
 | `download.ts` | One download path over the three storage conventions. |
 | `content-store.ts` | The two shipped `ContentStore` implementations. |
@@ -208,6 +208,52 @@ version fail loudly rather than corrupt history.
 
 **Archival is a soft hide.** `archived_at` null means visible; a timestamp means
 hidden from discovery. Deep links to archived artifacts still load.
+
+**Find-or-version is a package primitive, not a constraint.** The only
+uniqueness the schema enforces is `(artifact_id, version)` — there is no
+constraint on `(tenant_id, title, kind)`, so "find by title, create if
+absent, add a version if present" is not naturally atomic: a plain
+read-then-write of that pattern races, and two concurrent callers can both
+observe NOT FOUND and both create, leaving two artifacts with the same
+title.
+
+A uniqueness constraint on `(tenant_id, title, kind)` was considered and
+rejected — not just for now, but structurally. `createArtifact` is a
+public, unconditional insert with no title lookup of its own, called
+directly by the import route, the upload path, and `artifact_link_file`.
+Two independent creates sharing a title is normal, intended behavior on
+every one of those paths — a coworker uploading `report.pdf` twice, or two
+agents each linking a file named `notes.md`, are not bugs. A hard
+`UNIQUE(tenant_id, title, kind)` constraint would reject those ordinary
+inserts outright, not just gate on a one-time backfill of legacy
+duplicates. Uniqueness on that triple is a property of the *find-or-version
+pattern specifically*, not an invariant of the table, so it does not belong
+in the schema — it belongs exactly where it now lives, inside the one code
+path that promises it.
+
+Separately, this package also has no way to confirm existing tenants are
+already free of duplicate `(title, kind)` rows, which would make even a
+scoped constraint risky to backfill. That is not the main reason for
+rejecting the constraint, and it is not by itself decisive. See
+`0003_schema_invariants` for this repo's own pattern for guarding a
+migration against exactly that kind of bad existing data.
+
+Instead, `findOrVersionArtifact(db, args)` (in `artifacts.ts`) closes the
+race with a transaction-scoped advisory lock keyed by
+`hashtext(tenantId, kind, title)`, in its own lock-space namespace (the
+two-`int4`-argument form of `pg_advisory_xact_lock`, disjoint from the
+single-`bigint` form `runArtifactMigrations` uses). Collision semantics:
+whichever concurrent caller acquires the lock first creates the artifact;
+every other caller for the identical `(tenantId, kind, title)` blocks, then
+finds the row the winner just committed and revises it. Two overlapping
+callers always converge on ONE artifact with two versions, never two rows —
+callers for a different tenant, kind, or title never contend with each
+other. This guarantee holds only for callers that go through
+`findOrVersionArtifact`; a caller that instead calls `createArtifact`
+directly is unconstrained by design, as above, and a caller that hand-rolls
+its own find-then-create against a *different* lock is not serialized
+against this one — the primitive closes the race for its own call path, not
+for every possible way to write an artifact.
 
 **`upload` is never a standalone resource.** There is no `POST /uploads`; every
 upload eagerly mints its artifact, and the row is reachable only through
