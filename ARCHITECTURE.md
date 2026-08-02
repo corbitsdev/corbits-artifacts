@@ -215,24 +215,29 @@ constraint on `(tenant_id, title, kind)`, so "find by title, create if
 absent, add a version if present" is not naturally atomic: a plain
 read-then-write of that pattern races, and two concurrent callers can both
 observe NOT FOUND and both create, leaving two artifacts with the same
-title. A uniqueness constraint on `(tenant_id, title, kind)` was considered
-and rejected — not just for now, but structurally: `createArtifact` is a
+title.
+
+A uniqueness constraint on `(tenant_id, title, kind)` was considered and
+rejected — not just for now, but structurally. `createArtifact` is a
 public, unconditional insert with no title lookup of its own, called
 directly by the import route, the upload path, and `artifact_link_file`.
 Two independent creates sharing a title is normal, intended behavior on
 every one of those paths — a coworker uploading `report.pdf` twice, or two
 agents each linking a file named `notes.md`, are not bugs. A hard
 `UNIQUE(tenant_id, title, kind)` constraint would reject those ordinary
-inserts outright, not just gate on a one-time backfill of legacy duplicates.
-Uniqueness on that triple is a property of the *find-or-version pattern
-specifically*, not an invariant of the table, so it does not belong in the
-schema — it belongs exactly where it now lives, inside the one code path
-that promises it. (Separately, this package also has no way to confirm
-existing tenants are already free of duplicate `(title, kind)` rows, which
-would make even a scoped constraint risky to backfill — but that is not the
-main reason, and is not by itself decisive: see `0003_schema_invariants` for
-this repo's own pattern for guarding a migration against exactly that kind
-of bad existing data.)
+inserts outright, not just gate on a one-time backfill of legacy
+duplicates. Uniqueness on that triple is a property of the *find-or-version
+pattern specifically*, not an invariant of the table, so it does not belong
+in the schema — it belongs exactly where it now lives, inside the one code
+path that promises it.
+
+Separately, this package also has no way to confirm existing tenants are
+already free of duplicate `(title, kind)` rows, which would make even a
+scoped constraint risky to backfill. That is not the main reason for
+rejecting the constraint, and it is not by itself decisive. See
+`0003_schema_invariants` for this repo's own pattern for guarding a
+migration against exactly that kind of bad existing data.
+
 Instead, `findOrVersionArtifact(db, args)` (in `artifacts.ts`) closes the
 race with a transaction-scoped advisory lock keyed by
 `hashtext(tenantId, kind, title)`, in its own lock-space namespace (the

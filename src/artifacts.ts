@@ -187,6 +187,15 @@ export type CreateArtifactArgs = {
  * Create an artifact AND its version 1 in one transaction. Version 1 is
  * eager, never lazy: a pinned read of version 1 must resolve for every
  * artifact, including one that is never revised.
+ *
+ * Deliberately does no by-title lookup, so it never dedupes against an
+ * existing artifact of the same `(tenantId, kind, title)` — correct for its
+ * three current callers, which each mean "make a new one" regardless of what
+ * already has this title: the `POST /artifacts` route (`mount.ts`), the
+ * `artifact_link_file` tool (`linkFileArtifact` in `tools.ts`), and file
+ * uploads (`createFileArtifact` in `uploads.ts`). A caller that instead wants
+ * "find by title, or create if absent" — converging on one artifact instead
+ * of letting duplicates pile up — should use {@link findOrVersionArtifact}.
  */
 export async function createArtifact(
   tx: ArtifactTx,

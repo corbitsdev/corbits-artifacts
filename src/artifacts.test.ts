@@ -438,6 +438,44 @@ describe("find-or-version", () => {
       .where(eq(artifactVersion.artifactId, first.artifact.id));
     expect(versions.length).toBe(2);
   });
+
+  // Beyond the two-caller case above: each blocked caller is meant to drain
+  // sequentially off the lock and re-read after the previous commit, no
+  // matter how many are queued up. Five is enough to prove that generalizes
+  // without slowing CI down.
+  test("five concurrent calls for the same (tenant, kind, title) converge on one artifact", async () => {
+    const db = await testDb();
+    const callerCount = 5;
+
+    const results = await Promise.all(
+      Array.from({ length: callerCount }, (_, i) =>
+        findOrVersionArtifact(db, {
+          scope: SCOPE,
+          ownerPrincipalId: SCOPE.principalId,
+          kind: "document",
+          title: "Report",
+          content: `from caller ${i}`,
+          source: { origin: "agent" },
+        }),
+      ),
+    );
+
+    const artifactIds = new Set(results.map((r) => r.artifact.id));
+    expect(artifactIds.size).toBe(1);
+    expect(results.filter((r) => r.outcome === "created").length).toBe(1);
+    expect(results.filter((r) => r.outcome === "revised").length).toBe(callerCount - 1);
+    expect(results.map((r) => r.artifact.version).sort((a, b) => a - b)).toEqual([
+      1, 2, 3, 4, 5,
+    ]);
+
+    const rows = await db.select().from(artifact).where(eq(artifact.tenantId, "acme"));
+    expect(rows.length).toBe(1);
+    const versions = await db
+      .select()
+      .from(artifactVersion)
+      .where(eq(artifactVersion.artifactId, results[0]!.artifact.id));
+    expect(versions.length).toBe(callerCount);
+  });
 });
 
 describe("serialization", () => {
