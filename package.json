@@ -64,18 +64,16 @@
     "@hono/standard-validator": "^0.2.3"
   },
   "peerDependencies": {
-    "@intx/hub-api": "^0.2.2",
-    "@intx/types": "^0.2.2",
+    "@intx/types": "^0.3.0",
     "arktype": "^2.1.29",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.32",
     "hono-openapi": "^1.2.0",
-    "postgres": "^3.4.9"
+    "postgres": "^3.4.9",
+    "@intx/hub-api": "^0.3.0"
   },
   "devDependencies": {
-    "@intx/authz": "0.2.2",
-    "@intx/hub-api": "0.2.2",
-    "@intx/types": "0.2.2",
+    "@intx/types": "0.3.0",
     "@types/bun": "1.1.14",
     "@types/node": "22.10.5",
     "arktype": "2.1.29",
@@ -83,7 +81,9 @@
     "hono": "4.12.32",
     "hono-openapi": "1.2.0",
     "postgres": "3.4.9",
-    "typescript": "5.7.2"
+    "typescript": "5.7.2",
+    "@intx/hub-api": "0.3.0",
+    "@intx/authz": "0.3.0"
   },
   "overrides": {
     "drizzle-orm": "0.45.2"
