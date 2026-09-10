@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import {
   ArtifactNotFoundError,
   ArtifactSizeError,
+  ArtifactValidationError,
   createArtifact,
   findArtifactByTitle,
   findOrVersionArtifact,
@@ -25,7 +26,13 @@ describe("create", () => {
 
     expect(row.version).toBe(1);
     const pinned = await getArtifactVersion(db, row.id, 1);
-    expect(pinned).toEqual({ title: "Brief", content: "first", version: 1 });
+    expect(pinned).toEqual({
+      title: "Brief",
+      content: "first",
+      version: 1,
+      metadata: null,
+      parentVersionIds: null,
+    });
   });
 
   test("refuses to mint a skill-draft", async () => {
@@ -520,6 +527,150 @@ describe("version history isolation", () => {
       .from(artifactVersion)
       .where(and(eq(artifactVersion.artifactId, b.id)));
     expect(bRows.length).toBe(1);
+  });
+});
+
+describe("version metadata and lineage", () => {
+  test("round-trips metadata and parentVersionIds on create, mirrored onto the artifact row", async () => {
+    const db = await testDb();
+    const row = await db.transaction((tx) =>
+      createArtifact(tx, {
+        scope: SCOPE,
+        ownerPrincipalId: null,
+        kind: "document",
+        title: "Brief",
+        content: "v1",
+        source: { origin: "manual" },
+        metadata: { tag: "draft" },
+        parentVersionIds: ["ancestor-1"],
+      }),
+    );
+
+    expect(row.metadata).toEqual({ tag: "draft" });
+
+    const pinned = await getArtifactVersion(db, row.id, 1);
+    expect(pinned?.metadata).toEqual({ tag: "draft" });
+    expect(pinned?.parentVersionIds).toEqual(["ancestor-1"]);
+
+    const detail = serializeArtifact(row);
+    expect(detail.metadata).toEqual({ tag: "draft" });
+  });
+
+  test("writeArtifactVersion carries metadata forward when omitted, but never carries parentVersionIds forward", async () => {
+    const db = await testDb();
+    const row = await db.transaction((tx) =>
+      createArtifact(tx, {
+        scope: SCOPE,
+        ownerPrincipalId: null,
+        kind: "document",
+        title: "Brief",
+        content: "v1",
+        source: { origin: "manual" },
+        metadata: { tag: "draft" },
+        parentVersionIds: ["ancestor-1"],
+      }),
+    );
+
+    const second = await writeArtifactVersion(db, {
+      scope: SCOPE,
+      artifactId: row.id,
+      content: "v2",
+    });
+    expect(second.metadata).toEqual({ tag: "draft" });
+
+    const v2 = await getArtifactVersion(db, row.id, 2);
+    expect(v2?.metadata).toEqual({ tag: "draft" });
+    expect(v2?.parentVersionIds).toBeNull();
+
+    const third = await writeArtifactVersion(db, {
+      scope: SCOPE,
+      artifactId: row.id,
+      content: "v3",
+      metadata: { tag: "final" },
+      parentVersionIds: ["v1-id", "v2-id"],
+    });
+    expect(third.metadata).toEqual({ tag: "final" });
+    const v3 = await getArtifactVersion(db, row.id, 3);
+    expect(v3?.parentVersionIds).toEqual(["v1-id", "v2-id"]);
+  });
+
+  test("findOrVersionArtifact passes metadata and parentVersionIds through both outcomes", async () => {
+    const db = await testDb();
+    const created = await findOrVersionArtifact(db, {
+      scope: SCOPE,
+      ownerPrincipalId: null,
+      kind: "document",
+      title: "Report",
+      content: "v1",
+      source: { origin: "workflow" },
+      metadata: { origin: "pipeline" },
+    });
+    expect(created.outcome).toBe("created");
+    expect(created.artifact.metadata).toEqual({ origin: "pipeline" });
+
+    const revised = await findOrVersionArtifact(db, {
+      scope: SCOPE,
+      ownerPrincipalId: null,
+      kind: "document",
+      title: "Report",
+      content: "v2",
+      source: { origin: "workflow" },
+      parentVersionIds: [created.artifact.id],
+    });
+    expect(revised.outcome).toBe("revised");
+    expect(revised.artifact.metadata).toEqual({ origin: "pipeline" });
+    const revisedVersion = await getArtifactVersion(
+      db,
+      revised.artifact.id,
+      revised.artifact.version,
+    );
+    expect(revisedVersion?.parentVersionIds).toEqual([created.artifact.id]);
+  });
+
+  test("listArtifactVersions returns metadata and parentVersionIds per version", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db, { title: "Draft", content: "v1" });
+    await writeArtifactVersion(db, {
+      scope: SCOPE,
+      artifactId: row.id,
+      content: "v2",
+      metadata: { step: 2 },
+      parentVersionIds: [row.id],
+    });
+
+    const history = await listArtifactVersions(db, row.id);
+    const v2 = history.versions.find((v) => v.version === 2);
+    expect(v2?.metadata).toEqual({ step: 2 });
+    expect(v2?.parentVersionIds).toEqual([row.id]);
+    const v1 = history.versions.find((v) => v.version === 1);
+    expect(v1?.metadata).toBeNull();
+    expect(v1?.parentVersionIds).toBeNull();
+  });
+
+  test("rejects a non-object metadata and a non-string-array parentVersionIds", async () => {
+    const db = await testDb();
+    await expect(
+      db.transaction((tx) =>
+        createArtifact(tx, {
+          scope: SCOPE,
+          ownerPrincipalId: null,
+          kind: "document",
+          title: "x",
+          content: "y",
+          source: { origin: "manual" },
+          metadata: ["not", "an", "object"] as unknown as Record<string, unknown>,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(ArtifactValidationError);
+
+    await expect(
+      writeArtifactVersion(db, {
+        scope: SCOPE,
+        artifactId: (await seedArtifact(db)).id,
+        content: "z",
+        parentVersionIds: [1, 2] as unknown as string[],
+      }),
+    ).rejects.toBeInstanceOf(ArtifactValidationError);
   });
 });
 

@@ -194,6 +194,31 @@ export const MIGRATIONS: Migration[] = [
       `,
     ],
   },
+  {
+    // `metadata` is opaque-to-the-package jsonb: `artifact_version` carries it
+    // per version, and `artifact` mirrors the current version's value the same
+    // way it already mirrors `title`/`content`/`version`. `parent_version_ids`
+    // is explicit lineage set by the writer, never inferred from version
+    // order, so it lives only on `artifact_version` — there is no "current
+    // parents" concept to mirror onto `artifact`. Both columns are nullable
+    // and additive: `ADD COLUMN IF NOT EXISTS` is safe to re-run and an
+    // existing database adopts cleanly with no backfill.
+    id: "0004_version_metadata",
+    statements: [
+      sql`
+        ALTER TABLE "artifacts"."artifact"
+          ADD COLUMN IF NOT EXISTS "metadata" jsonb
+      `,
+      sql`
+        ALTER TABLE "artifacts"."artifact_version"
+          ADD COLUMN IF NOT EXISTS "metadata" jsonb
+      `,
+      sql`
+        ALTER TABLE "artifacts"."artifact_version"
+          ADD COLUMN IF NOT EXISTS "parent_version_ids" text[]
+      `,
+    ],
+  },
 ];
 
 // Advisory locks are namespaced by this integer alone; deliberately arbitrary
@@ -281,6 +306,7 @@ const EXPECTED_OWNED_SHAPE: Readonly<Record<string, readonly ExpectedColumn[]>> 
       { name: "archived_at", udt: "timestamptz" },
       { name: "created_at", udt: "timestamptz" },
       { name: "updated_at", udt: "timestamptz" },
+      { name: "metadata", udt: "jsonb" },
     ],
     artifact_version: [
       { name: "id", udt: "text" },
@@ -290,6 +316,8 @@ const EXPECTED_OWNED_SHAPE: Readonly<Record<string, readonly ExpectedColumn[]>> 
       { name: "content", udt: "text" },
       { name: "author_id", udt: "text" },
       { name: "created_at", udt: "timestamptz" },
+      { name: "metadata", udt: "jsonb" },
+      { name: "parent_version_ids", udt: "_text" },
     ],
     upload: [
       { name: "id", udt: "text" },

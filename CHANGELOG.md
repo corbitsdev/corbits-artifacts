@@ -11,6 +11,17 @@ always called out under their own heading.
 
 ### Added
 
+- `artifact_version.metadata` (jsonb, nullable) and
+  `artifact_version.parent_version_ids` (text[], nullable), added by the new
+  `0004_version_metadata` migration. `metadata` is opaque to the package —
+  stored and returned as-is on every version read — and `artifact.metadata`
+  mirrors the current version's value the same way `title`/`content`/
+  `version` already do. `parentVersionIds` is explicit lineage set by the
+  writer and is never inferred from version order or carried forward between
+  versions. `createArtifact`, `writeArtifactVersion`, and
+  `findOrVersionArtifact` all accept optional `metadata` and
+  `parentVersionIds`; `getArtifactVersion` and `listArtifactVersions` return
+  both fields alongside each version.
 - `findOrVersionArtifact(db, args)` — the atomic primitive behind "find an
   artifact by title, create it if absent, add a version if present." The
   schema's only uniqueness is `(artifactId, version)`; nothing constrains
