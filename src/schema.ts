@@ -73,6 +73,13 @@ export const artifact = artifactsSchema.table(
     content: text("content").notNull(),
     source: jsonb("source"),
     version: integer("version").notNull().default(1),
+    /**
+     * Mirrors the current version's `artifact_version.metadata` — the same
+     * opaque-to-the-package jsonb, kept in lockstep the way `title`/`content`/
+     * `version` already mirror the current version row. Never validated or
+     * interpreted here.
+     */
+    metadata: jsonb("metadata"),
     /** Soft-archive: null = visible, a timestamp = hidden from discovery. */
     archivedAt: timestamp("archived_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -108,6 +115,10 @@ export const artifactVersion = artifactsSchema.table(
     title: text("title").notNull(),
     content: text("content").notNull(),
     authorId: text("author_id").notNull(),
+    /** Opaque to the package: stored and returned as-is, never interpreted. */
+    metadata: jsonb("metadata"),
+    /** Explicit lineage set by the writer — never inferred from version order. */
+    parentVersionIds: text("parent_version_ids").array(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

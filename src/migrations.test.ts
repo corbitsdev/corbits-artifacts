@@ -635,4 +635,93 @@ describe("migrations", () => {
     await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
     await runArtifactMigrations(db);
   });
+
+  test("0004_version_metadata adds metadata and parent_version_ids columns", async () => {
+    assertDestructiveArtifactTestsAllowed(DATABASE_URL);
+    await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
+    await runArtifactMigrations(db);
+
+    const columns = await db.execute<{
+      table_name: string;
+      column_name: string;
+      udt_name: string;
+    }>(sql`
+      SELECT table_name, column_name, udt_name
+      FROM information_schema.columns
+      WHERE table_schema = ${SCHEMA}
+        AND table_name IN ('artifact', 'artifact_version')
+        AND column_name IN ('metadata', 'parent_version_ids')
+      ORDER BY table_name, column_name
+    `);
+    expect([...columns]).toEqual([
+      { table_name: "artifact", column_name: "metadata", udt_name: "jsonb" },
+      {
+        table_name: "artifact_version",
+        column_name: "metadata",
+        udt_name: "jsonb",
+      },
+      {
+        table_name: "artifact_version",
+        column_name: "parent_version_ids",
+        udt_name: "_text",
+      },
+    ]);
+
+    const ledger = await db.execute<{ id: string }>(
+      sql`SELECT "id" FROM ${sql.identifier(SCHEMA)}.${sql.identifier(LEDGER)} ORDER BY "id"`,
+    );
+    expect(ledger.map((r) => r.id)).toContain("0004_version_metadata");
+  });
+
+  test("adopting a 0003-only database applies 0004's new columns forward", async () => {
+    assertDestructiveArtifactTestsAllowed(DATABASE_URL);
+    await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
+
+    // Build a database that only ever saw migrations through 0003 — the shape
+    // an existing production database has before this change ships.
+    const upTo0003 = MIGRATIONS.filter((m) => m.id !== "0004_version_metadata");
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`CREATE SCHEMA IF NOT EXISTS ${sql.identifier(SCHEMA)}`);
+      await tx.execute(sql`
+        CREATE TABLE IF NOT EXISTS ${sql.identifier(SCHEMA)}.${sql.identifier(LEDGER)} (
+          "id" text PRIMARY KEY,
+          "checksum" text NOT NULL,
+          "applied_at" timestamptz NOT NULL DEFAULT now()
+        )
+      `);
+      for (const migration of upTo0003) {
+        for (const statement of migration.statements) {
+          await tx.execute(statement);
+        }
+        await tx.execute(sql`
+          INSERT INTO ${sql.identifier(SCHEMA)}.${sql.identifier(LEDGER)}
+            ("id", "checksum")
+          VALUES (${migration.id}, ${migrationChecksum(migration)})
+        `);
+      }
+    });
+
+    // Running the full migration set adopts the new migration cleanly: no
+    // adopt flag needed, since the ledger already has real rows for 0001-0003
+    // and only 0004 is missing — the ordinary "apply what's new" path.
+    await runArtifactMigrations(db);
+
+    const ledger = await db.execute<{ id: string }>(
+      sql`SELECT "id" FROM ${sql.identifier(SCHEMA)}.${sql.identifier(LEDGER)} ORDER BY "id"`,
+    );
+    expect(ledger.map((r) => r.id)).toEqual(MIGRATIONS.map((m) => m.id));
+
+    const columns = await db.execute<{ column_name: string }>(sql`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_schema = ${SCHEMA} AND table_name = 'artifact_version'
+        AND column_name IN ('metadata', 'parent_version_ids')
+    `);
+    expect(columns.map((c) => c.column_name).sort()).toEqual([
+      "metadata",
+      "parent_version_ids",
+    ]);
+
+    await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
+    await runArtifactMigrations(db);
+  });
 });

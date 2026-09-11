@@ -87,6 +87,40 @@ const JsonObject = type("object").narrow(
   (value): value is Record<string, unknown> => !Array.isArray(value),
 );
 
+// `metadata` is opaque to the package: any JSON object is accepted and
+// returned as-is, never interpreted. `parentVersionIds` is explicit lineage —
+// a plain array of ids, never inferred from version order.
+const MetadataShape = JsonObject;
+const ParentVersionIdsShape = type("string[]");
+
+export class ArtifactValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ArtifactValidationError";
+  }
+}
+
+/** Reject a malformed `metadata` or `parentVersionIds` before they hit the database. */
+export function assertVersionMetadataShape(fields: {
+  metadata?: unknown;
+  parentVersionIds?: unknown;
+}): void {
+  if (fields.metadata !== undefined && fields.metadata !== null) {
+    const result = MetadataShape(fields.metadata);
+    if (result instanceof type.errors) {
+      throw new ArtifactValidationError(`Invalid metadata: ${result.summary}`);
+    }
+  }
+  if (fields.parentVersionIds !== undefined && fields.parentVersionIds !== null) {
+    const result = ParentVersionIdsShape(fields.parentVersionIds);
+    if (result instanceof type.errors) {
+      throw new ArtifactValidationError(
+        `Invalid parentVersionIds: ${result.summary}`,
+      );
+    }
+  }
+}
+
 /**
  * A null source, one that is not a JSON object at all, or one with an
  * unrecognized origin, all read as `unknown`.
@@ -116,6 +150,8 @@ export type SerializedArtifactBase = {
   source: Record<string, unknown> & { origin: string };
   version: number;
   ownerPrincipalId: string | null;
+  /** Mirrors the current version's `artifact_version.metadata`, opaque to the package. */
+  metadata: Record<string, unknown> | null;
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -145,6 +181,7 @@ function serializeArtifactBase(
     source: normalizeSource(row.source),
     version: row.version,
     ownerPrincipalId: row.ownerPrincipalId,
+    metadata: (row.metadata as Record<string, unknown> | null) ?? null,
     archivedAt: row.archivedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -181,6 +218,10 @@ export type CreateArtifactArgs = {
   title: string;
   content: string;
   source: Record<string, unknown>;
+  /** Opaque to the package; stored and returned as-is on every version read. */
+  metadata?: Record<string, unknown> | null;
+  /** Explicit lineage for version 1 — never inferred from order. */
+  parentVersionIds?: string[] | null;
 };
 
 /**
@@ -206,6 +247,12 @@ export async function createArtifact(
   }
   const content = normalizeContentForKind(args.kind, args.content);
   assertArtifactFieldSizes({ title: args.title, content });
+  assertVersionMetadataShape({
+    metadata: args.metadata,
+    parentVersionIds: args.parentVersionIds,
+  });
+  const metadata = args.metadata ?? null;
+  const parentVersionIds = args.parentVersionIds ?? null;
   const now = new Date();
 
   const [row] = await tx
@@ -219,6 +266,7 @@ export async function createArtifact(
       content,
       source: args.source,
       version: 1,
+      metadata,
       createdAt: now,
       updatedAt: now,
     })
@@ -231,6 +279,8 @@ export async function createArtifact(
     title: args.title,
     content,
     authorId: args.scope.principalId,
+    metadata,
+    parentVersionIds,
     createdAt: now,
   });
 
@@ -262,9 +312,17 @@ async function reviseArtifactVersion(
     artifactId: string;
     title?: string;
     content?: string;
+    /** Opaque to the package; undefined carries the prior version's metadata forward. */
+    metadata?: Record<string, unknown> | null;
+    /** Explicit lineage for this version — never inferred, never carried forward. */
+    parentVersionIds?: string[] | null;
   },
   now: Date,
 ): Promise<ArtifactRow> {
+  assertVersionMetadataShape({
+    metadata: args.metadata,
+    parentVersionIds: args.parentVersionIds,
+  });
   const [existing] = await tx
     .select()
     .from(artifact)
@@ -294,10 +352,15 @@ async function reviseArtifactVersion(
   if (args.content !== undefined) {
     assertArtifactFieldSizes({ content });
   }
+  const metadata =
+    args.metadata === undefined
+      ? (existing.metadata as Record<string, unknown> | null)
+      : args.metadata;
+  const parentVersionIds = args.parentVersionIds ?? null;
 
   const [updated] = await tx
     .update(artifact)
-    .set({ title, content, version, updatedAt: now })
+    .set({ title, content, version, metadata, updatedAt: now })
     .where(eq(artifact.id, args.artifactId))
     .returning();
   if (!updated) throw new ArtifactNotFoundError(args.artifactId);
@@ -308,6 +371,8 @@ async function reviseArtifactVersion(
     title,
     content,
     authorId: args.scope.principalId,
+    metadata,
+    parentVersionIds,
     createdAt: now,
   });
 
@@ -325,8 +390,17 @@ export async function writeArtifactVersion(
     artifactId: string;
     title?: string;
     content?: string;
+    /** Opaque to the package; omit to carry the prior version's metadata forward. */
+    metadata?: Record<string, unknown> | null;
+    /** Explicit lineage for this version — never inferred from order. */
+    parentVersionIds?: string[] | null;
   },
-): Promise<{ artifactId: string; version: number; title: string }> {
+): Promise<{
+  artifactId: string;
+  version: number;
+  title: string;
+  metadata: Record<string, unknown> | null;
+}> {
   if (args.title === undefined && args.content === undefined) {
     throw new Error("Provide content and/or title to revise the artifact");
   }
@@ -337,7 +411,12 @@ export async function writeArtifactVersion(
 
   return await db.transaction(async (tx) => {
     const row = await reviseArtifactVersion(tx, args, now);
-    return { artifactId: row.id, version: row.version, title: row.title };
+    return {
+      artifactId: row.id,
+      version: row.version,
+      title: row.title,
+      metadata: (row.metadata as Record<string, unknown> | null) ?? null,
+    };
   });
 }
 
@@ -358,12 +437,20 @@ export async function getArtifactVersion(
   db: ArtifactDb,
   artifactId: string,
   version: number,
-): Promise<{ title: string; content: string; version: number } | null> {
+): Promise<{
+  title: string;
+  content: string;
+  version: number;
+  metadata: Record<string, unknown> | null;
+  parentVersionIds: string[] | null;
+} | null> {
   const [row] = await db
     .select({
       title: artifactVersion.title,
       content: artifactVersion.content,
       version: artifactVersion.version,
+      metadata: artifactVersion.metadata,
+      parentVersionIds: artifactVersion.parentVersionIds,
     })
     .from(artifactVersion)
     .where(
@@ -373,7 +460,12 @@ export async function getArtifactVersion(
       ),
     )
     .limit(1);
-  return row ?? null;
+  if (!row) return null;
+  return {
+    ...row,
+    metadata: (row.metadata as Record<string, unknown> | null) ?? null,
+    parentVersionIds: row.parentVersionIds ?? null,
+  };
 }
 
 export type ArtifactVersionListItem = {
@@ -381,6 +473,8 @@ export type ArtifactVersionListItem = {
   title: string;
   authorId: string;
   createdAt: string;
+  metadata: Record<string, unknown> | null;
+  parentVersionIds: string[] | null;
 };
 
 export type ListArtifactVersionsFilters = {
@@ -409,6 +503,8 @@ export async function listArtifactVersions(
       title: artifactVersion.title,
       authorId: artifactVersion.authorId,
       createdAt: artifactVersion.createdAt,
+      metadata: artifactVersion.metadata,
+      parentVersionIds: artifactVersion.parentVersionIds,
     })
     .from(artifactVersion)
     .where(and(...conditions))
@@ -419,6 +515,8 @@ export async function listArtifactVersions(
   const versions = page.map((r) => ({
     ...r,
     createdAt: r.createdAt.toISOString(),
+    metadata: (r.metadata as Record<string, unknown> | null) ?? null,
+    parentVersionIds: r.parentVersionIds ?? null,
   }));
   if (fetched.length <= limit) return { versions, nextCursor: null };
   const last = page[page.length - 1]!;
@@ -695,6 +793,10 @@ export type FindOrVersionArtifactArgs = {
   content: string;
   /** Ignored on the revise path — only a fresh artifact's provenance. */
   source: Record<string, unknown>;
+  /** Opaque to the package; omit on revise to carry the prior version's metadata forward. */
+  metadata?: Record<string, unknown> | null;
+  /** Explicit lineage for this version — never inferred from order. */
+  parentVersionIds?: string[] | null;
 };
 
 export type FindOrVersionArtifactResult = {
@@ -761,6 +863,8 @@ export async function findOrVersionArtifact(
           scope: args.scope,
           artifactId: existing.artifactId,
           content: args.content,
+          metadata: args.metadata,
+          parentVersionIds: args.parentVersionIds,
         },
         new Date(),
       );
@@ -774,6 +878,8 @@ export async function findOrVersionArtifact(
       title: args.title,
       content: args.content,
       source: args.source,
+      metadata: args.metadata,
+      parentVersionIds: args.parentVersionIds,
     });
     return { artifact: row, outcome: "created" };
   });

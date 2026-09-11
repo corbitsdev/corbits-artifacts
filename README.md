@@ -135,6 +135,16 @@ content server-side; only the response projection changes.
 last version number returned (newest-first). Version rows omit content; use
 `GET /api/artifacts/:id?version=N` (or `getArtifactVersion`) for a pinned body.
 
+**Version metadata and lineage:** each version optionally carries `metadata` (any JSON
+object, opaque to the package — stored and returned as-is) and `parentVersionIds` (an
+explicit array of ids the writer supplies; never inferred from version order).
+`createArtifact`, `writeArtifactVersion`, and `findOrVersionArtifact` all accept both as
+optional arguments; `getArtifactVersion` and `listArtifactVersions` return both on every
+version. Omitting `metadata` on a revision carries the previous version's value forward,
+the same way an omitted `title`/`content` does; `parentVersionIds` is never carried
+forward — a version with no explicit parents simply has none. `artifact.metadata` mirrors
+the current version's value, same as `title`/`content`/`version` already do.
+
 **Write size limits:** create and revise reject titles longer than 512 characters and
 content larger than 15 MiB UTF-8 (`ArtifactSizeError` / HTTP 400). JSON mutators also
 refuse a declared `Content-Length` over that same 15 MiB ceiling with HTTP 413 before
