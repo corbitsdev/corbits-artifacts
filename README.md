@@ -461,6 +461,8 @@ bun run build            # dist/ (JS + .d.ts)
 bun run test:acceptance  # builds, then the acceptance scenarios
 ```
 
+The reference host is not a workspace: run `bun install --cwd examples/reference-host` once before `test:acceptance`.
+
 `test:acceptance` builds first because the reference host consumes the built `dist` the
 way a real consumer would — running it against stale output is how a green acceptance
 run stops meaning anything.
