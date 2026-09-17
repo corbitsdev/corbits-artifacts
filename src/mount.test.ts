@@ -71,6 +71,7 @@ type HostOpts = {
   authorize?: (resource: string, action: string) => boolean;
   decorate?: MountArtifactsOpts["decorate"];
   contentStore?: MountArtifactsOpts["contentStore"];
+  countSegments?: MountArtifactsOpts["countSegments"];
 };
 
 function host(db: ArtifactDb, opts: HostOpts = {}) {
@@ -125,6 +126,7 @@ function host(db: ArtifactDb, opts: HostOpts = {}) {
     contentStore: opts.contentStore ?? InlineContentStore,
     requireGrant,
     ...(opts.decorate ? { decorate: opts.decorate } : {}),
+    ...(opts.countSegments ? { countSegments: opts.countSegments } : {}),
   });
 }
 
@@ -1420,5 +1422,96 @@ describe("hardening regressions", () => {
     });
     const res = await app.request(`/artifacts/${row.id}/download`);
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
+  });
+});
+
+describe("GET /artifacts/counts", () => {
+  test("answers just `all` when the host mounts with no countSegments", async () => {
+    const db = await testDb();
+    await seedArtifact(db);
+    await seedArtifact(db);
+    const app = host(db);
+
+    const res = await app.request("/artifacts/counts");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ all: 2 });
+  });
+
+  test("tallies per host-supplied predicate", async () => {
+    const db = await testDb();
+    await seedArtifact(db, { kind: "document" });
+    await seedArtifact(db, { kind: "sheet" });
+    await seedArtifact(db, { kind: "sheet" });
+    const app = host(db, {
+      countSegments: {
+        document: (row) => row.kind === "document",
+        sheet: (row) => row.kind === "sheet",
+      },
+    });
+
+    const res = await app.request("/artifacts/counts");
+    expect(await res.json()).toEqual({ all: 3, document: 1, sheet: 2 });
+  });
+
+  test("403s with no resolvable principal, matching every other collection-adjacent route's auth story here", async () => {
+    const db = await testDb();
+    const app = host(db, { principal: null });
+    const res = await app.request("/artifacts/counts");
+    expect(res.status).toBe(403);
+  });
+
+  test("counts.artifacts.counts route wins over the :id param route (no id='counts' collision)", async () => {
+    const db = await testDb();
+    await seedArtifact(db);
+    const app = host(db);
+
+    const res = await app.request("/artifacts/counts");
+    expect(res.status).toBe(200);
+    // A 200 with the counts shape (not a 404 "Artifact not found") proves the
+    // static route won, not `GET /artifacts/:id` with id="counts".
+    expect(await res.json()).toHaveProperty("all");
+  });
+});
+
+describe("GET /artifacts/:id/preview", () => {
+  test("serves an HTML file artifact's body with the locked-down preview CSP", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const form = new FormData();
+    form.append("file", new File(["<h1>hi</h1>"], "page.html", { type: "text/html" }));
+    const up = await app.request("/artifacts/upload", { method: "POST", body: form });
+    const { artifacts } = (await up.json()) as { artifacts: { id: string }[] };
+
+    const res = await app.request(`/artifacts/${artifacts[0]!.id}/preview`);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("<h1>hi</h1>");
+    expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    expect(res.headers.get("content-security-policy")).toContain("sandbox allow-scripts");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("x-frame-options")).toBeNull();
+  });
+
+  test("415s a non-HTML artifact instead of serving it", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const row = await seedArtifact(db, { kind: "document", content: "plain text" });
+
+    const res = await app.request(`/artifacts/${row.id}/preview`);
+    expect(res.status).toBe(415);
+  });
+
+  test("404s a nonexistent id, same as the detail route", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const res = await app.request("/artifacts/does-not-exist/preview");
+    expect(res.status).toBe(404);
+  });
+
+  test("404s another tenant's artifact", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const foreign = await seedArtifact(db, { tenantId: "other", kind: "document" });
+    const res = await app.request(`/artifacts/${foreign.id}/preview`);
+    expect(res.status).toBe(404);
   });
 });

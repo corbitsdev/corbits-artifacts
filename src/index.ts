@@ -2,6 +2,21 @@
 export { mountArtifacts } from "./mount.js";
 export type { MountArtifactsOpts } from "./mount.js";
 
+export { mountWorkflowArtifacts } from "./workflow-mount.js";
+export type {
+  CreatedWorkflowArtifact,
+  MountWorkflowArtifactsOpts,
+  ResolvedWorkflowRunScope,
+  WorkflowArtifactEnv,
+  WorkflowRunResolver,
+} from "./workflow-mount.js";
+
+export { ArtifactCountsIncompleteError, countArtifactsBySegments, MAX_COUNT_PAGES } from "./counts.js";
+export type { ArtifactCounts, ArtifactCountSegments } from "./counts.js";
+
+export { artifactPreviewHeaders, resolveArtifactPreview } from "./preview.js";
+export type { ArtifactPreviewResult } from "./preview.js";
+
 export { runArtifactMigrations, MigrationChecksumError, MigrationAdoptError } from "./migrations.js";
 export type { RunArtifactMigrationsOptions } from "./migrations.js";
 
