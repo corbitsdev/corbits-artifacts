@@ -58,7 +58,7 @@ export async function countArtifactsBySegments(
     for (const row of page.rows) {
       all += 1;
       for (const [name, predicate] of Object.entries(segments)) {
-        if (predicate(row)) bySegment[name] += 1;
+        if (predicate(row)) bySegment[name] = (bySegment[name] ?? 0) + 1;
       }
     }
     if (page.nextCursor === null) break;
