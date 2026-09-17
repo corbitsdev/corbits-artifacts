@@ -863,8 +863,10 @@ export async function findOrVersionArtifact(
           scope: args.scope,
           artifactId: existing.artifactId,
           content: args.content,
-          metadata: args.metadata,
-          parentVersionIds: args.parentVersionIds,
+          ...(args.metadata !== undefined ? { metadata: args.metadata } : {}),
+          ...(args.parentVersionIds !== undefined
+            ? { parentVersionIds: args.parentVersionIds }
+            : {}),
         },
         new Date(),
       );
@@ -878,8 +880,10 @@ export async function findOrVersionArtifact(
       title: args.title,
       content: args.content,
       source: args.source,
-      metadata: args.metadata,
-      parentVersionIds: args.parentVersionIds,
+      ...(args.metadata !== undefined ? { metadata: args.metadata } : {}),
+      ...(args.parentVersionIds !== undefined
+        ? { parentVersionIds: args.parentVersionIds }
+        : {}),
     });
     return { artifact: row, outcome: "created" };
   });
