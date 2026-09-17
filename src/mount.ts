@@ -28,6 +28,12 @@ import {
 } from "./artifacts.js";
 import { resolveDownload } from "./download.js";
 import {
+  ArtifactCountsIncompleteError,
+  countArtifactsBySegments,
+  type ArtifactCountSegments,
+} from "./counts.js";
+import { artifactPreviewHeaders, resolveArtifactPreview } from "./preview.js";
+import {
   listMailAttachmentRefs,
   MailAttachmentKindError,
   saveMailAttachmentRefs,
@@ -86,6 +92,14 @@ export type MountArtifactsOpts = {
   ) => Promise<void>;
   /** Which files `POST /artifacts/upload` accepts. */
   uploadPolicy?: UploadPolicy;
+  /**
+   * Named predicates for `GET /artifacts/counts`. The segment taxonomy (what
+   * counts as a "sheet" or a "routine") is entirely host-owned — this
+   * package only walks the tenant's artifacts once and tallies whichever
+   * predicates are supplied here. Omitted or empty: the route still answers
+   * with just the tenant-wide `all` total.
+   */
+  countSegments?: ArtifactCountSegments;
 };
 
 // Trim before validating, so a whitespace-only field is rejected and the parsed
@@ -175,6 +189,7 @@ export function mountArtifacts(
     decorate = async () => {},
     onArtifactCreated = async () => {},
     uploadPolicy = ARTIFACT_UPLOAD_POLICY,
+    countSegments = {},
   } = opts;
 
   // The handler context is TenantEnv. `principal` (and `tenant`) is placed by
@@ -528,6 +543,67 @@ export function mountArtifacts(
       }
 
       return c.json({ artifacts: await serializeCommitted(scope, rows) }, 201);
+    },
+  );
+
+  app.get(
+    "/artifacts/counts",
+    describeRoute({
+      tags: ["Artifacts"],
+      summary: "Per-segment counts over the caller's tenant artifacts",
+      description:
+        "Walks every page of the tenant's (non-archived) artifacts once and tallies each row against every predicate in `countSegments`. Always includes `all`; a host that mounts with no `countSegments` gets just the tenant total.",
+      responses: {
+        200: { description: "`{ all, ...perSegmentCounts }`" },
+        403: { description: "Tenant not accessible" },
+        503: { description: "The walk could not finish honestly (capped out, or the cursor stalled)" },
+      },
+    }),
+    async (c) => {
+      const scope = await scopeFor(c);
+      if (!scope) return c.json({ error: "Tenant not accessible" }, 403);
+      try {
+        const counts = await countArtifactsBySegments(db, scope.tenantId, countSegments);
+        return c.json(counts);
+      } catch (err) {
+        if (err instanceof ArtifactCountsIncompleteError) {
+          return c.json({ error: err.message }, 503);
+        }
+        throw err;
+      }
+    },
+  );
+
+  // Sandboxed HTML preview: served with a locked-down CSP so a self-contained
+  // page renders visually but can reach nothing on the host's own origin. See
+  // `artifactPreviewHeaders`'s doc comment for the directive-by-directive
+  // rationale.
+  app.get(
+    "/artifacts/:id/preview",
+    describeRoute({
+      tags: ["Artifacts"],
+      summary: "Sandboxed HTML preview of one artifact",
+      description:
+        "Only an artifact whose resolved content type is exactly text/html is previewable; anything else answers 415. Served with a locked-down CSP (sandbox allow-scripts; default-src 'none'; ...) so the page renders but cannot reach the host's own origin.",
+      parameters: [idParam],
+      responses: {
+        200: { description: "The artifact's HTML body, sandboxed" },
+        403: { description: "No resolvable principal" },
+        404: { description: "Artifact not found" },
+        415: { description: "Artifact is not previewable HTML" },
+      },
+    }),
+    async (c) => {
+      const loaded = await loadScoped(c);
+      if ("response" in loaded) return loaded.response;
+      const result = await resolveArtifactPreview(db, contentStore, loaded.row);
+      if (result.status === "not_found") {
+        return c.json({ error: "Artifact not found" }, 404);
+      }
+      if (result.status === "unsupported") {
+        return c.json({ error: "Artifact is not previewable HTML" }, 415);
+      }
+      return c.body(result.html, 200, artifactPreviewHeaders());
     },
   );
 

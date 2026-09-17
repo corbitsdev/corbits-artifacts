@@ -85,6 +85,44 @@ this module mounted and the acceptance suite pointed at it. Start there if you n
 whole `createApp` wiring, including host middleware that sets `tenant`/`principal` and
 a host-owned `RequireGrant`.
 
+## Run-scoped mount (workflow runs)
+
+`mountArtifacts` reads `tenant`/`principal` off a `TenantEnv` context — it has no
+bearer-token auth surface, and never will: mixing a browser-session convention and a
+sidecar-token convention into one mount would make each harder to reason about. A
+workflow run has no browser session, so it authenticates a different way (a sidecar
+bearer token + a run address header). `mountWorkflowArtifacts` is the parallel mount for
+that caller:
+
+```ts
+import { Hono } from "hono";
+import { InlineContentStore, mountWorkflowArtifacts } from "@corbits/artifacts";
+
+const workflowApi = new Hono();
+mountWorkflowArtifacts(workflowApi, {
+  db: hub.db,
+  contentStore: InlineContentStore,
+  // Host-owned: verify the sidecar's bearer token and run address however the
+  // host issues them, and return the run's tenant/principal/run id, or null.
+  resolveRunScope: async (bearerToken, runAddress) =>
+    hub.resolveWorkflowRun(bearerToken, runAddress),
+});
+app.route("/workflow-artifacts", workflowApi);
+```
+
+Routes: `POST /artifacts` (create), `GET /artifacts/recent`, `GET /artifacts/:id`
+(read-back — 404s a skill-draft or another tenant's row, same as `mountArtifacts`'
+detail route), and `POST /artifacts/binary` (base64 `contentBase64` body, for a render
+step that needs to persist bytes rather than text). Every route is behind
+`resolveRunScope`; there is no unauthenticated case here the way collection reads have
+one on the tenant-session mount, since a workflow run always presents credentials.
+
+**Rate limiting is host-side.** `mountWorkflowArtifacts` mints no per-run quota — a host
+that wants one wraps `resolveRunScope` (returning `null` to reject) or puts its own
+middleware in front of the mounted app. `maxContentChars` (default 64,000) and
+`maxBinaryBytes` (default `MAX_UPLOAD_BYTES`) are the two size ceilings this package
+does own, since they protect the same storage `mountArtifacts` protects.
+
 ## The options
 
 Three options have no sensible default; the rest fail closed and degrade a *feature*,
@@ -98,6 +136,7 @@ never safety.
 | `decorate` | no | No-op — rows carry no decoration. Display-only by contract, so it can never change what is returned or who sees it. Clients resolve display names from `ownerPrincipalId` when they need them. |
 | `onArtifactCreated` | no | No-op. Runs inside the same transaction as artifact creation, once per row — the seam a host uses to provision grants (e.g. a `creator`-origin grant on `artifact:<id>` for `write`/`archive`) for the row it just made. See `examples/reference-host`'s `grantOwnership` for a worked example against a real grant store. |
 | `uploadPolicy` | no | `ARTIFACT_UPLOAD_POLICY` — the standard document/image/spreadsheet allowlist. |
+| `countSegments` | no | `{}` — `GET /api/artifacts/counts` answers just `{ all }`. See [Counts](#counts). |
 
 Who the request runs as is **not** an option: the host's auth/tenant middleware puts
 `tenant` and `principal` on the `TenantEnv` context, and this package reads them. No
@@ -120,6 +159,8 @@ happen in major versions.
 | `GET`/`POST /api/artifacts/:id/versions` | Version history (paginated, no content bodies) and revision |
 | `POST /api/artifacts/:id/(un)archive` | Idempotent soft-hide |
 | `GET /api/artifacts/:id/download` | One path over three storage conventions |
+| `GET /api/artifacts/counts` | Per-segment counts over the tenant. See [Counts](#counts) |
+| `GET /api/artifacts/:id/preview` | Sandboxed `text/html`-only preview. See [Preview](#preview) |
 | `…/api/instances/:id/mail-attachments` | Artifact↔message associations |
 
 Every route carries `describeRoute`, so it appears in the host's `/openapi.json`.
@@ -231,6 +272,55 @@ a PDF and serve it inline", the inline half is ours and is covered by the accept
 suite. The contract owed to a parsing host is **parse before you store** — then a
 failure leaves no orphan artifact and no orphan bytes, and a success writes bytes, row
 and version 1 in one transaction.
+
+## Counts
+
+`GET /api/artifacts/counts` answers `{ all, ...perSegmentCounts }` — a real walk over
+every page of the tenant's (non-archived) artifacts, bucketed by whichever predicates
+the host passes as `countSegments`. This package owns none of the segment taxonomy
+(what makes an artifact a "sheet" or a "routine" is entirely product-specific); it only
+walks the rows once and tallies:
+
+```ts
+mountArtifacts(app, {
+  db,
+  contentStore,
+  requireGrant,
+  countSegments: {
+    document: (row) => row.kind === "document",
+    sheet: (row) => row.kind === "sheet",
+    routine: (row) => row.kind === "routine",
+  },
+});
+// GET /api/artifacts/counts -> { all: 42, document: 30, sheet: 10, routine: 2 }
+```
+
+Omit `countSegments` and the route still answers with just the tenant-wide `all`. The
+walk caps at 200 pages (`MAX_COUNT_PAGES`, exported from the package) and throws
+`ArtifactCountsIncompleteError` — mapped to HTTP `503` — rather than ever returning a
+partial count as if it were the whole tenant. `countArtifactsBySegments` (also exported)
+is the underlying function, usable directly outside the mounted route.
+
+## Preview
+
+`GET /api/artifacts/:id/preview` serves an artifact's body as a **sandboxed HTML
+document** — for a self-contained page an artifact stores (a rendered report, a chart
+export) that a host wants to render visually without giving it any reach into the host's
+own origin. Only an artifact whose resolved content type is exactly `text/html` is
+previewable; anything else answers `415`. The response carries:
+
+```
+Content-Security-Policy: sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline'; img-src data:; script-src 'unsafe-inline'
+X-Content-Type-Options: nosniff
+```
+
+`sandbox allow-scripts` puts the document in an opaque unique origin — scripts may run,
+but there is no cookie/storage access, no same-origin fetch, no top-level navigation, no
+popups. `default-src 'none'` blocks any further network reach; `style-src`/`img-src
+data:`/`script-src 'unsafe-inline'` are exactly what a single-file page needs and no
+more. `X-Frame-Options` is deliberately never set, so the host's own canvas/iframe can
+still embed it. `resolveArtifactPreview` and `artifactPreviewHeaders` are exported
+directly for a host that wants to serve the same preview from its own route.
 
 ## ContentStore
 
