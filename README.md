@@ -16,7 +16,7 @@ design rationale behind them.
 | --- | --- |
 | Runtime | Node 22+ or Bun 1.1+ |
 | Postgres | 13+ (`gen_random_uuid()`) |
-| Minimum `@intx/*` | **0.2.2** |
+| Minimum `@intx/*` | **0.3.0** |
 
 Peer dependencies: `hono`, `hono-openapi`, `drizzle-orm`, `postgres`, `arktype`,
 `@intx/types`, `@intx/hub-api`. They are peers rather than pinned deps because each is
@@ -31,25 +31,17 @@ peers here and npm will not warn you they are missing.
 ## Install
 
 ```bash
-# From git (Bun)
-bun add github:corbitsdev/corbits-artifacts
-
-# Or with peers explicitly
-bun add github:corbitsdev/corbits-artifacts \
+npm install @corbits/artifacts \
   hono hono-openapi drizzle-orm postgres arktype \
-  @intx/types@^0.2.2 @intx/hub-api@^0.2.2
+  @intx/types@^0.3.0 @intx/hub-api@^0.3.0
 ```
 
 ```bash
-# npm / pack
-npm install @corbits/artifacts \
+# Bun
+bun add @corbits/artifacts \
   hono hono-openapi drizzle-orm postgres arktype \
-  @intx/types@^0.2.2 @intx/hub-api@^0.2.2
+  @intx/types@^0.3.0 @intx/hub-api@^0.3.0
 ```
-
-> **Not on npm yet.** Until the first release, consume it from git or an `npm pack`
-> tarball. The `@intx/*` packages *are* published, at `0.2.2`. This repository root *is*
-> the package, so git installs resolve cleanly.
 
 ## Mount
 
@@ -386,6 +378,8 @@ bun run test             # dependency check, then unit + integration
 bun run build            # dist/ (JS + .d.ts)
 bun run test:acceptance  # builds, then the acceptance scenarios
 ```
+
+The reference host is not a workspace: run `bun install --cwd examples/reference-host` once before `test:acceptance`.
 
 `test:acceptance` builds first because the reference host consumes the built `dist` the
 way a real consumer would — running it against stale output is how a green acceptance

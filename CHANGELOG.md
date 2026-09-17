@@ -87,7 +87,7 @@ always called out under their own heading.
   exists to remove. If a real need for it surfaces, it belongs in
   Interchange's grant model, not a per-package workaround.
 
-### 0.1.0 — first release
+## [0.1.0] — first release
 
 Initial public release. Nothing has been published before this, so everything is
 new; the list below is what the surface consists of rather than what changed.
@@ -112,9 +112,9 @@ new; the list below is what the surface consists of rather than what changed.
   display-only `decorate` and `uploadPolicy` behavior.
 - Agent-facing tool definitions with tenant-confined windowed artifact reads,
   and the `web_site` artifact kind.
-- Requires `@intx/*` 0.2.2 or newer, Node 22+ or Bun 1.1+, and Postgres 13+.
-  (`@intx/*` 0.1.2 does not install — its deps pin the unpublished
-  `@intx/*@0.0.0` — and ships raw TypeScript.)
-- No publish workflow yet: consume from a git checkout or an `npm pack` tarball.
+- Requires `@intx/*` 0.3.0 or newer, Node 22+ or Bun 1.1+, and Postgres 13+.
+  (`@intx/*` lines before 0.3.0 do not install — older lines pin the
+  unpublished `@intx/*@0.0.0` or ship raw TypeScript.)
 
 [Unreleased]: https://github.com/corbitsdev/corbits-artifacts
+[0.1.0]: https://github.com/corbitsdev/corbits-artifacts
