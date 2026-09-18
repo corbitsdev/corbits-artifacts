@@ -14,7 +14,7 @@ design rationale behind them.
 
 | | |
 | --- | --- |
-| Runtime | Node 22+ or Bun 1.1+ |
+| Runtime | Node 24+ or Bun 1.1+ |
 | Postgres | 13+ (`gen_random_uuid()`) |
 | Minimum `@intx/*` | **0.2.2** |
 
