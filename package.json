@@ -34,6 +34,11 @@
       "bun": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./sidecar-bundle": {
+      "bun": "./src/sidecar-bundle.ts",
+      "types": "./dist/sidecar-bundle.d.ts",
+      "default": "./dist/sidecar-bundle.js"
     }
   },
   "files": [
@@ -70,7 +75,8 @@
     "hono": "^4.12.32",
     "hono-openapi": "^1.2.0",
     "postgres": "^3.4.9",
-    "@intx/hub-api": "^0.3.0"
+    "@intx/hub-api": "^0.3.0",
+    "@intx/agent": "^0.3.0"
   },
   "devDependencies": {
     "@intx/types": "0.3.0",
@@ -83,7 +89,8 @@
     "postgres": "3.4.9",
     "typescript": "5.7.2",
     "@intx/hub-api": "0.3.0",
-    "@intx/authz": "0.3.0"
+    "@intx/authz": "0.3.0",
+    "@intx/agent": "0.3.0"
   },
   "overrides": {
     "drizzle-orm": "0.45.2"

@@ -17,17 +17,21 @@
  * however it likes) — this module only draws the auth + CRUD seam.
  */
 import { type } from "arktype";
-import type { Hono, MiddlewareHandler } from "hono";
+import type { Context, Hono, MiddlewareHandler } from "hono";
 import {
+  ArtifactNotFoundError,
   createArtifact,
+  findArtifactByTitle,
   getArtifact,
   listArtifacts,
   serializeArtifact,
   serializeArtifactListItem,
   SKILL_DRAFT_KIND,
+  writeArtifactVersion,
   type SerializedArtifact,
   type SerializedArtifactListItem,
 } from "./artifacts.js";
+import { linkFileArtifact, readArtifact, readArtifactChunk } from "./tools.js";
 import type { ArtifactDb } from "./db.js";
 import {
   ARTIFACT_UPLOAD_POLICY,
@@ -70,10 +74,37 @@ export type WorkflowArtifactEnv = {
   Variables: { workflowRunScope: ResolvedWorkflowRunScope };
 };
 
+/** What a verified agent token proves. Structural, so this package never
+ * depends on the library that mints one. */
+export type AgentTokenIdentity = {
+  readonly tenantId: string;
+  readonly definitionId: string;
+};
+
+/**
+ * Lets a deployed agent authenticate with its own hub-minted bearer instead
+ * of the sidecar's token. Only AUTHENTICATION changes: the run is still named
+ * by `x-workflow-run-address`, and `resolveRun` is the host's existing lookup
+ * for that address. A token whose tenant is not the resolved run's tenant is
+ * refused, so a bearer minted for one workbench cannot act on another's run.
+ */
+export type AgentTokenAuth = {
+  /** Verifies the presented `Authorization` header; `undefined` means "not an
+   * agent token", and the sidecar path is tried instead. */
+  verify: (
+    ctx: unknown,
+  ) => Promise<AgentTokenIdentity | undefined> | AgentTokenIdentity | undefined;
+  resolveRun: (
+    runAddress: string,
+  ) => Promise<ResolvedWorkflowRunScope | null> | ResolvedWorkflowRunScope | null;
+};
+
 export type MountWorkflowArtifactsOpts = {
   db: ArtifactDb;
   contentStore: ContentStore;
   resolveRunScope: WorkflowRunResolver;
+  /** Optional second authentication path, tried before the sidecar token. */
+  agentToken?: AgentTokenAuth;
   /** Which files `POST /artifacts/binary` accepts. Defaults to the same
    * policy `mountArtifacts`' `POST /artifacts/upload` uses. */
   uploadPolicy?: UploadPolicy;
@@ -100,6 +131,44 @@ const CreateWorkflowBinaryArtifactBody = type({
   contentBase64: "string > 0",
 });
 
+const LinkWorkflowFileBody = type({
+  title: "string > 0",
+  kind: "string > 0",
+  path: "string > 0",
+  "preview?": "string",
+});
+
+const ReviseWorkflowArtifactBody = type({
+  "title?": "string > 0",
+  "content?": "string",
+});
+
+/** Omits the key entirely when absent or unparseable, so the behavior's own
+ * default applies rather than a coerced zero. */
+function parseNumberQuery<K extends string>(
+  key: K,
+  raw: string | undefined,
+): Partial<Record<K, number>> {
+  if (raw === undefined || raw === "") return {};
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n)) return {};
+  return { [key]: n } as Record<K, number>;
+}
+
+function parseVersionQuery(raw: string | undefined): { version?: number } {
+  return parseNumberQuery("version", raw);
+}
+
+/** A missing artifact or a missing pinned version both read as 404; anything
+ * else is the caller's own bad argument. */
+function readFailure(c: Context<WorkflowArtifactEnv>, err: unknown): Response {
+  if (err instanceof ArtifactNotFoundError) {
+    return c.json({ error: "Artifact not found" }, 404);
+  }
+  if (err instanceof Error) return c.json({ error: err.message }, 400);
+  throw err;
+}
+
 function parseRecentLimit(raw: string | undefined): number {
   if (raw === undefined || raw === "") return DEFAULT_RECENT_LIMIT;
   const n = Number.parseInt(raw, 10);
@@ -121,6 +190,7 @@ export function mountWorkflowArtifacts(
     db,
     contentStore,
     resolveRunScope,
+    agentToken,
     uploadPolicy = ARTIFACT_UPLOAD_POLICY,
     maxBinaryBytes = MAX_UPLOAD_BYTES,
     maxContentChars = DEFAULT_MAX_WORKFLOW_CONTENT_CHARS,
@@ -132,6 +202,22 @@ export function mountWorkflowArtifacts(
       ? authHeader.slice("Bearer ".length)
       : "";
     const address = c.req.header("x-workflow-run-address") ?? "";
+
+    if (agentToken !== undefined) {
+      const identity = await agentToken.verify(c);
+      if (identity !== undefined) {
+        const runScope = await agentToken.resolveRun(address);
+        // Same 401 whether the address named no run or named another
+        // tenant's: a bearer learns nothing from the difference.
+        if (runScope === null || runScope.tenantId !== identity.tenantId) {
+          return c.json({ error: "Missing or unrecognized bearer token / run address" }, 401);
+        }
+        c.set("workflowRunScope", runScope);
+        await next();
+        return undefined;
+      }
+    }
+
     const scope = await resolveRunScope(token, address);
     if (scope === null) {
       return c.json(
@@ -246,6 +332,131 @@ export function mountWorkflowArtifacts(
         return c.json({ error: err.message }, 415);
       }
       throw err;
+    }
+  });
+
+  // The remaining routes complete the surface `ARTIFACT_TOOL_DEFINITIONS`
+  // describes, so a run-scoped caller can do everything a tool names.
+  app.get("/artifacts", async (c) => {
+    const scope = c.get("workflowRunScope");
+    const kind = c.req.query("kind");
+    const page = await listArtifacts(db, scope.tenantId, {
+      limit: parseRecentLimit(c.req.query("limit")),
+      ...(kind !== undefined && kind !== "" ? { kind } : {}),
+    });
+    const data: readonly SerializedArtifactListItem[] = page.rows.map(serializeArtifactListItem);
+    return c.json({ data });
+  });
+
+  app.get("/artifacts/find", async (c) => {
+    const scope = c.get("workflowRunScope");
+    const title = c.req.query("title") ?? "";
+    if (title === "") return c.json({ error: "title is required" }, 400);
+    const kind = c.req.query("kind");
+    const found = await findArtifactByTitle(
+      db,
+      scope.tenantId,
+      title,
+      kind === "" ? undefined : kind,
+    );
+    return c.json({ data: found });
+  });
+
+  app.post("/artifacts/link-file", async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+    const parsed = LinkWorkflowFileBody(body);
+    if (parsed instanceof type.errors) {
+      return c.json({ error: parsed.summary }, 400);
+    }
+    const scope = c.get("workflowRunScope");
+    const row = await linkFileArtifact(db, {
+      scope: { tenantId: scope.tenantId, principalId: scope.principalId },
+      ownerPrincipalId: null,
+      title: parsed.title,
+      kind: parsed.kind,
+      path: parsed.path,
+      ...(parsed.preview !== undefined ? { preview: parsed.preview } : {}),
+      sessionId: scope.runId,
+    });
+    const created: CreatedWorkflowArtifact = { id: row.id, version: row.version };
+    return c.json({ data: created }, 201);
+  });
+
+  app.patch("/artifacts/:id", async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+    const parsed = ReviseWorkflowArtifactBody(body);
+    if (parsed instanceof type.errors) {
+      return c.json({ error: parsed.summary }, 400);
+    }
+    if (parsed.content !== undefined && parsed.content.length > maxContentChars) {
+      return c.json(
+        {
+          error:
+            `content is ${parsed.content.length} characters, over the ` +
+            `${maxContentChars}-character limit — shorten it or split it ` +
+            "into multiple artifacts and try again.",
+        },
+        413,
+      );
+    }
+    const scope = c.get("workflowRunScope");
+    const artifactId = c.req.param("id");
+    const existing = await getArtifact(db, artifactId);
+    if (existing === null || existing.tenantId !== scope.tenantId || existing.kind === SKILL_DRAFT_KIND) {
+      return c.json({ error: "Artifact not found" }, 404);
+    }
+    const written = await writeArtifactVersion(db, {
+      scope: { tenantId: scope.tenantId, principalId: scope.principalId },
+      artifactId,
+      ...(parsed.title !== undefined ? { title: parsed.title } : {}),
+      ...(parsed.content !== undefined ? { content: parsed.content } : {}),
+    });
+    const revised: CreatedWorkflowArtifact = {
+      id: written.artifactId,
+      version: written.version,
+    };
+    return c.json({ data: revised });
+  });
+
+  app.get("/artifacts/:id/read", async (c) => {
+    const scope = c.get("workflowRunScope");
+    const path = c.req.query("path");
+    try {
+      const data = await readArtifact(db, {
+        scope: { tenantId: scope.tenantId, principalId: scope.principalId },
+        artifactId: c.req.param("id"),
+        ...parseVersionQuery(c.req.query("version")),
+        ...(path !== undefined && path !== "" ? { path } : {}),
+      });
+      return c.json({ data });
+    } catch (err) {
+      return readFailure(c, err);
+    }
+  });
+
+  app.get("/artifacts/:id/chunk", async (c) => {
+    const scope = c.get("workflowRunScope");
+    try {
+      const data = await readArtifactChunk(db, {
+        scope: { tenantId: scope.tenantId, principalId: scope.principalId },
+        artifactId: c.req.param("id"),
+        ...parseVersionQuery(c.req.query("version")),
+        ...parseNumberQuery("offset", c.req.query("offset")),
+        ...parseNumberQuery("limit", c.req.query("limit")),
+      });
+      return c.json({ data });
+    } catch (err) {
+      return readFailure(c, err);
     }
   });
 
