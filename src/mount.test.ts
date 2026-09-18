@@ -184,6 +184,38 @@ describe("POST /artifacts", () => {
     expect(malformed.status).toBe(400);
   });
 
+  test("stores an opaque metadata object and returns it on the created artifact", async () => {
+    const db = await testDb();
+    const res = await host(db).request(
+      "/artifacts",
+      json({ mode: "text", title: "Notes", content: "body", metadata: { kind: "run", stage: "draft" } }),
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { artifact: Record<string, any> };
+    expect(body.artifact.metadata).toEqual({ kind: "run", stage: "draft" });
+  });
+
+  test("create with no metadata field stores null", async () => {
+    const db = await testDb();
+    const res = await host(db).request(
+      "/artifacts",
+      json({ mode: "text", title: "Notes", content: "body" }),
+    );
+    const body = (await res.json()) as { artifact: Record<string, any> };
+    expect(body.artifact.metadata).toBeNull();
+  });
+
+  test("rejects a metadata value that is not a JSON object", async () => {
+    const db = await testDb();
+    for (const metadata of ["a string", 42, ["array"]]) {
+      const res = await host(db).request(
+        "/artifacts",
+        json({ mode: "text", title: "t", content: "body", metadata }),
+      );
+      expect(res.status).toBe(400);
+    }
+  });
+
   test("refuses a kind outside the importable allowlist", async () => {
     const db = await testDb();
     const res = await host(db).request(
@@ -548,6 +580,62 @@ describe("versions", () => {
     ).json()) as { versions: { version: number }[]; nextCursor: string | null };
     expect(page2.versions.map((v) => v.version)).toEqual([1]);
     expect(page2.nextCursor).toBeNull();
+  });
+
+  test("revise sets metadata and returns it in the response", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const row = await seedArtifact(db, { title: "Draft", content: "v1" });
+
+    const res = await app.request(
+      `/artifacts/${row.id}/versions`,
+      json({ content: "v2", metadata: { kind: "run", supersededByNodeId: null } }),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      version: 2,
+      metadata: { kind: "run", supersededByNodeId: null },
+    });
+  });
+
+  test("revise omitting metadata carries the prior version's metadata forward", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const row = await seedArtifact(db, { title: "Draft", content: "v1" });
+    await app.request(`/artifacts/${row.id}/versions`, json({ metadata: { kind: "run" } }));
+
+    const res = await app.request(`/artifacts/${row.id}/versions`, json({ content: "v3" }));
+    expect(await res.json()).toMatchObject({ version: 3, metadata: { kind: "run" } });
+  });
+
+  test("revise with an explicit null metadata clears it", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const row = await seedArtifact(db, { title: "Draft", content: "v1" });
+    await app.request(`/artifacts/${row.id}/versions`, json({ metadata: { kind: "run" } }));
+
+    const res = await app.request(`/artifacts/${row.id}/versions`, json({ metadata: null }));
+    expect(await res.json()).toMatchObject({ version: 3, metadata: null });
+  });
+
+  test("revise with metadata alone (no title/content) is accepted", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const row = await seedArtifact(db, { title: "Draft", content: "v1" });
+
+    const res = await app.request(`/artifacts/${row.id}/versions`, json({ metadata: { stage: "final" } }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ version: 2, metadata: { stage: "final" } });
+  });
+
+  test("revise rejects a metadata value that is not a JSON object", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db);
+    const res = await host(db).request(
+      `/artifacts/${row.id}/versions`,
+      json({ metadata: "not an object" }),
+    );
+    expect(res.status).toBe(400);
   });
 
   test("oversize create title is 400", async () => {
