@@ -15,7 +15,7 @@
     "drizzle",
     "postgres"
   ],
-  "author": "Corbits",
+  "author": "Sawyer Cutler <sawyer@dirtroad.dev>",
   "homepage": "https://github.com/corbitsdev/corbits-artifacts#readme",
   "repository": {
     "type": "git",
@@ -45,7 +45,7 @@
     "README.md"
   ],
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
   "workspaces": [
     "examples/*"
