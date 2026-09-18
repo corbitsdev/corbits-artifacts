@@ -16,6 +16,7 @@ import {
   listArtifactVersions,
   ListArtifactVersionsQuery,
   MAX_ARTIFACT_CONTENT_BYTES,
+  MetadataShape,
   serializeArtifact,
   serializeArtifactListItem,
   setArtifactArchived,
@@ -121,6 +122,10 @@ const HttpUrl = TrimmedNonEmpty.narrow((content, ctx) => {
   return true;
 });
 
+// Opaque to this package, same shape the service layer already stores per
+// version: any JSON object, or `null` to clear it explicitly.
+const NullableMetadata = MetadataShape.or("null");
+
 /**
  * `kind` and `mode` must agree: only a URL may mint a `link` (whose content
  * downstream UIs treat as navigable), and a URL never mints a `document` whose
@@ -132,11 +137,13 @@ const CreateArtifactRequest = type({
   title: TrimmedNonEmpty,
   content: HttpUrl,
   "kind?": "'link'",
+  "metadata?": NullableMetadata,
 }).or({
   mode: "'text'",
   title: TrimmedNonEmpty,
   content: TrimmedNonEmpty,
   "kind?": "'document'",
+  "metadata?": NullableMetadata,
 });
 
 // A non-string (or missing/blank) field carries no provenance rather than
@@ -151,11 +158,13 @@ const GeneratedByField = type("unknown")
 const ReviseArtifactRequest = type({
   "title?": TrimmedNonEmpty,
   "content?": TrimmedNonEmpty,
+  "metadata?": NullableMetadata,
 }).narrow(
   (body, ctx) =>
     body.title !== undefined ||
     body.content !== undefined ||
-    ctx.mustBe("a body with content and/or title"),
+    body.metadata !== undefined ||
+    ctx.mustBe("a body with content, title, and/or metadata"),
 );
 
 const idParam = {
@@ -388,7 +397,7 @@ export function mountArtifacts(
       tags: ["Artifacts"],
       summary: "Import an artifact from an external source (link a URL or paste text)",
       description:
-        "`mode: url` links an external page (content is the URL, origin `imported`); `mode: text` stores a pasted body (origin `manual`). The artifact and its version 1 are written in one transaction.",
+        "`mode: url` links an external page (content is the URL, origin `imported`); `mode: text` stores a pasted body (origin `manual`). The artifact and its version 1 are written in one transaction. An optional `metadata` object is stored opaquely and returned as-is on every read.",
       responses: {
         201: { description: "Artifact created" },
         400: { description: "Invalid request body" },
@@ -427,6 +436,7 @@ export function mountArtifacts(
             source: isUrl
               ? { origin: "imported", url: body.content }
               : { origin: "manual" },
+            ...(body.metadata !== undefined ? { metadata: body.metadata } : {}),
           });
           await onArtifactCreated(tx, created, scope);
           return created;
@@ -664,7 +674,7 @@ export function mountArtifacts(
       tags: ["Artifacts"],
       summary: "Revise an artifact, creating a new version",
       description:
-        "Locks the row FOR UPDATE and bumps version by one; a unique (artifactId, version) index backstops a racing writer. Archived and skill-draft artifacts present as not found.",
+        "Locks the row FOR UPDATE and bumps version by one; a unique (artifactId, version) index backstops a racing writer. Archived and skill-draft artifacts present as not found. `metadata` is optional and opaque; when omitted, the prior version's metadata carries forward, and an explicit `null` clears it.",
       parameters: [idParam],
       responses: {
         200: { description: "New version created" },
@@ -701,6 +711,7 @@ export function mountArtifacts(
             artifactId: loaded.row.id,
             ...(body.title !== undefined ? { title: body.title } : {}),
             ...(body.content !== undefined ? { content: body.content } : {}),
+            ...(body.metadata !== undefined ? { metadata: body.metadata } : {}),
           }),
         );
       } catch (error) {

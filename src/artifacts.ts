@@ -90,7 +90,8 @@ const JsonObject = type("object").narrow(
 // `metadata` is opaque to the package: any JSON object is accepted and
 // returned as-is, never interpreted. `parentVersionIds` is explicit lineage —
 // a plain array of ids, never inferred from version order.
-const MetadataShape = JsonObject;
+// Exported so the HTTP mount validates request bodies the same opaque way.
+export const MetadataShape = JsonObject;
 const ParentVersionIdsShape = type("string[]");
 
 export class ArtifactValidationError extends Error {
@@ -401,8 +402,12 @@ export async function writeArtifactVersion(
   title: string;
   metadata: Record<string, unknown> | null;
 }> {
-  if (args.title === undefined && args.content === undefined) {
-    throw new Error("Provide content and/or title to revise the artifact");
+  if (
+    args.title === undefined &&
+    args.content === undefined &&
+    args.metadata === undefined
+  ) {
+    throw new Error("Provide content, title, and/or metadata to revise the artifact");
   }
   if (args.title !== undefined) {
     assertArtifactFieldSizes({ title: args.title });
