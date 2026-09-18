@@ -110,12 +110,45 @@ mountWorkflowArtifacts(workflowApi, {
 app.route("/workflow-artifacts", workflowApi);
 ```
 
-Routes: `POST /artifacts` (create), `GET /artifacts/recent`, `GET /artifacts/:id`
+Routes: `POST /artifacts` (create), `GET /artifacts` (list, `kind`/`limit`),
+`GET /artifacts/recent`, `GET /artifacts/find?title=` (exact-title lookup),
+`POST /artifacts/link-file`, `PATCH /artifacts/:id` (revise), `GET /artifacts/:id`
 (read-back — 404s a skill-draft or another tenant's row, same as `mountArtifacts`'
-detail route), and `POST /artifacts/binary` (base64 `contentBase64` body, for a render
-step that needs to persist bytes rather than text). Every route is behind
-`resolveRunScope`; there is no unauthenticated case here the way collection reads have
-one on the tenant-session mount, since a workflow run always presents credentials.
+detail route), `GET /artifacts/:id/read` and `GET /artifacts/:id/chunk` (the budgeted
+reads the artifact tools use), and `POST /artifacts/binary` (base64 `contentBase64`
+body, for a render step that needs to persist bytes rather than text). Together they
+cover every entry in `ARTIFACT_TOOL_DEFINITIONS`. Every route is authenticated; there
+is no unauthenticated case here the way collection reads have one on the
+tenant-session mount, since a workflow run always presents credentials.
+
+### Agent tokens
+
+A deployed agent has no sidecar token of its own. Pass `agentToken` and a bearer the
+hub minted for that agent authenticates instead — only the authentication changes: the
+run is still named by `x-workflow-run-address`, and a token whose tenant is not the
+resolved run's tenant is refused with the same bare 401.
+
+```ts
+mountWorkflowArtifacts(workflowApi, {
+  db: hub.db,
+  contentStore: InlineContentStore,
+  resolveRunScope: async (bearerToken, runAddress) =>
+    hub.resolveWorkflowRun(bearerToken, runAddress),
+  agentToken: {
+    verify: (ctx) => hub.verifyAgentToken(ctx),
+    resolveRun: (runAddress) => hub.resolveRunByAddress(runAddress),
+  },
+});
+```
+
+### Sidecar bundle
+
+`@corbits/artifacts/sidecar-bundle` is the `defineTool` factory an agent definition
+pins, so no agent owns artifact client code. It declares `requires: ["capabilities",
+"address"]`, resolves the `hub` credential handle from the runtime capabilities, and
+calls the routes above through that mediated fetch with the run address header. The
+credential is the agent's own hub token; the bundle never sees the secret and never
+names a host — the handle's origin pin resolves its relative paths.
 
 **Rate limiting is host-side.** `mountWorkflowArtifacts` mints no per-run quota — a host
 that wants one wraps `resolveRunScope` (returning `null` to reject) or puts its own

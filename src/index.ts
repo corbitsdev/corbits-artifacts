@@ -4,6 +4,8 @@ export type { MountArtifactsOpts } from "./mount.js";
 
 export { mountWorkflowArtifacts } from "./workflow-mount.js";
 export type {
+  AgentTokenAuth,
+  AgentTokenIdentity,
   CreatedWorkflowArtifact,
   MountWorkflowArtifactsOpts,
   ResolvedWorkflowRunScope,
