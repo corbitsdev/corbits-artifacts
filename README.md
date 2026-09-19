@@ -189,7 +189,7 @@ happen in major versions.
 | `POST /api/artifacts` | Human import — link a URL or paste text |
 | `POST /api/artifacts/upload` | multipart import. An optional `generatedBy` form field is stored as `source.generatedBy`, a free-form display label nothing here reads back |
 | `GET /api/artifacts/:id` | Deep link (archived artifacts still load) |
-| `GET`/`POST /api/artifacts/:id/versions` | Version history (paginated, no content bodies) and revision |
+| `GET`/`POST /api/artifacts/:id/versions` | Version history (paginated, no content bodies) and revision. `POST` accepts an optional `expectedVersion` precondition — see below |
 | `GET /api/artifacts/:id/versions/:version` | One version, including content |
 | `POST /api/artifacts/:id/(un)archive` | Idempotent soft-hide |
 | `GET /api/artifacts/:id/download` | One path over three storage conventions |
@@ -230,6 +230,23 @@ version. Omitting `metadata` on a revision carries the previous version's value 
 the same way an omitted `title`/`content` does; `parentVersionIds` is never carried
 forward — a version with no explicit parents simply has none. `artifact.metadata` mirrors
 the current version's value, same as `title`/`content`/`version` already do.
+
+**Content digest:** every version carries `contentSha256` — sha256 (hex) over the UTF-8
+bytes of `content` for text and URL artifacts, or over the uploaded bytes for a
+blob-backed file artifact's version 1 (its `content` column is a store-specific
+pointer, not the bytes themselves). Returned on the detail route, a pinned version
+read, version history, and the revise response; `artifact.contentSha256` mirrors the
+current version's value the same way `metadata` does. A metadata/title-only revise
+(content omitted, so it carries forward) carries the digest forward unchanged too. Rows
+written before this field existed serialize `contentSha256: null` — there is no
+backfill.
+
+**Optimistic revise (`expectedVersion`):** `POST /api/artifacts/:id/versions` accepts an
+optional `expectedVersion` (a positive integer), checked under the same `FOR UPDATE` lock
+that guards the write. A mismatch answers `409 {"error":"Version conflict","currentVersion":N}`
+and writes nothing; omitting it is today's unconditional-write behavior. Use it to bind a
+revise to the exact version a caller last read — a human review approving specific
+content, for example — rather than silently overwriting whatever changed underneath it.
 
 **Write size limits:** create and revise reject titles longer than 512 characters and
 content larger than 15 MiB UTF-8 (`ArtifactSizeError` / HTTP 400). JSON mutators also

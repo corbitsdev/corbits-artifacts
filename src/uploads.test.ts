@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, test } from "bun:test";
 import {
   ARTIFACT_UPLOAD_POLICY,
@@ -251,5 +252,25 @@ describe("createFileArtifact", () => {
 
     expect((await db.select().from(upload)).length).toBe(0);
     expect((await db.select().from(artifact)).length).toBe(0);
+  });
+
+  test("records a digest of the uploaded bytes, not of the ContentStore's `content` pointer", async () => {
+    const db = await testDb();
+    const bytes = new Uint8Array([9, 8, 7, 6, 5]);
+    const row = await db.transaction((tx) =>
+      createFileArtifact(tx, InlineContentStore, {
+        scope: SCOPE,
+        ownerPrincipalId: SCOPE.principalId,
+        filename: "report.pdf",
+        mimeType: "application/pdf",
+        bytes,
+        policy: ARTIFACT_UPLOAD_POLICY,
+      }),
+    );
+
+    const expected = createHash("sha256").update(bytes).digest("hex");
+    // InlineContentStore's `content` is empty — the digest must not be over it.
+    expect(row.content).toBe("");
+    expect(row.contentSha256).toBe(expected);
   });
 });

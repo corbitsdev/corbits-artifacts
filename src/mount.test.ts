@@ -10,6 +10,7 @@ import {
   listArtifacts,
   MAX_ARTIFACT_CONTENT_BYTES,
   setArtifactArchived,
+  sha256Hex,
 } from "./artifacts.js";
 import {
   MAX_UPLOAD_BYTES,
@@ -659,6 +660,59 @@ describe("versions", () => {
     expect(res.status).toBe(400);
   });
 
+  test("revise with a matching expectedVersion succeeds", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const row = await seedArtifact(db, { title: "Draft", content: "v1" });
+
+    const res = await app.request(
+      `/artifacts/${row.id}/versions`,
+      json({ content: "v2", expectedVersion: 1 }),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ version: 2 });
+  });
+
+  test("revise with a mismatched expectedVersion is 409 and leaves the version count unchanged", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const row = await seedArtifact(db, { title: "Draft", content: "v1" });
+
+    const res = await app.request(
+      `/artifacts/${row.id}/versions`,
+      json({ content: "v2", expectedVersion: 5 }),
+    );
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "Version conflict", currentVersion: 1 });
+
+    const history = (await (
+      await app.request(`/artifacts/${row.id}/versions`)
+    ).json()) as { versions: { version: number }[] };
+    expect(history.versions.map((v) => v.version)).toEqual([1]);
+  });
+
+  test("omitting expectedVersion is today's unconditional-write behavior", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const row = await seedArtifact(db, { title: "Draft", content: "v1" });
+
+    const res = await app.request(`/artifacts/${row.id}/versions`, json({ content: "v2" }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ version: 2 });
+  });
+
+  test("revise rejects a non-positive-integer expectedVersion with 400", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db);
+    for (const expectedVersion of [0, -1, 1.5]) {
+      const res = await host(db).request(
+        `/artifacts/${row.id}/versions`,
+        json({ content: "x", expectedVersion }),
+      );
+      expect(res.status).toBe(400);
+    }
+  });
+
   test("revising an archived artifact is 404", async () => {
     const db = await testDb();
     const row = await seedArtifact(db);
@@ -735,13 +789,18 @@ describe("GET /artifacts/:id/versions/:version", () => {
 
     const res = await app.request(`/artifacts/${row.id}/versions/1`);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { artifact: { version: number; title: string; content: string } };
+    const body = (await res.json()) as {
+      artifact: { version: number; title: string; content: string; contentSha256: string | null };
+    };
     expect(body.artifact).toMatchObject({ version: 1, title: "Draft", content: "v1" });
+    expect(body.artifact.contentSha256).toBe(sha256Hex("v1"));
 
     const current = await app.request(`/artifacts/${row.id}/versions/2`);
-    expect(await current.json()).toMatchObject({
-      artifact: { version: 2, title: "Final", content: "v2" },
-    });
+    const currentBody = (await current.json()) as {
+      artifact: { version: number; title: string; content: string; contentSha256: string | null };
+    };
+    expect(currentBody.artifact).toMatchObject({ version: 2, title: "Final", content: "v2" });
+    expect(currentBody.artifact.contentSha256).toBe(sha256Hex("v2"));
   });
 
   test("an unknown version is 404", async () => {

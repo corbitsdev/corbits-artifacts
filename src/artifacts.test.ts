@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import {
   ArtifactNotFoundError,
   ArtifactSizeError,
@@ -7,6 +7,7 @@ import {
   createArtifact,
   findArtifactByTitle,
   findOrVersionArtifact,
+  getArtifact,
   getArtifactVersion,
   listArtifactVersions,
   MAX_ARTIFACT_CONTENT_BYTES,
@@ -14,6 +15,8 @@ import {
   normalizeSource,
   serializeArtifact,
   setArtifactArchived,
+  sha256Hex,
+  VersionConflictError,
   writeArtifactVersion,
 } from "./artifacts.js";
 import { artifact, artifactVersion } from "./schema.js";
@@ -32,6 +35,7 @@ describe("create", () => {
       version: 1,
       metadata: null,
       parentVersionIds: null,
+      contentSha256: sha256Hex("first"),
     });
   });
 
@@ -671,6 +675,104 @@ describe("version metadata and lineage", () => {
         parentVersionIds: [1, 2] as unknown as string[],
       }),
     ).rejects.toBeInstanceOf(ArtifactValidationError);
+  });
+});
+
+describe("content digest", () => {
+  test("create computes sha256 over the UTF-8 bytes of content", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db, { title: "Brief", content: "first" });
+
+    expect(row.contentSha256).toBe(sha256Hex("first"));
+    const pinned = await getArtifactVersion(db, row.id, 1);
+    expect(pinned?.contentSha256).toBe(sha256Hex("first"));
+  });
+
+  test("changes when content is revised", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db, { content: "v1" });
+
+    const second = await writeArtifactVersion(db, {
+      scope: SCOPE,
+      artifactId: row.id,
+      content: "v2",
+    });
+    expect(second.contentSha256).toBe(sha256Hex("v2"));
+    expect(second.contentSha256).not.toBe(sha256Hex("v1"));
+
+    const v2 = await getArtifactVersion(db, row.id, 2);
+    expect(v2?.contentSha256).toBe(sha256Hex("v2"));
+  });
+
+  test("carries the prior digest forward unchanged on a metadata/title-only revise", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db, { content: "unchanged" });
+    const originalDigest = sha256Hex("unchanged");
+    expect(row.contentSha256).toBe(originalDigest);
+
+    const revised = await writeArtifactVersion(db, {
+      scope: SCOPE,
+      artifactId: row.id,
+      title: "New Title",
+      metadata: { tag: "reviewed" },
+    });
+    expect(revised.contentSha256).toBe(originalDigest);
+
+    const v2 = await getArtifactVersion(db, row.id, 2);
+    expect(v2?.contentSha256).toBe(originalDigest);
+  });
+
+  test("a legacy row with a null digest serializes as null", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db, { content: "legacy" });
+    // Simulate a row written before digests existed — never backfilled.
+    await db.execute(
+      sql`UPDATE "artifacts"."artifact" SET "content_sha256" = NULL WHERE "id" = ${row.id}`,
+    );
+    await db.execute(
+      sql`UPDATE "artifacts"."artifact_version" SET "content_sha256" = NULL WHERE "artifact_id" = ${row.id}`,
+    );
+
+    const fetched = await getArtifact(db, row.id);
+    expect(fetched).not.toBeNull();
+    expect(serializeArtifact(fetched!).contentSha256).toBeNull();
+
+    const pinned = await getArtifactVersion(db, row.id, 1);
+    expect(pinned?.contentSha256).toBeNull();
+  });
+});
+
+describe("expectedVersion precondition", () => {
+  test("a matching expectedVersion succeeds", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db, { content: "v1" });
+
+    const revised = await writeArtifactVersion(db, {
+      scope: SCOPE,
+      artifactId: row.id,
+      content: "v2",
+      expectedVersion: 1,
+    });
+    expect(revised.version).toBe(2);
+  });
+
+  test("a mismatched expectedVersion 409s (VersionConflictError) and writes nothing", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db, { content: "v1" });
+
+    await expect(
+      writeArtifactVersion(db, {
+        scope: SCOPE,
+        artifactId: row.id,
+        content: "v2",
+        expectedVersion: 5,
+      }),
+    ).rejects.toBeInstanceOf(VersionConflictError);
+
+    const history = await listArtifactVersions(db, row.id);
+    expect(history.versions.length).toBe(1);
+    const current = await getArtifact(db, row.id);
+    expect(current?.version).toBe(1);
   });
 });
 

@@ -724,4 +724,87 @@ describe("migrations", () => {
     await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
     await runArtifactMigrations(db);
   });
+
+  test("0005_version_content_digest adds a nullable content_sha256 column to both tables", async () => {
+    assertDestructiveArtifactTestsAllowed(DATABASE_URL);
+    await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
+    await runArtifactMigrations(db);
+
+    const columns = await db.execute<{
+      table_name: string;
+      column_name: string;
+      udt_name: string;
+      is_nullable: string;
+    }>(sql`
+      SELECT table_name, column_name, udt_name, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = ${SCHEMA}
+        AND table_name IN ('artifact', 'artifact_version')
+        AND column_name = 'content_sha256'
+      ORDER BY table_name
+    `);
+    expect([...columns]).toEqual([
+      {
+        table_name: "artifact",
+        column_name: "content_sha256",
+        udt_name: "text",
+        is_nullable: "YES",
+      },
+      {
+        table_name: "artifact_version",
+        column_name: "content_sha256",
+        udt_name: "text",
+        is_nullable: "YES",
+      },
+    ]);
+
+    const ledger = await db.execute<{ id: string }>(
+      sql`SELECT "id" FROM ${sql.identifier(SCHEMA)}.${sql.identifier(LEDGER)} ORDER BY "id"`,
+    );
+    expect(ledger.map((r) => r.id)).toContain("0005_version_content_digest");
+  });
+
+  test("adopting a 0004-only database applies 0005's new column forward", async () => {
+    assertDestructiveArtifactTestsAllowed(DATABASE_URL);
+    await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
+
+    const upTo0004 = MIGRATIONS.filter((m) => m.id !== "0005_version_content_digest");
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`CREATE SCHEMA IF NOT EXISTS ${sql.identifier(SCHEMA)}`);
+      await tx.execute(sql`
+        CREATE TABLE IF NOT EXISTS ${sql.identifier(SCHEMA)}.${sql.identifier(LEDGER)} (
+          "id" text PRIMARY KEY,
+          "checksum" text NOT NULL,
+          "applied_at" timestamptz NOT NULL DEFAULT now()
+        )
+      `);
+      for (const migration of upTo0004) {
+        for (const statement of migration.statements) {
+          await tx.execute(statement);
+        }
+        await tx.execute(sql`
+          INSERT INTO ${sql.identifier(SCHEMA)}.${sql.identifier(LEDGER)}
+            ("id", "checksum")
+          VALUES (${migration.id}, ${migrationChecksum(migration)})
+        `);
+      }
+    });
+
+    await runArtifactMigrations(db);
+
+    const ledger = await db.execute<{ id: string }>(
+      sql`SELECT "id" FROM ${sql.identifier(SCHEMA)}.${sql.identifier(LEDGER)} ORDER BY "id"`,
+    );
+    expect(ledger.map((r) => r.id)).toEqual(MIGRATIONS.map((m) => m.id));
+
+    const columns = await db.execute<{ column_name: string }>(sql`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_schema = ${SCHEMA} AND table_name = 'artifact_version'
+        AND column_name = 'content_sha256'
+    `);
+    expect(columns.map((c) => c.column_name)).toEqual(["content_sha256"]);
+
+    await db.execute(sql`DROP SCHEMA IF EXISTS ${sql.identifier(SCHEMA)} CASCADE`);
+    await runArtifactMigrations(db);
+  });
 });
