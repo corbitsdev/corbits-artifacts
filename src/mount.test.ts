@@ -1182,14 +1182,15 @@ describe("download over HTTP", () => {
   test("?version=N downloads that version's content; omitted downloads current", async () => {
     const db = await testDb();
     const app = host(db);
-    const row = await seedArtifact(db, { kind: "csv-export", title: "Keywords", content: "a,b\n" });
-    await app.request(`/artifacts/${row.id}/versions`, json({ content: "c,d\n" }));
+    const row = await seedArtifact(db, { kind: "csv-export", title: "Keywords", content: "a,b" });
+    // The revise route trims content (TrimmedNonEmpty), same as create.
+    await app.request(`/artifacts/${row.id}/versions`, json({ content: "c,d" }));
 
     const v1 = await app.request(`/artifacts/${row.id}/download?version=1`);
-    expect(await v1.text()).toBe("a,b\n");
+    expect(await v1.text()).toBe("a,b");
 
     const current = await app.request(`/artifacts/${row.id}/download`);
-    expect(await current.text()).toBe("c,d\n");
+    expect(await current.text()).toBe("c,d");
   });
 
   test("download with an unknown ?version is 404", async () => {
