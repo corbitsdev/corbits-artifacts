@@ -29,6 +29,7 @@ import {
   type SerializedArtifactListItem,
 } from "./artifacts.js";
 import { resolveDownload } from "./download.js";
+import { uploadRefFromSource } from "./content-store.js";
 import {
   ArtifactCountsIncompleteError,
   countArtifactsBySegments,
@@ -841,7 +842,7 @@ export function mountArtifacts(
       tags: ["Artifacts"],
       summary: "Download an artifact's content",
       description:
-        "One path over three storage conventions, in precedence order: out-of-band ContentStore blob, inline data: URL (file/image kinds), then downloadable text (csv-export). Served as an attachment except a PDF with ?inline=1; X-Content-Type-Options: nosniff always. An optional ?version=N pins the download to that version's content (getArtifactVersion); omitted, the current version downloads.",
+        "One path over three storage conventions, in precedence order: out-of-band ContentStore blob, inline data: URL (file/image kinds), then downloadable text (csv-export). Served as an attachment except a PDF with ?inline=1; X-Content-Type-Options: nosniff always. An optional ?version=N pins the download to that version's content (getArtifactVersion) for the data-URL and downloadable-text conventions, where content really is per-version. A blob-backed upload has no per-version bytes — source.upload.id lives on the artifact row only — so ?version=N for one is 400 unless it names the artifact's current version.",
       parameters: [
         idParam,
         { name: "inline", in: "query", required: false, schema: { type: "string" } },
@@ -851,7 +852,7 @@ export function mountArtifacts(
         200: { description: "The file body" },
         400: {
           description:
-            "Artifact kind is not downloadable, or version is not a positive integer",
+            "Artifact kind is not downloadable, version is not a positive integer, or version names a non-current version of a blob-backed upload",
         },
         403: { description: "No resolvable principal" },
         404: { description: "Artifact not found — also the answer for an unknown version" },
@@ -870,6 +871,20 @@ export function mountArtifacts(
         }
         const versionRow = await getArtifactVersion(db, loaded.row.id, version);
         if (!versionRow) return c.json({ error: "Artifact not found" }, 404);
+        // A blob's bytes live in the ContentStore, referenced from the
+        // artifact row's own `source` — never from `artifact_version`, so
+        // there is no per-version blob to serve. Silently falling through to
+        // today's blob would answer version N's request with the current
+        // bytes, misrepresenting them as pinned.
+        if (
+          version !== loaded.row.version &&
+          uploadRefFromSource(loaded.row.source)?.id !== undefined
+        ) {
+          return c.json(
+            { error: "Uploaded file content is not versioned" },
+            400,
+          );
+        }
         row = {
           ...loaded.row,
           title: versionRow.title,

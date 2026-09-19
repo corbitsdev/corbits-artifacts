@@ -213,7 +213,13 @@ That route reuses the detail route's read authorization and response shape — a
 non-integer or sub-1 `:version` is `400`, and an unknown version collapses into the
 same `404 Artifact not found` every other single-artifact failure mode does.
 `GET /api/artifacts/:id/download?version=N` applies the same pin to a downloadable
-artifact's bytes; omitting `version` downloads the current one.
+artifact's bytes, for the conventions where content really is per-version (an inline
+data: URL, or downloadable text like `csv-export`); omitting `version` downloads the
+current one. A blob-backed upload has no per-version bytes — the `ContentStore`
+reference lives in the artifact row's own `source`, never in `artifact_version` — so
+`?version=N` for one is `400 {"error":"Uploaded file content is not versioned"}`
+unless `N` names the artifact's current version, rather than silently answering with
+today's blob under an older version's name.
 
 **Version metadata and lineage:** each version optionally carries `metadata` (any JSON
 object, opaque to the package — stored and returned as-is) and `parentVersionIds` (an

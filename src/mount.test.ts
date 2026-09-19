@@ -1205,6 +1205,46 @@ describe("download over HTTP", () => {
     const res = await host(db).request(`/artifacts/${row.id}/download?version=0`);
     expect(res.status).toBe(400);
   });
+
+  // A blob's bytes live in the ContentStore, referenced from the artifact
+  // row's own `source` — never per-version. Silently serving the current
+  // blob for an older `?version=N` would misrepresent it as that version's
+  // content, so a non-current version is refused instead of lying.
+  test("?version naming a non-current version of a blob-backed upload is 400", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const png = new File([new Uint8Array([1, 2, 3])], "chart.png", { type: "image/png" });
+    const data = new FormData();
+    data.append("files", png);
+    const created = (await (
+      await app.request("/artifacts/upload", { method: "POST", body: data })
+    ).json()) as { artifacts: { id: string }[] };
+    const id = created.artifacts[0]!.id;
+    await app.request(`/artifacts/${id}/versions`, json({ title: "Renamed" }));
+
+    const stale = await app.request(`/artifacts/${id}/download?version=1`);
+    expect(stale.status).toBe(400);
+    expect(await stale.json()).toEqual({
+      error: "Uploaded file content is not versioned",
+    });
+  });
+
+  test("?version naming the CURRENT version of a blob-backed upload still serves it", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const bytes = new Uint8Array([1, 2, 3]);
+    const png = new File([bytes], "chart.png", { type: "image/png" });
+    const data = new FormData();
+    data.append("files", png);
+    const created = (await (
+      await app.request("/artifacts/upload", { method: "POST", body: data })
+    ).json()) as { artifacts: { id: string; version: number }[] };
+    const { id, version } = created.artifacts[0]!;
+
+    const res = await app.request(`/artifacts/${id}/download?version=${version}`);
+    expect(res.status).toBe(200);
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(bytes);
+  });
 });
 
 describe("mail attachment references", () => {

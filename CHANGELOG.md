@@ -23,8 +23,14 @@ always called out under their own heading.
   sub-1 version is `400`; an unknown version collapses into the same `404
   Artifact not found` every other single-artifact failure mode does.
 - `GET /api/artifacts/:id/download?version=N` — pins the download to that
-  version's content instead of the current one; omitting `version` is
-  unchanged. Same `400`/`404` rules as the new versions route.
+  version's content for the data-URL and downloadable-text conventions,
+  where content really is per-version; omitting `version` is unchanged. Same
+  `400`/`404` rules as the new versions route, plus one more: a blob-backed
+  upload's `ContentStore` reference lives on the artifact row's own
+  `source`, never per-version, so `?version=N` for one is `400 "Uploaded
+  file content is not versioned"` unless `N` names the current version —
+  rather than silently answering with today's blob under an older version's
+  name.
 - `artifact_version.metadata` (jsonb, nullable) and
   `artifact_version.parent_version_ids` (text[], nullable), added by the new
   `0004_version_metadata` migration. `metadata` is opaque to the package —
