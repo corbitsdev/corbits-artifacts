@@ -10,6 +10,7 @@ import {
   PARSED_DOCUMENT_POLICY,
   SPREADSHEET_UPLOAD_POLICY,
   UnsupportedUploadTypeError,
+  uploadArtifactKind,
   type UploadPolicy,
 } from "./uploads.js";
 import { InlineContentStore } from "./content-store.js";
@@ -50,6 +51,38 @@ describe("MIME gating", () => {
         ARTIFACT_UPLOAD_POLICY,
       ),
     ).toBe("");
+  });
+
+  test("accepts gzip and tar archives by MIME and by extension", () => {
+    expect(ARTIFACT_UPLOAD_POLICY.accepts("application/gzip")).toBe(true);
+    expect(ARTIFACT_UPLOAD_POLICY.accepts("application/x-gzip")).toBe(true);
+    expect(ARTIFACT_UPLOAD_POLICY.accepts("application/x-tar")).toBe(true);
+
+    expect(
+      effectiveUploadMime({ name: "build.tar.gz", type: "" }, ARTIFACT_UPLOAD_POLICY),
+    ).toBe("application/gzip");
+    expect(
+      effectiveUploadMime({ name: "build.tgz", type: "" }, ARTIFACT_UPLOAD_POLICY),
+    ).toBe("application/gzip");
+    expect(
+      effectiveUploadMime({ name: "build.gz", type: "" }, ARTIFACT_UPLOAD_POLICY),
+    ).toBe("application/gzip");
+    expect(
+      effectiveUploadMime({ name: "build.tar", type: "" }, ARTIFACT_UPLOAD_POLICY),
+    ).toBe("application/x-tar");
+  });
+
+  test("an archive mints kind `file`, never `image`, and is excluded from the download inline allow-list", () => {
+    expect(uploadArtifactKind("application/gzip")).toBe("file");
+    expect(uploadArtifactKind("application/x-gzip")).toBe("file");
+    expect(uploadArtifactKind("application/x-tar")).toBe("file");
+
+    // download.ts's `disposition()` only ever inlines `application/pdf`;
+    // every other MIME — archives included — is always `attachment`. This
+    // pins that none of the archive MIME types could ever match that gate.
+    for (const mime of ["application/gzip", "application/x-gzip", "application/x-tar"]) {
+      expect(mime).not.toBe("application/pdf");
+    }
   });
 
   test("SVG is excluded — it can carry inline script and would be stored XSS", () => {

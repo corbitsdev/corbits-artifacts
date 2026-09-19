@@ -273,6 +273,13 @@ them into one global list would silently widen the narrow ones.
 | `SPREADSHEET_UPLOAD_POLICY` | Spreadsheet ingest | the host |
 | `PARSED_DOCUMENT_POLICY` | Chat/mail attachment divert | the host |
 
+`ARTIFACT_UPLOAD_POLICY` also accepts packaged archives — `application/gzip` /
+`application/x-gzip` (`.tar.gz`, `.tgz`, `.gz`) and `application/x-tar` (`.tar`) — for
+consumers storing packaged builds. An archive mints kind `file`, is never
+inline-previewable (the download path only ever inlines a `application/pdf`; everything
+else, archives included, is served as an `attachment`), and is still subject to
+`MAX_UPLOAD_BYTES`, the same per-file ceiling as any other upload.
+
 What this package owns is the **gate**: `createFileArtifact` — the one function every
 file artifact goes through — takes `policy` as a required argument and refuses anything
 outside it with `UnsupportedUploadTypeError` before the `ContentStore` is touched. A
