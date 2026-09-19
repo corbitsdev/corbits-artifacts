@@ -30,7 +30,7 @@ function csvFilename(title: string): string {
  * an embedded deck preview can iframe it. `nosniff` (set by the caller) pins the
  * declared type either way.
  */
-function disposition(mimeType: string, wantsInline: boolean) {
+export function disposition(mimeType: string, wantsInline: boolean) {
   return wantsInline && mimeType === "application/pdf" ? "inline" : "attachment";
 }
 

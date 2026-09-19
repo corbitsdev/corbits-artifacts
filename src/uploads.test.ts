@@ -14,6 +14,7 @@ import {
   type UploadPolicy,
 } from "./uploads.js";
 import { InlineContentStore } from "./content-store.js";
+import { disposition } from "./download.js";
 import { artifact, upload } from "./schema.js";
 import { SCOPE, testDb } from "./test-helpers.js";
 
@@ -72,16 +73,14 @@ describe("MIME gating", () => {
     ).toBe("application/x-tar");
   });
 
-  test("an archive mints kind `file`, never `image`, and is excluded from the download inline allow-list", () => {
+  test("an archive mints kind `file`, never `image`, and download.ts always serves it as an attachment", () => {
     expect(uploadArtifactKind("application/gzip")).toBe("file");
     expect(uploadArtifactKind("application/x-gzip")).toBe("file");
     expect(uploadArtifactKind("application/x-tar")).toBe("file");
 
-    // download.ts's `disposition()` only ever inlines `application/pdf`;
-    // every other MIME — archives included — is always `attachment`. This
-    // pins that none of the archive MIME types could ever match that gate.
     for (const mime of ["application/gzip", "application/x-gzip", "application/x-tar"]) {
-      expect(mime).not.toBe("application/pdf");
+      expect(disposition(mime, false)).toBe("attachment");
+      expect(disposition(mime, true)).toBe("attachment");
     }
   });
 
