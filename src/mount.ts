@@ -22,6 +22,7 @@ import {
   serializeArtifactListItem,
   setArtifactArchived,
   SKILL_DRAFT_KIND,
+  VersionConflictError,
   writeArtifactVersion,
   type ArtifactListRow,
   type SerializedArtifact,
@@ -157,10 +158,17 @@ const GeneratedByField = type("unknown")
   })
   .to("string <= 200 | undefined");
 
+// A JSON-body positive integer, distinct from `VersionRef` below (a path/query
+// string). Omitted entirely preserves today's unconditional-write behavior.
+const ExpectedVersion = type("number").narrow(
+  (n, ctx) => (Number.isInteger(n) && n >= 1) || ctx.mustBe("a positive integer"),
+);
+
 const ReviseArtifactRequest = type({
   "title?": TrimmedNonEmpty,
   "content?": TrimmedNonEmpty,
   "metadata?": NullableMetadata,
+  "expectedVersion?": ExpectedVersion,
 }).narrow(
   (body, ctx) =>
     body.title !== undefined ||
@@ -720,6 +728,7 @@ export function mountArtifacts(
           content: versionRow.content,
           version: versionRow.version,
           metadata: versionRow.metadata,
+          contentSha256: versionRow.contentSha256,
         },
       ]);
       return c.json({ artifact: artifactJson });
@@ -732,13 +741,14 @@ export function mountArtifacts(
       tags: ["Artifacts"],
       summary: "Revise an artifact, creating a new version",
       description:
-        "Locks the row FOR UPDATE and bumps version by one; a unique (artifactId, version) index backstops a racing writer. Archived and skill-draft artifacts present as not found. `metadata` is optional and opaque; when omitted, the prior version's metadata carries forward, and an explicit `null` clears it.",
+        "Locks the row FOR UPDATE and bumps version by one; a unique (artifactId, version) index backstops a racing writer. Archived and skill-draft artifacts present as not found. `metadata` is optional and opaque; when omitted, the prior version's metadata carries forward, and an explicit `null` clears it. An optional `expectedVersion` is checked under the same lock: a mismatch answers 409 and writes nothing.",
       parameters: [idParam],
       responses: {
         200: { description: "New version created" },
         400: { description: "Invalid request body or content" },
         403: { description: "No resolvable principal, or not permitted" },
         404: { description: "Artifact not found" },
+        409: { description: "expectedVersion did not match the current version" },
         413: { description: "Declared Content-Length over the content ceiling" },
       },
     }),
@@ -770,11 +780,20 @@ export function mountArtifacts(
             ...(body.title !== undefined ? { title: body.title } : {}),
             ...(body.content !== undefined ? { content: body.content } : {}),
             ...(body.metadata !== undefined ? { metadata: body.metadata } : {}),
+            ...(body.expectedVersion !== undefined
+              ? { expectedVersion: body.expectedVersion }
+              : {}),
           }),
         );
       } catch (error) {
         if (error instanceof ArtifactNotFoundError) {
           return c.json({ error: "Artifact not found" }, 404);
+        }
+        if (error instanceof VersionConflictError) {
+          return c.json(
+            { error: "Version conflict", currentVersion: error.currentVersion },
+            409,
+          );
         }
         if (error instanceof ArtifactSizeError) {
           return c.json({ error: error.message }, 400);

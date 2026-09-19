@@ -1,4 +1,5 @@
 import "./arktype.js";
+import { createHash } from "node:crypto";
 import { type } from "arktype";
 import {
   and,
@@ -153,6 +154,11 @@ export type SerializedArtifactBase = {
   ownerPrincipalId: string | null;
   /** Mirrors the current version's `artifact_version.metadata`, opaque to the package. */
   metadata: Record<string, unknown> | null;
+  /**
+   * sha256 (hex) of the current version's content. Null on a row written
+   * before digests existed — never backfilled.
+   */
+  contentSha256: string | null;
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -183,6 +189,7 @@ function serializeArtifactBase(
     version: row.version,
     ownerPrincipalId: row.ownerPrincipalId,
     metadata: (row.metadata as Record<string, unknown> | null) ?? null,
+    contentSha256: row.contentSha256,
     archivedAt: row.archivedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -211,6 +218,17 @@ function normalizeContentForKind(kind: string, content: string): string {
   return content;
 }
 
+/**
+ * sha256 (hex) over the UTF-8 bytes of `content`. Used for every text/URL
+ * artifact write; a blob-backed file artifact's first version instead passes
+ * an explicit digest of the uploaded bytes (see `createFileArtifact` in
+ * `uploads.ts`), since its `content` column is a store-specific pointer, not
+ * the bytes themselves.
+ */
+export function sha256Hex(content: string): string {
+  return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
 export type CreateArtifactArgs = {
   scope: ResolvedPrincipal;
   /** The human who owns this artifact; null for agents with no owning member. */
@@ -223,6 +241,14 @@ export type CreateArtifactArgs = {
   metadata?: Record<string, unknown> | null;
   /** Explicit lineage for version 1 — never inferred from order. */
   parentVersionIds?: string[] | null;
+  /**
+   * Digest override for a blob-backed file artifact, whose `content` column
+   * is a store-specific pointer rather than the bytes themselves — the caller
+   * (`createFileArtifact` in `uploads.ts`) digests the uploaded bytes and
+   * passes the result here. Omitted for every other kind, which digests
+   * `content` itself.
+   */
+  contentSha256?: string;
 };
 
 /**
@@ -254,6 +280,7 @@ export async function createArtifact(
   });
   const metadata = args.metadata ?? null;
   const parentVersionIds = args.parentVersionIds ?? null;
+  const contentSha256 = args.contentSha256 ?? sha256Hex(content);
   const now = new Date();
 
   const [row] = await tx
@@ -268,6 +295,7 @@ export async function createArtifact(
       source: args.source,
       version: 1,
       metadata,
+      contentSha256,
       createdAt: now,
       updatedAt: now,
     })
@@ -282,6 +310,7 @@ export async function createArtifact(
     authorId: args.scope.principalId,
     metadata,
     parentVersionIds,
+    contentSha256,
     createdAt: now,
   });
 
@@ -292,6 +321,23 @@ export class ArtifactNotFoundError extends Error {
   constructor(artifactId: string) {
     super(`Artifact not found: ${artifactId}`);
     this.name = "ArtifactNotFoundError";
+  }
+}
+
+/**
+ * Thrown by `reviseArtifactVersion` when the caller's `expectedVersion`
+ * precondition does not match the current version, observed under the same
+ * `FOR UPDATE` lock that guards the write. Nothing is written.
+ */
+export class VersionConflictError extends Error {
+  constructor(
+    artifactId: string,
+    readonly currentVersion: number,
+  ) {
+    super(
+      `Version conflict on artifact ${artifactId}: current version is ${currentVersion}`,
+    );
+    this.name = "VersionConflictError";
   }
 }
 
@@ -317,6 +363,12 @@ async function reviseArtifactVersion(
     metadata?: Record<string, unknown> | null;
     /** Explicit lineage for this version — never inferred, never carried forward. */
     parentVersionIds?: string[] | null;
+    /**
+     * Precondition checked under the `FOR UPDATE` lock below: when set and it
+     * does not match the current version, {@link VersionConflictError} is
+     * thrown and nothing is written. Omitted preserves today's behavior.
+     */
+    expectedVersion?: number;
   },
   now: Date,
 ): Promise<ArtifactRow> {
@@ -344,6 +396,13 @@ async function reviseArtifactVersion(
     throw new ArtifactNotFoundError(args.artifactId);
   }
 
+  if (
+    args.expectedVersion !== undefined &&
+    args.expectedVersion !== existing.version
+  ) {
+    throw new VersionConflictError(args.artifactId, existing.version);
+  }
+
   const version = existing.version + 1;
   const title = args.title ?? existing.title;
   const content =
@@ -358,10 +417,14 @@ async function reviseArtifactVersion(
       ? (existing.metadata as Record<string, unknown> | null)
       : args.metadata;
   const parentVersionIds = args.parentVersionIds ?? null;
+  // Content omitted: the previous content carries forward, so its digest
+  // carries forward unchanged rather than being recomputed.
+  const contentSha256 =
+    args.content === undefined ? existing.contentSha256 : sha256Hex(content);
 
   const [updated] = await tx
     .update(artifact)
-    .set({ title, content, version, metadata, updatedAt: now })
+    .set({ title, content, version, metadata, contentSha256, updatedAt: now })
     .where(eq(artifact.id, args.artifactId))
     .returning();
   if (!updated) throw new ArtifactNotFoundError(args.artifactId);
@@ -374,6 +437,7 @@ async function reviseArtifactVersion(
     authorId: args.scope.principalId,
     metadata,
     parentVersionIds,
+    contentSha256,
     createdAt: now,
   });
 
@@ -395,12 +459,15 @@ export async function writeArtifactVersion(
     metadata?: Record<string, unknown> | null;
     /** Explicit lineage for this version — never inferred from order. */
     parentVersionIds?: string[] | null;
+    /** See `VersionConflictError` — omitted preserves today's behavior. */
+    expectedVersion?: number;
   },
 ): Promise<{
   artifactId: string;
   version: number;
   title: string;
   metadata: Record<string, unknown> | null;
+  contentSha256: string | null;
 }> {
   if (
     args.title === undefined &&
@@ -421,6 +488,7 @@ export async function writeArtifactVersion(
       version: row.version,
       title: row.title,
       metadata: (row.metadata as Record<string, unknown> | null) ?? null,
+      contentSha256: row.contentSha256,
     };
   });
 }
@@ -448,6 +516,7 @@ export async function getArtifactVersion(
   version: number;
   metadata: Record<string, unknown> | null;
   parentVersionIds: string[] | null;
+  contentSha256: string | null;
 } | null> {
   const [row] = await db
     .select({
@@ -456,6 +525,7 @@ export async function getArtifactVersion(
       version: artifactVersion.version,
       metadata: artifactVersion.metadata,
       parentVersionIds: artifactVersion.parentVersionIds,
+      contentSha256: artifactVersion.contentSha256,
     })
     .from(artifactVersion)
     .where(
@@ -480,6 +550,7 @@ export type ArtifactVersionListItem = {
   createdAt: string;
   metadata: Record<string, unknown> | null;
   parentVersionIds: string[] | null;
+  contentSha256: string | null;
 };
 
 export type ListArtifactVersionsFilters = {
@@ -510,6 +581,7 @@ export async function listArtifactVersions(
       createdAt: artifactVersion.createdAt,
       metadata: artifactVersion.metadata,
       parentVersionIds: artifactVersion.parentVersionIds,
+      contentSha256: artifactVersion.contentSha256,
     })
     .from(artifactVersion)
     .where(and(...conditions))

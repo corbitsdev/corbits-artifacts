@@ -78,6 +78,23 @@ describe("import a URL, read it back, revise it, read the history", () => {
     expect(history.versions[1]!.title).toBe("Launch plan");
   });
 
+  test("revise with a stale expectedVersion is refused 409 and leaves the version count unchanged", async () => {
+    const conflict = await host.request(
+      `/api/artifacts/${artifactId}/versions`,
+      postJson({ content: "https://example.com/plan-3", expectedVersion: 1 }),
+    );
+    expect(conflict.status).toBe(409);
+    expect(await json<{ error: string; currentVersion: number }>(conflict)).toEqual({
+      error: "Version conflict",
+      currentVersion: 2,
+    });
+
+    const history = await json<{ versions: { version: number }[] }>(
+      await host.request(`/api/artifacts/${artifactId}/versions`),
+    );
+    expect(history.versions.map((v) => v.version)).toEqual([2, 1]);
+  });
+
   test("GET /versions/:version serves version 1's own content, unaffected by the revision", async () => {
     const v1 = await json<{ artifact: { version: number; title: string; content: string } }>(
       await host.request(`/api/artifacts/${artifactId}/versions/1`),

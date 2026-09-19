@@ -219,6 +219,26 @@ export const MIGRATIONS: Migration[] = [
       `,
     ],
   },
+  {
+    // `content_sha256` is computed at write time (sha256 hex over the UTF-8
+    // bytes of `content` for text/URL artifacts, or over the uploaded bytes
+    // for a blob-backed file artifact's first version) and mirrored onto
+    // `artifact` the same way `metadata` already is. Both columns are
+    // nullable and additive: `ADD COLUMN IF NOT EXISTS` is safe to re-run, and
+    // existing rows stay null — "written before digests existed" — with no
+    // backfill.
+    id: "0005_version_content_digest",
+    statements: [
+      sql`
+        ALTER TABLE "artifacts"."artifact"
+          ADD COLUMN IF NOT EXISTS "content_sha256" text
+      `,
+      sql`
+        ALTER TABLE "artifacts"."artifact_version"
+          ADD COLUMN IF NOT EXISTS "content_sha256" text
+      `,
+    ],
+  },
 ];
 
 // Advisory locks are namespaced by this integer alone; deliberately arbitrary
@@ -307,6 +327,7 @@ const EXPECTED_OWNED_SHAPE: Readonly<Record<string, readonly ExpectedColumn[]>> 
       { name: "created_at", udt: "timestamptz" },
       { name: "updated_at", udt: "timestamptz" },
       { name: "metadata", udt: "jsonb" },
+      { name: "content_sha256", udt: "text" },
     ],
     artifact_version: [
       { name: "id", udt: "text" },
@@ -318,6 +339,7 @@ const EXPECTED_OWNED_SHAPE: Readonly<Record<string, readonly ExpectedColumn[]>> 
       { name: "created_at", udt: "timestamptz" },
       { name: "metadata", udt: "jsonb" },
       { name: "parent_version_ids", udt: "_text" },
+      { name: "content_sha256", udt: "text" },
     ],
     upload: [
       { name: "id", udt: "text" },

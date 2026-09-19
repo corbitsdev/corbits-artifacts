@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isAllowedMimeType } from "@intx/types";
 import type { ArtifactTx } from "./db.js";
 import { createArtifact } from "./artifacts.js";
@@ -231,12 +232,17 @@ export async function createFileArtifact(
     mimeType: args.mimeType,
     bytes: args.bytes,
   });
+  // Digest the uploaded bytes, not `stored.content` — for a blob-backed store
+  // that column is a pointer (empty, or a data: URL), not the bytes
+  // themselves, and this is version 1's authoritative digest either way.
+  const contentSha256 = createHash("sha256").update(args.bytes).digest("hex");
   return await createArtifact(tx, {
     scope: args.scope,
     ownerPrincipalId: args.ownerPrincipalId,
     kind: uploadArtifactKind(args.mimeType),
     title: args.filename,
     content: stored.content,
+    contentSha256,
     source: {
       origin: args.origin ?? "imported",
       ...(args.generatedBy !== undefined ? { generatedBy: args.generatedBy } : {}),

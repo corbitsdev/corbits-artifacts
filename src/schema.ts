@@ -80,6 +80,12 @@ export const artifact = artifactsSchema.table(
      * interpreted here.
      */
     metadata: jsonb("metadata"),
+    /**
+     * Mirrors the current version's `artifact_version.content_sha256` the same
+     * way `metadata` mirrors the current version's metadata. Null on rows
+     * written before digests existed — never backfilled.
+     */
+    contentSha256: text("content_sha256"),
     /** Soft-archive: null = visible, a timestamp = hidden from discovery. */
     archivedAt: timestamp("archived_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -119,6 +125,14 @@ export const artifactVersion = artifactsSchema.table(
     metadata: jsonb("metadata"),
     /** Explicit lineage set by the writer — never inferred from version order. */
     parentVersionIds: text("parent_version_ids").array(),
+    /**
+     * sha256 (hex) over the UTF-8 bytes of `content` for text and URL
+     * artifacts, or over the uploaded bytes for a blob-backed file artifact's
+     * first version. A metadata/title-only revise (content carried forward)
+     * carries this forward unchanged. Null means "written before digests
+     * existed" — there is no backfill.
+     */
+    contentSha256: text("content_sha256"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

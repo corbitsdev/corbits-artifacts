@@ -11,6 +11,25 @@ always called out under their own heading.
 
 ### Added
 
+- `artifact_version.content_sha256` (text, nullable), added by the new
+  `0005_version_content_digest` migration and mirrored onto
+  `artifact.content_sha256` the same way `metadata` already mirrors. Computed
+  at write time — sha256 (hex) over the UTF-8 bytes of `content` for text and
+  URL artifacts, or over the uploaded bytes for a blob-backed file artifact's
+  version 1, since its `content` column is a store-specific pointer, not the
+  bytes. A metadata/title-only revise (content omitted, so it carries
+  forward) carries the digest forward unchanged. Returned as `contentSha256`
+  on `GET /api/artifacts/:id`, `GET /api/artifacts/:id/versions/:version`,
+  `GET /api/artifacts/:id/versions`, and the `POST /api/artifacts/:id/versions`
+  response. Existing rows serialize `contentSha256: null` — written before
+  digests existed, and never backfilled.
+- `expectedVersion` (positive integer, optional) on
+  `POST /api/artifacts/:id/versions`. Checked under the same `SELECT ... FOR
+  UPDATE` that guards the version bump: a mismatch answers `409
+  {"error":"Version conflict","currentVersion":N}` and writes nothing.
+  Omitting it is today's unconditional-write behavior. Lets a caller bind a
+  revise to the exact version it last read — for example, a human approval on
+  specific content — instead of silently overwriting a change it never saw.
 - `ARTIFACT_UPLOAD_POLICY` accepts packaged archives — `application/gzip` /
   `application/x-gzip` (`.tar.gz`, `.tgz`, `.gz`) and `application/x-tar`
   (`.tar`) — so consumers storing packaged builds are no longer refused with
