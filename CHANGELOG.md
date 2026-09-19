@@ -11,6 +11,12 @@ always called out under their own heading.
 
 ### Added
 
+- `ARTIFACT_UPLOAD_POLICY` accepts packaged archives — `application/gzip` /
+  `application/x-gzip` (`.tar.gz`, `.tgz`, `.gz`) and `application/x-tar`
+  (`.tar`) — so consumers storing packaged builds are no longer refused with
+  415. An archive mints kind `file`, is never inline-previewable (the
+  download path's inline allow-list is `application/pdf` only), and is still
+  subject to the existing `MAX_UPLOAD_BYTES` per-file ceiling.
 - `artifact_version.metadata` (jsonb, nullable) and
   `artifact_version.parent_version_ids` (text[], nullable), added by the new
   `0004_version_metadata` migration. `metadata` is opaque to the package —

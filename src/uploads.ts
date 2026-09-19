@@ -4,7 +4,8 @@ import { createArtifact } from "./artifacts.js";
 import type { ArtifactRow } from "./schema.js";
 import type { ResolvedPrincipal, ContentStore } from "./ports.js";
 
-/** Per-file ceiling. Larger inputs belong in object storage, not a bytea column. */
+/** Per-file ceiling, archives included. Larger inputs belong in object storage,
+ *  not a bytea column. */
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 /** A folder upload is unbounded; both the count and the aggregate are capped. */
 export const MAX_UPLOAD_FILE_COUNT = 50;
@@ -74,18 +75,42 @@ const IMAGE_EXTENSIONS = new Map([
 ]);
 
 /**
- * The gallery import surface: documents plus raster images.
+ * Packaged builds. Specific compound extensions (`.tar.gz`) are listed before
+ * `.gz` so `extensionMime`'s ordered `endsWith` scan resolves them first, not
+ * that it changes the result here — both map to the same canonical MIME.
+ */
+const ARCHIVE_EXTENSIONS = new Map([
+  [".tar.gz", "application/gzip"],
+  [".tgz", "application/gzip"],
+  [".gz", "application/gzip"],
+  [".tar", "application/x-tar"],
+]);
+
+/** Declared types accepted alongside the archive extensions above: browsers
+ *  disagree on which gzip MIME they report, so both are accepted. */
+const ARCHIVE_MIME_TYPES = ["application/gzip", "application/x-gzip", "application/x-tar"];
+
+/**
+ * The gallery import surface: documents, raster images, and packaged
+ * archives.
  *
  * `image/svg+xml` is deliberately absent — an SVG can carry inline <script> and
  * would be a stored-XSS vector once served back on the app origin. Raster types
  * cover thumbnails without that risk.
+ *
+ * Archives mint kind `file` (`uploadArtifactKind` only maps `image/*` to
+ * `image`) and are never inline-previewable: `download.ts`'s inline allow-list
+ * is `mimeType === "application/pdf"` only, so every archive MIME here is
+ * always served `attachment`. `MAX_UPLOAD_BYTES` applies to archives the same
+ * as any other upload — a build too large to fit belongs in object storage.
  */
 export const ARTIFACT_UPLOAD_POLICY: UploadPolicy = {
   accepts: acceptsOneOf([
     ...DOCUMENT_EXTENSIONS.values(),
     ...IMAGE_EXTENSIONS.values(),
+    ...ARCHIVE_MIME_TYPES,
   ]),
-  extensions: new Map([...DOCUMENT_EXTENSIONS, ...IMAGE_EXTENSIONS]),
+  extensions: new Map([...DOCUMENT_EXTENSIONS, ...IMAGE_EXTENSIONS, ...ARCHIVE_EXTENSIONS]),
 };
 
 /** The spreadsheet-ingest surface: one format, validated at the boundary so a
