@@ -77,6 +77,27 @@ describe("import a URL, read it back, revise it, read the history", () => {
     expect(history.versions.map((v) => v.version)).toEqual([2, 1]);
     expect(history.versions[1]!.title).toBe("Launch plan");
   });
+
+  test("GET /versions/:version serves version 1's own content, unaffected by the revision", async () => {
+    const v1 = await json<{ artifact: { version: number; title: string; content: string } }>(
+      await host.request(`/api/artifacts/${artifactId}/versions/1`),
+    );
+    expect(v1.artifact).toMatchObject({
+      version: 1,
+      title: "Launch plan",
+      content: "https://example.com/plan",
+    });
+
+    const v2 = await json<{ artifact: { version: number; content: string } }>(
+      await host.request(`/api/artifacts/${artifactId}/versions/2`),
+    );
+    expect(v2.artifact).toMatchObject({ version: 2, content: "https://example.com/plan-2" });
+  });
+
+  test("GET /versions/:version is 404 for an unknown version and 400 for a malformed one", async () => {
+    expect((await host.request(`/api/artifacts/${artifactId}/versions/99`)).status).toBe(404);
+    expect((await host.request(`/api/artifacts/${artifactId}/versions/0`)).status).toBe(400);
+  });
 });
 
 // The ContentStore is a port, and the proof is that the SAME scenarios pass
@@ -152,6 +173,77 @@ describe.each<[string, ContentStore]>([
       await app.request(`/api/instances/inst-${name}/mail-attachments`),
     );
     expect(refs.refs.map((r) => r.artifactId)).toEqual([pdfId]);
+  });
+});
+
+// Only DataUrlContentStore keeps its bytes IN `content`, so it is the store
+// where ?version=N really changes what downloads. InlineContentStore's blob
+// lives out-of-band, referenced from the artifact row's own `source` (never
+// versioned) — see the next describe block for how that case is refused
+// rather than silently serving the current blob under an older version's name.
+describe("download an older version's content over HTTP (DataUrlContentStore)", () => {
+  let app: { request: (path: string, init?: RequestInit) => Promise<Response> };
+  let id: string;
+  const ORIGINAL = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 1, 1]);
+  const REVISED = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 2, 2, 2]);
+
+  beforeAll(async () => {
+    app = host.buildApp(DataUrlContentStore);
+    const form = new FormData();
+    form.append("files", new File([ORIGINAL], "chart.png", { type: "image/png" }));
+    const uploaded = await json<{ artifacts: { id: string }[] }>(
+      await app.request("/api/artifacts/upload", { method: "POST", body: form }),
+    );
+    id = uploaded.artifacts[0]!.id;
+    await app.request(
+      `/api/artifacts/${id}/versions`,
+      postJson({ content: `data:image/png;base64,${Buffer.from(REVISED).toString("base64")}` }),
+    );
+  });
+
+  test("?version=1 downloads the original bytes; omitted downloads the current version", async () => {
+    const original = await app.request(`/api/artifacts/${id}/download?version=1`);
+    expect(new Uint8Array(await original.arrayBuffer())).toEqual(ORIGINAL);
+
+    const current = await app.request(`/api/artifacts/${id}/download`);
+    expect(new Uint8Array(await current.arrayBuffer())).toEqual(REVISED);
+  });
+
+  test("an unknown ?version is 404 and a non-integer one is 400", async () => {
+    expect((await app.request(`/api/artifacts/${id}/download?version=99`)).status).toBe(404);
+    expect((await app.request(`/api/artifacts/${id}/download?version=abc`)).status).toBe(400);
+  });
+});
+
+describe("?version on a blob-backed upload (InlineContentStore) is refused unless current", () => {
+  let app: { request: (path: string, init?: RequestInit) => Promise<Response> };
+  let id: string;
+  let currentVersion: number;
+  const BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 3, 3, 3]);
+
+  beforeAll(async () => {
+    app = host.buildApp(InlineContentStore);
+    const form = new FormData();
+    form.append("files", new File([BYTES], "chart.png", { type: "image/png" }));
+    const uploaded = await json<{ artifacts: { id: string; version: number }[] }>(
+      await app.request("/api/artifacts/upload", { method: "POST", body: form }),
+    );
+    ({ id, version: currentVersion } = uploaded.artifacts[0]!);
+    // Bumps the artifact's version without touching the out-of-band blob —
+    // `source` (and so the ContentStore reference) is never revised.
+    await app.request(`/api/artifacts/${id}/versions`, postJson({ title: "Renamed" }));
+  });
+
+  test("a non-current ?version is 400, not a silent lie about which bytes came back", async () => {
+    const res = await app.request(`/api/artifacts/${id}/download?version=${currentVersion}`);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "Uploaded file content is not versioned" });
+  });
+
+  test("?version naming the CURRENT version still downloads the blob", async () => {
+    const res = await app.request(`/api/artifacts/${id}/download?version=${currentVersion + 1}`);
+    expect(res.status).toBe(200);
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(BYTES);
   });
 });
 
@@ -388,6 +480,7 @@ describe("a cross-tenant request fails closed", () => {
       [`/api/artifacts/${id}`, {}],
       [`/api/artifacts/${id}/versions`, {}],
       [`/api/artifacts/${id}/versions`, postJson({ content: "x" })],
+      [`/api/artifacts/${id}/versions/1`, {}],
       [`/api/artifacts/${id}/archive`, { method: "POST" }],
       [`/api/artifacts/${id}/unarchive`, { method: "POST" }],
       [`/api/artifacts/${id}/download`, {}],
@@ -548,6 +641,7 @@ describe("a skill-draft is invisible over the mounted host", () => {
       [`/api/artifacts/${id}`, {}],
       [`/api/artifacts/${id}/versions`, {}],
       [`/api/artifacts/${id}/versions`, postJson({ content: "x" })],
+      [`/api/artifacts/${id}/versions/1`, {}],
       [`/api/artifacts/${id}/archive`, { method: "POST" }],
       [`/api/artifacts/${id}/unarchive`, { method: "POST" }],
       [`/api/artifacts/${id}/download`, {}],

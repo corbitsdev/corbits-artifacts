@@ -11,6 +11,7 @@ import {
   createArtifact,
   enrich,
   getArtifact,
+  getArtifactVersion,
   listArtifacts,
   ListArtifactsQuery,
   listArtifactVersions,
@@ -28,6 +29,7 @@ import {
   type SerializedArtifactListItem,
 } from "./artifacts.js";
 import { resolveDownload } from "./download.js";
+import { uploadRefFromSource } from "./content-store.js";
 import {
   ArtifactCountsIncompleteError,
   countArtifactsBySegments,
@@ -173,6 +175,16 @@ const idParam = {
   required: true,
   schema: { type: "string" },
 } as const;
+
+// A path/query version reference: a positive integer, or a 400 for anything
+// else (non-numeric, fractional, zero, negative).
+const VersionRef = type("string").pipe((raw, ctx) => {
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) {
+    return ctx.error("a positive integer version");
+  }
+  return n;
+});
 
 /**
  * Mount the artifact routes onto a host Hono app.
@@ -668,6 +680,52 @@ export function mountArtifacts(
     },
   );
 
+  app.get(
+    "/artifacts/:id/versions/:version",
+    describeRoute({
+      tags: ["Artifacts"],
+      summary: "Read one version of an artifact, including its content",
+      description:
+        "Same read authorization and response shape as GET /artifacts/:id, pinned to a specific version via getArtifactVersion.",
+      parameters: [
+        idParam,
+        { name: "version", in: "path", required: true, schema: { type: "integer" } },
+      ],
+      responses: {
+        200: { description: "The version, including content" },
+        400: { description: "version is not a positive integer" },
+        403: { description: "No resolvable principal" },
+        404: {
+          description:
+            "Artifact not found — also the answer for a malformed id, a skill-draft, another tenant's artifact, or an unknown version",
+        },
+      },
+    }),
+    async (c) => {
+      const loaded = await loadScoped(c);
+      if ("response" in loaded) return loaded.response;
+
+      const version = VersionRef(c.req.param("version")!);
+      if (version instanceof type.errors) {
+        return c.json({ error: version.summary }, 400);
+      }
+
+      const versionRow = await getArtifactVersion(db, loaded.row.id, version);
+      if (!versionRow) return c.json({ error: "Artifact not found" }, 404);
+
+      const [artifactJson] = await serialize(loaded.scope, [
+        {
+          ...loaded.row,
+          title: versionRow.title,
+          content: versionRow.content,
+          version: versionRow.version,
+          metadata: versionRow.metadata,
+        },
+      ]);
+      return c.json({ artifact: artifactJson });
+    },
+  );
+
   app.post(
     "/artifacts/:id/versions",
     describeRoute({
@@ -784,26 +842,61 @@ export function mountArtifacts(
       tags: ["Artifacts"],
       summary: "Download an artifact's content",
       description:
-        "One path over three storage conventions, in precedence order: out-of-band ContentStore blob, inline data: URL (file/image kinds), then downloadable text (csv-export). Served as an attachment except a PDF with ?inline=1; X-Content-Type-Options: nosniff always.",
+        "One path over three storage conventions, in precedence order: out-of-band ContentStore blob, inline data: URL (file/image kinds), then downloadable text (csv-export). Served as an attachment except a PDF with ?inline=1; X-Content-Type-Options: nosniff always. An optional ?version=N pins the download to that version's content (getArtifactVersion) for the data-URL and downloadable-text conventions, where content really is per-version. A blob-backed upload has no per-version bytes — source.upload.id lives on the artifact row only — so ?version=N for one is 400 unless it names the artifact's current version.",
       parameters: [
         idParam,
         { name: "inline", in: "query", required: false, schema: { type: "string" } },
+        { name: "version", in: "query", required: false, schema: { type: "integer" } },
       ],
       responses: {
         200: { description: "The file body" },
-        400: { description: "Artifact kind is not downloadable" },
+        400: {
+          description:
+            "Artifact kind is not downloadable, version is not a positive integer, or version names a non-current version of a blob-backed upload",
+        },
         403: { description: "No resolvable principal" },
-        404: { description: "Artifact not found" },
+        404: { description: "Artifact not found — also the answer for an unknown version" },
       },
     }),
     async (c) => {
       const loaded = await loadScoped(c);
       if ("response" in loaded) return loaded.response;
 
+      let row = loaded.row;
+      const versionParam = c.req.query("version");
+      if (versionParam !== undefined) {
+        const version = VersionRef(versionParam);
+        if (version instanceof type.errors) {
+          return c.json({ error: version.summary }, 400);
+        }
+        const versionRow = await getArtifactVersion(db, loaded.row.id, version);
+        if (!versionRow) return c.json({ error: "Artifact not found" }, 404);
+        // A blob's bytes live in the ContentStore, referenced from the
+        // artifact row's own `source` — never from `artifact_version`, so
+        // there is no per-version blob to serve. Silently falling through to
+        // today's blob would answer version N's request with the current
+        // bytes, misrepresenting them as pinned.
+        if (
+          version !== loaded.row.version &&
+          uploadRefFromSource(loaded.row.source)?.id !== undefined
+        ) {
+          return c.json(
+            { error: "Uploaded file content is not versioned" },
+            400,
+          );
+        }
+        row = {
+          ...loaded.row,
+          title: versionRow.title,
+          content: versionRow.content,
+          version: versionRow.version,
+        };
+      }
+
       const result = await resolveDownload(
         db,
         contentStore,
-        loaded.row,
+        row,
         c.req.query("inline") === "1",
       );
       if ("status" in result) return c.json({ error: result.error }, result.status);
