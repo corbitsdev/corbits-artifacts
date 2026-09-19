@@ -439,6 +439,7 @@ describe("every way of not getting an artifact is indistinguishable", () => {
     [`/artifacts/${id}`, {}],
     [`/artifacts/${id}/versions`, {}],
     [`/artifacts/${id}/versions`, json({ content: "x" })],
+    [`/artifacts/${id}/versions/1`, {}],
     [`/artifacts/${id}/archive`, { method: "POST" }],
     [`/artifacts/${id}/unarchive`, { method: "POST" }],
     [`/artifacts/${id}/download`, {}],
@@ -680,6 +681,7 @@ describe("versions", () => {
       [`/artifacts/${id}`, GET],
       [`/artifacts/${id}/versions`, GET],
       [`/artifacts/${id}/versions`, json({ content: "x" })],
+      [`/artifacts/${id}/versions/1`, GET],
       [`/artifacts/${id}/archive`, POST],
       [`/artifacts/${id}/unarchive`, POST],
       [`/artifacts/${id}/download`, GET],
@@ -721,6 +723,57 @@ describe("versions", () => {
     const unknown = await app.request("/artifacts/00000000-0000-4000-8000-000000000000");
     expect(draft.status).toBe(unknown.status);
     expect(await draft.json()).toEqual(await unknown.json());
+  });
+});
+
+describe("GET /artifacts/:id/versions/:version", () => {
+  test("returns a prior version's content, reusing getArtifactVersion", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const row = await seedArtifact(db, { title: "Draft", content: "v1" });
+    await app.request(`/artifacts/${row.id}/versions`, json({ title: "Final", content: "v2" }));
+
+    const res = await app.request(`/artifacts/${row.id}/versions/1`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { artifact: { version: number; title: string; content: string } };
+    expect(body.artifact).toMatchObject({ version: 1, title: "Draft", content: "v1" });
+
+    const current = await app.request(`/artifacts/${row.id}/versions/2`);
+    expect(await current.json()).toMatchObject({
+      artifact: { version: 2, title: "Final", content: "v2" },
+    });
+  });
+
+  test("an unknown version is 404", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db);
+    const res = await host(db).request(`/artifacts/${row.id}/versions/99`);
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "Artifact not found" });
+  });
+
+  test("a non-integer or sub-1 version is 400", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const row = await seedArtifact(db);
+    for (const version of ["0", "-1", "1.5", "abc"]) {
+      const res = await app.request(`/artifacts/${row.id}/versions/${version}`);
+      expect(res.status).toBe(400);
+    }
+  });
+
+  test("is 404 before authorization for another tenant's artifact", async () => {
+    const db = await testDb();
+    const foreign = await seedArtifact(db, { tenantId: "other" });
+    const res = await host(db).request(`/artifacts/${foreign.id}/versions/1`);
+    expect(res.status).toBe(404);
+  });
+
+  test("is 403 for an unauthenticated caller", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db);
+    const res = await host(db, { principal: null }).request(`/artifacts/${row.id}/versions/1`);
+    expect(res.status).toBe(403);
   });
 });
 
@@ -1124,6 +1177,33 @@ describe("download over HTTP", () => {
     const db = await testDb();
     const row = await seedArtifact(db, { kind: "document" });
     expect((await host(db).request(`/artifacts/${row.id}/download`)).status).toBe(400);
+  });
+
+  test("?version=N downloads that version's content; omitted downloads current", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const row = await seedArtifact(db, { kind: "csv-export", title: "Keywords", content: "a,b\n" });
+    await app.request(`/artifacts/${row.id}/versions`, json({ content: "c,d\n" }));
+
+    const v1 = await app.request(`/artifacts/${row.id}/download?version=1`);
+    expect(await v1.text()).toBe("a,b\n");
+
+    const current = await app.request(`/artifacts/${row.id}/download`);
+    expect(await current.text()).toBe("c,d\n");
+  });
+
+  test("download with an unknown ?version is 404", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db, { kind: "csv-export" });
+    const res = await host(db).request(`/artifacts/${row.id}/download?version=99`);
+    expect(res.status).toBe(404);
+  });
+
+  test("download with a non-integer ?version is 400", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db, { kind: "csv-export" });
+    const res = await host(db).request(`/artifacts/${row.id}/download?version=0`);
+    expect(res.status).toBe(400);
   });
 });
 

@@ -190,6 +190,7 @@ happen in major versions.
 | `POST /api/artifacts/upload` | multipart import. An optional `generatedBy` form field is stored as `source.generatedBy`, a free-form display label nothing here reads back |
 | `GET /api/artifacts/:id` | Deep link (archived artifacts still load) |
 | `GET`/`POST /api/artifacts/:id/versions` | Version history (paginated, no content bodies) and revision |
+| `GET /api/artifacts/:id/versions/:version` | One version, including content |
 | `POST /api/artifacts/:id/(un)archive` | Idempotent soft-hide |
 | `GET /api/artifacts/:id/download` | One path over three storage conventions |
 | `GET /api/artifacts/counts` | Per-segment counts over the tenant. See [Counts](#counts) |
@@ -207,7 +208,12 @@ content server-side; only the response projection changes.
 **Version history pagination:** `GET /api/artifacts/:id/versions` returns
 `{ versions, nextCursor }` with the same default/max limit clamps as list. Cursor is the
 last version number returned (newest-first). Version rows omit content; use
-`GET /api/artifacts/:id?version=N` (or `getArtifactVersion`) for a pinned body.
+`GET /api/artifacts/:id/versions/:version` (or `getArtifactVersion`) for a pinned body.
+That route reuses the detail route's read authorization and response shape — a
+non-integer or sub-1 `:version` is `400`, and an unknown version collapses into the
+same `404 Artifact not found` every other single-artifact failure mode does.
+`GET /api/artifacts/:id/download?version=N` applies the same pin to a downloadable
+artifact's bytes; omitting `version` downloads the current one.
 
 **Version metadata and lineage:** each version optionally carries `metadata` (any JSON
 object, opaque to the package — stored and returned as-is) and `parentVersionIds` (an
