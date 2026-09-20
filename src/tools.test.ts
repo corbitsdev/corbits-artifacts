@@ -223,6 +223,18 @@ describe("tool definitions", () => {
     }
   });
 
+  test("artifact_create and artifact_write both declare an optional metadata object", () => {
+    for (const name of ["artifact_create", "artifact_write"]) {
+      const definition = ARTIFACT_TOOL_DEFINITIONS.find((d) => d.name === name)!;
+      expect(definition.inputSchema.properties["metadata"]).toEqual({
+        type: "object",
+        description:
+          "Optional application metadata stored with the version, e.g. which project and stage this belongs to.",
+      });
+      expect(definition.inputSchema.required).not.toContain("metadata");
+    }
+  });
+
   test("only the mutating tools declare a write side effect", () => {
     const writes = ARTIFACT_TOOL_DEFINITIONS.filter((d) => d.sideEffect === "write").map(
       (d) => d.name,

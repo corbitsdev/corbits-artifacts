@@ -222,6 +222,8 @@ export async function createFileArtifact(
     policy: UploadPolicy;
     origin?: string;
     generatedBy?: string;
+    /** Opaque to the package; stored on version 1 exactly like `createArtifact`'s. */
+    metadata?: Record<string, unknown> | null;
   },
 ): Promise<ArtifactRow> {
   if (!args.policy.accepts(args.mimeType)) {
@@ -248,5 +250,6 @@ export async function createFileArtifact(
       ...(args.generatedBy !== undefined ? { generatedBy: args.generatedBy } : {}),
       ...stored.source,
     },
+    ...(args.metadata !== undefined ? { metadata: args.metadata } : {}),
   });
 }

@@ -81,6 +81,60 @@ describe("the artifacts sidecar bundle", () => {
     });
   });
 
+  test("passes metadata through to the create route unchanged", async () => {
+    const recorded: Recorded[] = [];
+    const bundle = artifacts(env(recorded, ok));
+    await bundle.run(
+      {
+        id: "call-meta",
+        name: "artifact_create",
+        arguments: {
+          title: "Notes",
+          kind: "document",
+          content: "body",
+          metadata: { project: "acme-onboarding", stage: "draft" },
+        },
+      },
+      signal,
+    );
+    expect(JSON.parse(String(recorded[0]?.init?.body))).toEqual({
+      title: "Notes",
+      kind: "document",
+      content: "body",
+      metadata: { project: "acme-onboarding", stage: "draft" },
+    });
+  });
+
+  test("passes metadata through to the write route unchanged", async () => {
+    const recorded: Recorded[] = [];
+    const bundle = artifacts(env(recorded, ok));
+    await bundle.run(
+      {
+        id: "call-meta-write",
+        name: "artifact_write",
+        arguments: { artifactId: "a1", metadata: { stage: "final" } },
+      },
+      signal,
+    );
+    expect(JSON.parse(String(recorded[0]?.init?.body))).toEqual({
+      metadata: { stage: "final" },
+    });
+  });
+
+  test("omitting metadata omits it from the request body", async () => {
+    const recorded: Recorded[] = [];
+    const bundle = artifacts(env(recorded, ok));
+    await bundle.run(
+      {
+        id: "call-no-meta",
+        name: "artifact_create",
+        arguments: { title: "Notes", kind: "document", content: "body" },
+      },
+      signal,
+    );
+    expect(JSON.parse(String(recorded[0]?.init?.body))).not.toHaveProperty("metadata");
+  });
+
   test("reads a pinned version through the read route", async () => {
     const recorded: Recorded[] = [];
     const bundle = artifacts(env(recorded, ok));

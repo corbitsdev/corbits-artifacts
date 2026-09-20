@@ -41,6 +41,12 @@ const json = (body: unknown, headers: Record<string, string> = authed) => ({
   body: JSON.stringify(body),
 });
 
+const patchJson = (body: unknown, headers: Record<string, string> = authed) => ({
+  method: "PATCH",
+  headers: { "content-type": "application/json", ...headers },
+  body: JSON.stringify(body),
+});
+
 describe("auth", () => {
   test("401s with no bearer token", async () => {
     const db = await testDb();
@@ -88,6 +94,59 @@ describe("POST /artifacts", () => {
     const app = host(db);
     const res = await app.request("/artifacts", json({ title: "Brief", kind: "document" }));
     expect(res.status).toBe(400);
+  });
+
+  test("stores an opaque metadata object on version 1", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const res = await app.request(
+      "/artifacts",
+      json({
+        title: "Brief",
+        kind: "document",
+        content: "hello",
+        metadata: { project: "acme-onboarding", stage: "draft" },
+      }),
+    );
+    expect(res.status).toBe(201);
+    const { data } = (await res.json()) as { data: { id: string; version: number } };
+    expect(data.version).toBe(1);
+
+    const row = await getArtifact(db, data.id);
+    expect(row?.metadata).toEqual({ project: "acme-onboarding", stage: "draft" });
+  });
+
+  test("rejects a metadata value that is not a JSON object", async () => {
+    const db = await testDb();
+    const app = host(db);
+    for (const metadata of ["a string", 42, ["array"]]) {
+      const res = await app.request(
+        "/artifacts",
+        json({ title: "Brief", kind: "document", content: "hello", metadata }),
+      );
+      expect(res.status).toBe(400);
+    }
+  });
+
+  test("a body trying to smuggle source/runId is ignored: source stays server-stamped", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const res = await app.request(
+      "/artifacts",
+      json({
+        title: "Brief",
+        kind: "document",
+        content: "hello",
+        source: { origin: "manual" },
+        runId: "attacker-run",
+        generatedBy: "attacker",
+      }),
+    );
+    expect(res.status).toBe(201);
+    const { data } = (await res.json()) as { data: { id: string } };
+
+    const row = await getArtifact(db, data.id);
+    expect(row?.source).toEqual({ origin: "workflow", runId: "run-1" });
   });
 
   test("413s content over the configured character ceiling", async () => {
@@ -179,6 +238,27 @@ describe("POST /artifacts/binary", () => {
     expect((row?.source as { generatedBy?: string })?.generatedBy).toBe("run-1");
   });
 
+  test("stores an opaque metadata object on version 1", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const contentBase64 = Buffer.from("<h1>rendered</h1>").toString("base64");
+
+    const res = await app.request(
+      "/artifacts/binary",
+      json({
+        filename: "brief.html",
+        mimeType: "text/html",
+        contentBase64,
+        metadata: { project: "acme-onboarding" },
+      }),
+    );
+    expect(res.status).toBe(201);
+    const { data } = (await res.json()) as { data: { id: string } };
+
+    const row = await getArtifact(db, data.id);
+    expect(row?.metadata).toEqual({ project: "acme-onboarding" });
+  });
+
   test("415s an unsupported file type", async () => {
     const db = await testDb();
     const app = host(db);
@@ -210,5 +290,66 @@ describe("POST /artifacts/binary", () => {
       }),
     );
     expect(res.status).toBe(413);
+  });
+});
+
+describe("PATCH /artifacts/:id", () => {
+  test("sets metadata and returns it in the response", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const row = await seedArtifact(db, { tenantId: "acme", title: "Draft", content: "v1" });
+
+    const res = await app.request(
+      `/artifacts/${row.id}`,
+      patchJson({ content: "v2", metadata: { stage: "review" } }),
+    );
+    expect(res.status).toBe(200);
+    const { data } = (await res.json()) as { data: { version: number } };
+    expect(data.version).toBe(2);
+
+    const updated = await getArtifact(db, row.id);
+    expect(updated?.metadata).toEqual({ stage: "review" });
+  });
+
+  test("omitting metadata carries the prior version's metadata forward", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const row = await seedArtifact(db, { tenantId: "acme", title: "Draft", content: "v1" });
+    await app.request(`/artifacts/${row.id}`, patchJson({ metadata: { stage: "draft" } }));
+
+    await app.request(`/artifacts/${row.id}`, patchJson({ content: "v3" }));
+
+    const updated = await getArtifact(db, row.id);
+    expect(updated?.metadata).toEqual({ stage: "draft" });
+  });
+
+  test("an explicit null metadata clears it", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const row = await seedArtifact(db, { tenantId: "acme", title: "Draft", content: "v1" });
+    await app.request(`/artifacts/${row.id}`, patchJson({ metadata: { stage: "draft" } }));
+
+    await app.request(`/artifacts/${row.id}`, patchJson({ metadata: null }));
+
+    const updated = await getArtifact(db, row.id);
+    expect(updated?.metadata).toBeNull();
+  });
+
+  test("rejects a metadata value that is not a JSON object", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const row = await seedArtifact(db, { tenantId: "acme" });
+
+    const res = await app.request(`/artifacts/${row.id}`, patchJson({ metadata: "nope" }));
+    expect(res.status).toBe(400);
+  });
+
+  test("rejects an empty body with no title, content, or metadata", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const row = await seedArtifact(db, { tenantId: "acme" });
+
+    const res = await app.request(`/artifacts/${row.id}`, patchJson({}));
+    expect(res.status).toBe(400);
   });
 });
