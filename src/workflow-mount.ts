@@ -24,6 +24,7 @@ import {
   findArtifactByTitle,
   getArtifact,
   listArtifacts,
+  MetadataShape,
   serializeArtifact,
   serializeArtifactListItem,
   SKILL_DRAFT_KIND,
@@ -119,16 +120,22 @@ export type MountWorkflowArtifactsOpts = {
 
 export type CreatedWorkflowArtifact = { readonly id: string; readonly version: number };
 
+// Opaque to this package, same shape `mount.ts` validates: any JSON object,
+// or `null` to clear it explicitly. Mirrors `NullableMetadata` there.
+const NullableMetadata = MetadataShape.or("null");
+
 const CreateWorkflowArtifactBody = type({
   title: "string > 0",
   kind: "string > 0",
   content: "string > 0",
+  "metadata?": NullableMetadata,
 });
 
 const CreateWorkflowBinaryArtifactBody = type({
   filename: "string > 0",
   mimeType: "string > 0",
   contentBase64: "string > 0",
+  "metadata?": NullableMetadata,
 });
 
 const LinkWorkflowFileBody = type({
@@ -138,10 +145,20 @@ const LinkWorkflowFileBody = type({
   "preview?": "string",
 });
 
+// `metadata` is opaque and, when omitted, carries the prior version's
+// metadata forward — same semantics as `ReviseArtifactRequest` in mount.ts —
+// so at least one of the three must be present or there is nothing to revise.
 const ReviseWorkflowArtifactBody = type({
   "title?": "string > 0",
   "content?": "string",
-});
+  "metadata?": NullableMetadata,
+}).narrow(
+  (body, ctx) =>
+    body.title !== undefined ||
+    body.content !== undefined ||
+    body.metadata !== undefined ||
+    ctx.mustBe("a body with content, title, and/or metadata"),
+);
 
 /** Omits the key entirely when absent or unparseable, so the behavior's own
  * default applies rather than a coerced zero. */
@@ -267,6 +284,7 @@ export function mountWorkflowArtifacts(
         title: parsed.title,
         content: parsed.content,
         source: { origin: "workflow", runId: scope.runId },
+        ...(parsed.metadata !== undefined ? { metadata: parsed.metadata } : {}),
       }),
     );
     const created: CreatedWorkflowArtifact = { id: row.id, version: row.version };
@@ -323,6 +341,7 @@ export function mountWorkflowArtifacts(
           bytes: new Uint8Array(bytes),
           policy: uploadPolicy,
           generatedBy: scope.runId,
+          ...(parsed.metadata !== undefined ? { metadata: parsed.metadata } : {}),
         }),
       );
       const created: CreatedWorkflowArtifact = { id: row.id, version: row.version };
@@ -420,6 +439,7 @@ export function mountWorkflowArtifacts(
       artifactId,
       ...(parsed.title !== undefined ? { title: parsed.title } : {}),
       ...(parsed.content !== undefined ? { content: parsed.content } : {}),
+      ...(parsed.metadata !== undefined ? { metadata: parsed.metadata } : {}),
     });
     const revised: CreatedWorkflowArtifact = {
       id: written.artifactId,

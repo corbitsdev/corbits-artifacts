@@ -289,6 +289,11 @@ export const ARTIFACT_TOOL_DEFINITIONS: readonly ArtifactToolDefinition[] = [
             "Artifact kind, such as document, email, memo, note, or web_site for a multi-file static site stored as JSON { entry?, files: { path: content } }.",
         },
         content: { type: "string", description: "The full text content." },
+        metadata: {
+          type: "object",
+          description:
+            "Optional application metadata stored with the version, e.g. which project and stage this belongs to.",
+        },
       },
       required: ["title", "kind", "content"],
     },
@@ -373,6 +378,11 @@ export const ARTIFACT_TOOL_DEFINITIONS: readonly ArtifactToolDefinition[] = [
         artifactId: { type: "string", description: "The artifact id to revise." },
         title: { type: "string", description: "New title." },
         content: { type: "string", description: "New full content." },
+        metadata: {
+          type: "object",
+          description:
+            "Optional application metadata stored with the version, e.g. which project and stage this belongs to.",
+        },
       },
       required: ["artifactId"],
     },

@@ -121,6 +121,14 @@ cover every entry in `ARTIFACT_TOOL_DEFINITIONS`. Every route is authenticated; 
 is no unauthenticated case here the way collection reads have one on the
 tenant-session mount, since a workflow run always presents credentials.
 
+`POST /artifacts`, `POST /artifacts/binary`, and `PATCH /artifacts/:id` each accept an
+optional `metadata` field with the same semantics `mountArtifacts` validates: omitted on
+a revise carries the prior version's metadata forward, an explicit `null` clears it, and
+any other value must be a JSON object or the request is `400`. `source` (`{ origin:
+"workflow", runId }`) and `generatedBy` are always server-stamped from the resolved run
+scope — a body field of either name is never read, so a workflow run cannot mint
+provenance for itself.
+
 ### Agent tokens
 
 A deployed agent has no sidecar token of its own. Pass `agentToken` and a bearer the
@@ -149,6 +157,11 @@ pins, so no agent owns artifact client code. It declares `requires: ["capabiliti
 calls the routes above through that mediated fetch with the run address header. The
 credential is the agent's own hub token; the bundle never sees the secret and never
 names a host — the handle's origin pin resolves its relative paths.
+
+`artifact_create` and `artifact_write` both take an optional `metadata` object —
+application metadata stored with the version, e.g. which project and stage this belongs
+to — which the bundle forwards to the route unchanged, omitting the field entirely when
+the model does not supply one.
 
 **Rate limiting is host-side.** `mountWorkflowArtifacts` mints no per-run quota — a host
 that wants one wraps `resolveRunScope` (returning `null` to reject) or puts its own

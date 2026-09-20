@@ -61,7 +61,12 @@ function requestFor(name: string, args: Record<string, unknown>): Request_ | und
       return {
         method: "POST",
         path: "/artifacts",
-        body: { title: args["title"], kind: args["kind"], content: args["content"] },
+        body: {
+          title: args["title"],
+          kind: args["kind"],
+          content: args["content"],
+          ...(args["metadata"] !== undefined ? { metadata: args["metadata"] } : {}),
+        },
       };
     case "artifact_link_file":
       return {
@@ -98,6 +103,7 @@ function requestFor(name: string, args: Record<string, unknown>): Request_ | und
         body: {
           ...(str(args["title"]) !== undefined ? { title: args["title"] } : {}),
           ...(typeof args["content"] === "string" ? { content: args["content"] } : {}),
+          ...(args["metadata"] !== undefined ? { metadata: args["metadata"] } : {}),
         },
       };
     case "artifact_list":

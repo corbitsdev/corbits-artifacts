@@ -234,6 +234,22 @@ describe("createFileArtifact", () => {
     expect(row.version).toBe(1);
   });
 
+  test("stores an opaque metadata object on version 1 when given one", async () => {
+    const db = await testDb();
+    const row = await db.transaction((tx) =>
+      createFileArtifact(tx, InlineContentStore, {
+        scope: SCOPE,
+        ownerPrincipalId: SCOPE.principalId,
+        filename: "report.pdf",
+        mimeType: "application/pdf",
+        bytes: new Uint8Array([1, 2, 3]),
+        policy: ARTIFACT_UPLOAD_POLICY,
+        metadata: { project: "acme-onboarding" },
+      }),
+    );
+    expect(row.metadata).toEqual({ project: "acme-onboarding" });
+  });
+
   test("a caller that fails after storing leaves neither an upload nor an artifact", async () => {
     const db = await testDb();
     await expect(

@@ -11,6 +11,16 @@ always called out under their own heading.
 
 ### Added
 
+- Run-scoped `POST /artifacts`, `POST /artifacts/binary`, and
+  `PATCH /artifacts/:id` (`mountWorkflowArtifacts`) accept an optional
+  `metadata` field, matching `mountArtifacts`' semantics exactly: omitted on
+  a revise carries the prior version's metadata forward, an explicit `null`
+  clears it, and any other value must be a JSON object or the request is
+  `400`. `artifact_create` and `artifact_write` in `ARTIFACT_TOOL_DEFINITIONS`
+  gain a matching optional `metadata` object parameter, and the sidecar
+  bundle forwards it to the route unchanged. `source` (`{ origin: "workflow",
+  runId }`) and `generatedBy` stay server-stamped from the resolved run
+  scope — never read from `metadata` or any other body field.
 - `artifact_version.content_sha256` (text, nullable), added by the new
   `0005_version_content_digest` migration and mirrored onto
   `artifact.content_sha256` the same way `metadata` already mirrors. Computed
