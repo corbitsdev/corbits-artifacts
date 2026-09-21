@@ -2,20 +2,18 @@
 
 Artifacts, versions, and file uploads as a mountable module for any Interchange host. Backend only — this package ships no UI. `mountArtifacts` adds routes to a Hono app you already have; the host owns the app, the pool, and the session.
 
-## Install
+## Runtime support
 
-Requires Node 24+.
+Node >= 24 consumes built `dist/`. Bun loads TypeScript source via the `bun` export condition. Peer stack: `hono`, `hono-openapi`, `drizzle-orm`, `postgres`, `arktype`, `@intx/types`, `@intx/hub-api`, `@intx/agent` (minimum `@intx/*` **0.3.0**).
+
+## Quickstart
 
 ```bash
-npm install @corbits/artifacts
+npm add @corbits/artifacts
 pnpm add @corbits/artifacts
 yarn add @corbits/artifacts
 bun add @corbits/artifacts
 ```
-
-Peer stack: `hono`, `hono-openapi`, `drizzle-orm`, `postgres`, `arktype`, `@intx/types`, `@intx/hub-api`, `@intx/agent` (minimum `@intx/*` **0.3.0**).
-
-## Use
 
 ```ts
 import {
@@ -33,8 +31,6 @@ mountArtifacts(api, {
 ```
 
 `api` is a `Hono<TenantEnv>`. Host middleware must place Interchange `tenant` and `principal` on the context before these routes run.
-
-## Full example
 
 ```ts
 import { Hono } from "hono";
@@ -76,9 +72,11 @@ Agent tools live in `@corbits/artifacts/sidecar-bundle`. `examples/reference-hos
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for the data model and mount options.
 
-## Contributing
+## Development
 
 ```sh
+git clone https://github.com/corbitsdev/corbits-artifacts.git
+cd corbits-artifacts
 bun install
 docker run -d --name corbits-artifact-pg -p 5457:5432 \
   -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=artifact_core postgres:16
