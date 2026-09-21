@@ -30,15 +30,11 @@ peers here and npm will not warn you they are missing.
 
 ## Install
 
-```bash
-npm install @corbits/artifacts \
-  hono hono-openapi drizzle-orm postgres arktype \
-  @intx/types@^0.3.0 @intx/hub-api@^0.3.0
-```
+Not published to npm yet. Until a registry publish, `npm install @corbits/artifacts`
+404s. Git is the install path.
 
 ```bash
-# Bun
-bun add @corbits/artifacts \
+bun add github:corbitsdev/corbits-artifacts \
   hono hono-openapi drizzle-orm postgres arktype \
   @intx/types@^0.3.0 @intx/hub-api@^0.3.0
 ```

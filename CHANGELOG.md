@@ -89,6 +89,9 @@ always called out under their own heading.
 
 ### Changed
 
+- Minimum `@intx/*` is now **0.3.0**. (`@intx/*` lines before 0.3.0 do not
+  install — older lines pin the unpublished `@intx/*@0.0.0` or ship raw
+  TypeScript.)
 - The repository root **is** the `@corbits/artifacts` package. The previous
   `packages/artifacts` workspace nesting is gone so
   `bun add github:corbitsdev/corbits-artifacts` installs cleanly. Bun consumers
@@ -161,9 +164,9 @@ new; the list below is what the surface consists of rather than what changed.
   display-only `decorate` and `uploadPolicy` behavior.
 - Agent-facing tool definitions with tenant-confined windowed artifact reads,
   and the `web_site` artifact kind.
-- Requires `@intx/*` 0.3.0 or newer, Node 22+ or Bun 1.1+, and Postgres 13+.
-  (`@intx/*` lines before 0.3.0 do not install — older lines pin the
-  unpublished `@intx/*@0.0.0` or ship raw TypeScript.)
+- Requires `@intx/*` 0.2.2 or newer, Node 22+ or Bun 1.1+, and Postgres 13+.
+  (`@intx/*` 0.1.2 does not install — its deps pin the unpublished
+  `@intx/*@0.0.0` — and ships raw TypeScript.)
 
 [Unreleased]: https://github.com/corbitsdev/corbits-artifacts
 [0.1.0]: https://github.com/corbitsdev/corbits-artifacts
