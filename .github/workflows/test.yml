@@ -55,6 +55,9 @@ jobs:
       - name: build
         run: bun run build
 
+      - name: install reference-host dependencies
+        run: bun install --cwd examples/reference-host
+
       - name: reference-host acceptance
         run: bun test --cwd examples/reference-host
 
