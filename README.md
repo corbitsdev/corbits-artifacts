@@ -61,7 +61,7 @@ mountWorkflowArtifacts(workflowApi, {
   resolveRunScope: (bearerToken, runAddress) =>
     hub.resolveWorkflowRun(bearerToken, runAddress),
 });
-app.route("/workflow-artifacts", workflowApi);
+app.route("/api/workflow-artifacts", workflowApi);
 ```
 
 Agent tools live in `@corbits/artifacts/sidecar-bundle`. `examples/reference-host` is a complete `@intx/hub-api` host with this module mounted.
@@ -70,7 +70,9 @@ Agent tools live in `@corbits/artifacts/sidecar-bundle`. `examples/reference-hos
 
 `mountArtifacts` registers tenant-session routes (list, import, upload, versions, download, archive) and authorizes through the host's `requireGrant`. `mountWorkflowArtifacts` is the parallel mount for sidecar/agent callers: a bearer plus run address, no browser session. Both persist rows in Postgres and blobs through a pluggable `ContentStore` (`InlineContentStore` for a minimal host). The host never shares app creation, pooling, or auth with this package.
 
-See [ARCHITECTURE.md](./ARCHITECTURE.md) for the data model and mount options.
+See [PRODUCT.md](./PRODUCT.md) for intent, [ARCHITECTURE.md](./ARCHITECTURE.md)
+for the data model and mount options, and
+[IMPLEMENTATION.md](./IMPLEMENTATION.md) for routes, headers, and ceilings.
 
 ## Development
 

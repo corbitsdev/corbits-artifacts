@@ -2,17 +2,22 @@
 
 How `@corbits/artifacts` is put together, and where its boundaries are. For
 install, the mount snippet, the route table and the response contracts, see the
-[package README](./README.md) — this document is about
-structure and reasoning, and does not repeat them.
+[package README](./README.md). Intent is in [PRODUCT.md](./PRODUCT.md); named
+libraries, paths, headers and ceilings are in
+[IMPLEMENTATION.md](./IMPLEMENTATION.md). This document is about structure
+and reasoning, and does not repeat those.
 
 ## The shape of the thing
 
 A **library, not a service**. It creates no app, starts no background work, and
-opens no pool unless asked. A host calls two functions:
+opens no pool unless asked. A host calls three functions:
 
 - `runArtifactMigrations(db)` — once at boot, before serving.
-- `mountArtifacts(app, opts)` — registers the artifact routes on a Hono app the
-  host already built.
+- `mountArtifacts(app, opts)` — tenant-session routes on a Hono app the host
+  already built.
+- `mountWorkflowArtifacts(app, opts)` — the parallel mount for sidecar and
+  agent callers that have no browser session. A host that never runs
+  workflows omits it.
 
 ## Where the routes are served
 
@@ -34,6 +39,12 @@ which serves `/api/artifacts`, `/api/artifacts/:id`,
 `/api/artifacts/:id/versions`, `/api/artifacts/:id/download`, and
 `/api/instances/:instanceId/mail-attachments`. Nesting rather than teaching the
 core a base path keeps the mount free of a configurable base path.
+
+`mountWorkflowArtifacts` is the same idea on a second app: root-relative
+`/artifacts*` routes, host-chosen prefix. The sidecar bundle has no options
+of its own, so the shared prefix is
+`WORKFLOW_ARTIFACTS_BASE_PATH` (`/api/workflow-artifacts`). A host that pins
+the bundle must nest the workflow app there, or the tools miss.
 
 Everything else it needs arrives through `opts` or the host's request context.
 Nothing is reached for.
@@ -78,6 +89,37 @@ of the platform's, which is the precise failure mode "authorization is the
 host's job" is meant to prevent. If a real product need for cross-tenant
 artifact reads shows up, it belongs in Interchange's grant model, not
 re-derived per package.
+
+## The workflow mount
+
+`mountArtifacts` reads `tenant` / `principal` off `TenantEnv`. It has no
+bearer-token surface and never will: mixing a browser-session convention and
+a sidecar-token convention into one mount would make each harder to reason
+about. A workflow run has no browser session. `mountWorkflowArtifacts` is
+the parallel mount for that caller.
+
+The host supplies `resolveRunScope(bearerToken, runAddress)` — exactly how it
+already authenticates its sidecar. This package trusts whatever it returns
+and never talks to the host's run or sidecar tables. Returning `null` is 401.
+Optional `agentToken` is a second authentication path tried first: only the
+credential changes; the run is still named by `x-workflow-run-address`. A
+token whose tenant is not the resolved run's tenant is the same bare 401 as
+a missing run, so a bearer learns nothing from the difference.
+
+There is no `requireGrant` on this mount. The resolved run scope *is* the
+authorization: every route is authenticated, and reads stay inside
+`scope.tenantId`. Per-run rate limiting is deliberately not implemented
+here — wrap `resolveRunScope` or the mounted app. The two ceilings this
+package does own (`maxContentChars`, `maxBinaryBytes`) protect the same
+storage `mountArtifacts` protects.
+
+Provenance is server-stamped from that scope (`source.origin = "workflow"`,
+`source.runId`, `generatedBy`). A body field of either name is never read,
+so a run cannot mint provenance for itself. Workflow-authored rows have no
+human `ownerPrincipalId`; a human enters later as an approver, not as an
+owner. The routes exist to cover `ARTIFACT_TOOL_DEFINITIONS`; the sidecar
+bundle is the `defineTool` factory an agent pins so no agent owns client
+code.
 
 ## Three custom seams
 
@@ -154,6 +196,8 @@ which store is installed.
 | File | Role |
 | --- | --- |
 | `mount.ts` | HTTP surface: parsing, validation, status codes; reads `TenantEnv` principal; wires host `requireGrant`. |
+| `workflow-mount.ts` | Parallel HTTP surface for sidecar/agent callers; host `resolveRunScope` (and optional `agentToken`). |
+| `sidecar-bundle.ts` | `defineTool` factory; mediated fetch to the run-scoped routes. No db, no secret. |
 | `artifacts.ts` | The core domain — create, revise, find-or-version, list, get, archive, serialize. |
 | `uploads.ts` | `createFileArtifact`, the MIME policies, and the size caps. |
 | `download.ts` | One download path over the three storage conventions. |
@@ -328,7 +372,9 @@ download path with its `nosniff`/`attachment` behaviour.
 
 Supplied by the host: the `Hono<TenantEnv>` app and the database handle; the
 authenticated `tenant`/`principal` on the request context; the host's
-`RequireGrant`; display-only provenance decoration; and a `ContentStore`.
+`RequireGrant`; display-only provenance decoration; a `ContentStore`; and,
+when the workflow mount is wired, `resolveRunScope` (and optional
+`agentToken.verify` / `resolveRun`).
 
 ## Known limits
 
@@ -350,3 +396,8 @@ authenticated `tenant`/`principal` on the request context; the host's
 - **One 404 covers four causes** for a resolved caller — never minted,
   malformed, a `skill-draft`, or another tenant's. Distinguishing them would be
   an existence oracle. Expect no more detail than that from the API.
+- **Workflow 401 is equally opaque.** Missing bearer, unknown run address, and
+  a token whose tenant is not the run's tenant all read the same. Distinguishing
+  them would be an existence oracle on runs.
+- **No per-run quota in this package.** A host that wants one wraps
+  `resolveRunScope` or puts middleware in front of the workflow app.
