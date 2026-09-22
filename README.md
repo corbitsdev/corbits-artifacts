@@ -19,25 +19,36 @@ bun add @corbits/artifacts
 
 | `opts` | Type | What the host provides |
 | --- | --- | --- |
-| `db` | `ArtifactDb` | The host's existing drizzle/Postgres handle. Artifacts are stored there. |
+| `db` | `ArtifactDb` | Artifacts are stored there. `createArtifactDb` opens a handle; a hub that already has one passes it as `db` instead. |
 | `contentStore` | `ContentStore` | Blob storage for file bytes. `InlineContentStore` fits a minimal host; bring your own store for object storage. |
 | `requireGrant` | `RequireGrant` | The host's grant middleware factory (Interchange `createRequireGrant`). Mutating routes on a single artifact are guarded through it; this package implements no ownership or membership policy of its own. |
 | `onArtifactCreated` | `(tx, row, scope) => Promise<void>` (optional) | Hook run inside the same transaction as artifact creation, once per row. Use it to provision whatever grants make the host's authorization model true (for example, a creator grant on the new row). Defaults to a no-op. |
 | `decorate` | `(tenantId, rows) => Promise<void>` (optional) | Display-only decorator that may add fields to serialized rows. Defaults to a no-op. |
 | `uploadPolicy` | `UploadPolicy` (optional) | Which files `POST /artifacts/upload` accepts. |
 
+The program below is complete: it opens a handle with `createArtifactDb`, runs the migrations, and mounts both route sets — the browser-session routes on `api`, the sidecar/agent routes on `workflowApi`. A hub that already has an `ArtifactDb` passes it as `db` instead. Point `DATABASE_URL` at the hub database the artifact tables were migrated into.
+
 ```ts
 import { Hono } from "hono";
-import { createRequireGrant, type TenantEnv } from "@intx/hub-api";
+import type { RequireGrant, TenantEnv } from "@intx/hub-api";
 import {
   InlineContentStore,
+  createArtifactDb,
   mountArtifacts,
+  mountWorkflowArtifacts,
   runArtifactMigrations,
+  type WorkflowArtifactEnv,
 } from "@corbits/artifacts";
+
+const DATABASE_URL = "postgres://localhost/artifacts";
+const { db } = createArtifactDb(DATABASE_URL);
 
 await runArtifactMigrations(db);
 
-const requireGrant = createRequireGrant({ grantStore, conditionRegistry });
+// Minimal host policy: every caller holds every grant. A real hub builds
+// this with createRequireGrant over its grant store instead.
+const requireGrant: RequireGrant = (_resource, _action) => async (_c, next) =>
+  next();
 
 const api = new Hono<TenantEnv>();
 mountArtifacts(api, {
@@ -45,33 +56,25 @@ mountArtifacts(api, {
   contentStore: InlineContentStore,
   requireGrant,
 });
-app.route("/api", api);
-```
 
-`api` is a `Hono<TenantEnv>`. Host middleware places the Interchange `tenant` and `principal` on the context before these routes run.
-
-`mountWorkflowArtifacts` is the parallel mount for workflow-run callers that carry a bearer token plus run address instead of a browser session:
-
-```ts
-import {
-  InlineContentStore,
-  mountWorkflowArtifacts,
-  runArtifactMigrations,
-} from "@corbits/artifacts";
-
-await runArtifactMigrations(db);
-
+const workflowApi = new Hono<WorkflowArtifactEnv>();
 mountWorkflowArtifacts(workflowApi, {
   db,
   contentStore: InlineContentStore,
-  // Your existing sidecar/run authentication, wrapped to the scope shape.
-  resolveRunScope: (bearerToken, runAddress) =>
-    hostResolveWorkflowRun(bearerToken, runAddress),
+  // Demo authenticator: accepts any bearer as the demo tenant's agent.
+  // A real hub verifies the sidecar token here and returns null to refuse.
+  resolveRunScope: (_bearerToken, runAddress) => ({
+    tenantId: "demo",
+    principalId: "demo-agent",
+    runId: runAddress,
+  }),
 });
-app.route("/api/workflow-artifacts", workflowApi);
+
+export default api;
+export { workflowApi };
 ```
 
-`resolveRunScope: (bearerToken, runAddress) => ResolvedWorkflowRunScope | null` authenticates the run caller the same way the host already authenticates its sidecar; this package trusts whatever it returns.
+Host middleware must place the Interchange `tenant` and `principal` on the context before the `api` routes run. The inline `requireGrant` allows every caller through and the demo `resolveRunScope` accepts any bearer — a real hub builds `requireGrant` with Interchange `createRequireGrant` and verifies the sidecar token in `resolveRunScope`, returning `null` to refuse with 401.
 
 Agent tools live in `@corbits/artifacts/sidecar-bundle`.
 
