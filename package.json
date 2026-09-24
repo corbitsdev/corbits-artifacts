@@ -24,6 +24,9 @@
   "bugs": {
     "url": "https://github.com/corbitsdev/corbits-artifacts/issues"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "corbits": {
     "minimumIntxVersion": "0.4.0"
   },
@@ -31,12 +34,12 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "bun": "./src/index.ts",
+      "intx-src": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
     "./sidecar-bundle": {
-      "bun": "./src/sidecar-bundle.ts",
+      "intx-src": "./src/sidecar-bundle.ts",
       "types": "./dist/sidecar-bundle.d.ts",
       "default": "./dist/sidecar-bundle.js"
     }
