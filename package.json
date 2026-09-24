@@ -32,14 +32,13 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "sideEffects": false,
   "exports": {
     ".": {
-      "intx-src": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
     "./sidecar-bundle": {
-      "intx-src": "./src/sidecar-bundle.ts",
       "types": "./dist/sidecar-bundle.d.ts",
       "default": "./dist/sidecar-bundle.js"
     }
