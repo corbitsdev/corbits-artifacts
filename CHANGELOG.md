@@ -89,6 +89,8 @@ always called out under their own heading.
 
 ### Changed
 
+- `@intx/agent` is an optional peer. Only `@corbits/artifacts/sidecar-bundle`
+  imports it, so a host that mounts the routes alone need not install it.
 - Minimum `@intx/*` is now **0.3.0**. (`@intx/*` lines before 0.3.0 do not
   install — older lines pin the unpublished `@intx/*@0.0.0` or ship raw
   TypeScript.)

@@ -31,6 +31,9 @@
         "hono-openapi": "^1.2.0",
         "postgres": "^3.4.9",
       },
+      "optionalPeers": [
+        "@intx/agent",
+      ],
     },
   },
   "overrides": {
