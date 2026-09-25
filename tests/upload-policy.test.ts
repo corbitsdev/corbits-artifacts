@@ -13,7 +13,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await testDb.close();
+  await testDb?.close();
 });
 
 async function upload(file: File): Promise<Response> {

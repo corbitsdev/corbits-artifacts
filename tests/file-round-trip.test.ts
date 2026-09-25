@@ -20,7 +20,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await testDb.close();
+  await testDb?.close();
   await rm(dir, { recursive: true, force: true });
 });
 
