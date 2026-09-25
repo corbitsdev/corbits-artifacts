@@ -83,9 +83,8 @@ is no ledger: a schema change is a new file whose statements are safe to re-run,
 never an edit that assumes it runs once.
 
 `schema.ts` and `migrations/` must agree — every query goes through the drizzle
-table objects, and a test asserts the migrations create exactly the tables
-`schema.ts` declares, no more and no less. Change one, change the other, in the
-same commit.
+table objects, and the route suites fail when a column they write is missing.
+Change one, change the other, in the same commit.
 
 ## Pull requests
 
