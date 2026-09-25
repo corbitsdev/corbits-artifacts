@@ -34,7 +34,7 @@ Returns a `Hono<TenantEnv>` sub-app the host mounts with `app.route`, alongside 
 | --- | --- | --- |
 | `db` | `ArtifactDb` | Artifacts are stored there. `createArtifactDb` opens a handle for a host with none; a hub that already has one passes it through. |
 | `contentStore` | `ContentStore` | Blob storage for file bytes. `InlineContentStore` (exported by this package) fits a minimal host; bring your own store for object storage. |
-| `requireGrant` | `RequireGrant` | The host's grant middleware factory. This package implements no ownership or membership policy of its own. Creating an artifact requires `create` on `artifact:*`; revising or archiving one requires `write` or `archive` on `artifact:<id>`. Recording mail-attachment references needs only a principal. |
+| `requireGrant` | `RequireGrant` | The host's grant middleware factory. This package implements no ownership or membership policy of its own. Creating an artifact requires `create` on `artifact:*`; revising or archiving one requires `write` or `archive` on `artifact:<id>`. |
 | `countSegments` | `ArtifactCountSegments` (optional) | Named predicates over `ArtifactListRow` for `GET /artifacts/counts` (e.g. bucket by `kind`). The taxonomy is entirely host-owned; omitted, the route still answers with the tenant-wide `all` total. |
 | `onArtifactCreated` | `(tx, row, scope) => Promise<void>` (optional) | Runs inside the transaction that creates each artifact. This is where the host mints grants for the new row, e.g. `write` and `archive` on `artifact:<id>` for its creator. The package mints none itself. |
 | `decorate` | `(tenantId, rows) => Promise<void>` (optional) | Adds display-only fields to serialized rows on the way out (provenance labels, host joins). It must never change which rows are returned or who may see them. |
@@ -117,6 +117,15 @@ export function buildAssistant(sources: readonly InferencePreference[]) {
 ```
 
 When the host deploys this agent definition, it must bind the agent's `hub` credential to the agent's hub token. The tools send every request through that credential, so without the binding they cannot reach the hub.
+
+## Upgrading from 0.1.0
+
+### Breaking
+
+- The `skill-draft` kind is no longer reserved. It is an ordinary `kind` string, created, listed and read like any other.
+- The `web_site` kind has no special handling: its content is stored as given, and `artifact_read` no longer takes `path` or returns a site summary. The `web-site` exports (`WEB_SITE_KIND`, `WebSiteContentError`, `normalizeWebSiteContent` and the rest) are removed.
+- `/instances/:instanceId/mail-attachments`, `saveMailAttachmentRefs`, `listMailAttachmentRefs` and the other mail-attachment exports are removed, and `runArtifactMigrations` drops the `mail_attachment_ref` table.
+- `windowContent` is no longer exported.
 
 ## Contributing
 

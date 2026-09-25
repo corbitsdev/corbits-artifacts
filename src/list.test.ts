@@ -9,7 +9,7 @@ import {
   serializeArtifactListItem,
   setArtifactArchived,
 } from "./artifacts.js";
-import { seedArtifact, seedSkillDraft, testDb } from "./test-helpers.js";
+import { seedArtifact, testDb } from "./test-helpers.js";
 import type { ArtifactDb } from "./db.js";
 
 /** Parse a raw query string the way the route does, failing the test on error. */
@@ -61,17 +61,6 @@ describe("list filters", () => {
 
     const archived = await listArtifacts(db, "acme", { archived: true });
     expect(archived.rows.map((r) => r.id)).toEqual([hidden.id]);
-  });
-
-  test("never lists a skill-draft, even under an explicit kind filter", async () => {
-    const db = await testDb();
-    await seedSkillDraft(db, "Scratch");
-    await seedArtifact(db, { title: "Real" });
-
-    expect((await listArtifacts(db, "acme", {})).rows.length).toBe(1);
-    expect(
-      (await listArtifacts(db, "acme", { kind: "skill-draft" })).rows.length,
-    ).toBe(0);
   });
 
   test("is tenant-scoped", async () => {

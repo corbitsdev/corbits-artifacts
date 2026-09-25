@@ -21,7 +21,6 @@ import {
   serializeArtifact,
   serializeArtifactListItem,
   setArtifactArchived,
-  SKILL_DRAFT_KIND,
   VersionConflictError,
   writeArtifactVersion,
   type ArtifactListRow,
@@ -37,12 +36,6 @@ import {
   type ArtifactCountSegments,
 } from "./counts.js";
 import { artifactPreviewHeaders, resolveArtifactPreview } from "./preview.js";
-import {
-  listMailAttachmentRefs,
-  MailAttachmentKindError,
-  saveMailAttachmentRefs,
-  SaveMailAttachmentRefsSchema,
-} from "./mail-attachments.js";
 import type { ArtifactRow } from "./schema.js";
 import type { ResolvedPrincipal, ContentStore } from "./ports.js";
 import {
@@ -56,7 +49,6 @@ import {
   UnsupportedUploadTypeError,
   type UploadPolicy,
 } from "./uploads.js";
-import { WebSiteContentError } from "./web-site.js";
 
 export type CreateArtifactRoutesDeps = {
   db: ArtifactDb;
@@ -254,14 +246,14 @@ export function createArtifactRoutes({
   };
 
   /**
-   * Confirm the id names a real, in-tenant, non-skill-draft artifact — or
+   * Confirm the id names a real, in-tenant artifact — or
    * answer the same 404 `loadScoped` does — BEFORE `requireGrant` runs.
    *
    * Must run between `principalRequired` and `requireGrant`: a real
    * `requireGrant` (Interchange's `authorize()`) has no existence check of its
    * own — it just asks whether the caller holds a grant naming the resource
-   * string built from the URL param, real artifact or not. A ghost id, a
-   * skill-draft, and another tenant's artifact all name a resource the caller
+   * string built from the URL param, real artifact or not. A ghost id and
+   * another tenant's artifact both name a resource the caller
    * holds no grant for, so without this check they would deny with the SAME
    * 403 a real artifact the caller merely lacks permission on gets — losing
    * the one thing single-artifact routes guarantee: a caller who cannot see
@@ -274,7 +266,7 @@ export function createArtifactRoutes({
     // principalRequired already ran; a null scope here would mean it didn't.
     if (!scope) return c.json({ error: "Forbidden" }, 403);
     const row = await getArtifact(db, c.req.param("id")!);
-    if (!row || row.kind === SKILL_DRAFT_KIND || row.tenantId !== scope.tenantId) {
+    if (!row || row.tenantId !== scope.tenantId) {
       return c.json({ error: "Artifact not found" }, 404);
     }
     await next();
@@ -332,7 +324,7 @@ export function createArtifactRoutes({
    * Load an artifact and confirm the caller may see it, or produce the reply.
    * Every single-artifact route funnels through here: no principal answers 403
    * before any id is looked at (collection reads instead answer an empty 200).
-   * A missing id, a malformed id, a skill-draft, and another tenant's artifact
+   * A missing id, a malformed id, and another tenant's artifact
    * all collapse to the same 404 so the route is not an existence oracle.
    */
   async function loadScoped(
@@ -345,7 +337,7 @@ export function createArtifactRoutes({
     if (!scope) return { response: c.json({ error: "Forbidden" }, 403) };
 
     const row = await getArtifact(db, c.req.param("id")!);
-    if (!row || row.kind === SKILL_DRAFT_KIND || row.tenantId !== scope.tenantId) {
+    if (!row || row.tenantId !== scope.tenantId) {
       return { response: c.json({ error: "Artifact not found" }, 404) };
     }
     return { row, scope };
@@ -357,7 +349,7 @@ export function createArtifactRoutes({
       tags: ["Artifacts"],
       summary: "List artifacts in the caller's tenant",
       description:
-        "Newest-updated first by default. Supports query/kind/owner/date filters, an `updatedAt__id` keyset cursor, and an archived-only toggle. skill-draft artifacts are never listed. List is discovery only: each item omits `content` (fetch the body via GET /artifacts/:id, download, or tools).",
+        "Newest-updated first by default. Supports query/kind/owner/date filters, an `updatedAt__id` keyset cursor, and an archived-only toggle. List is discovery only: each item omits `content` (fetch the body via GET /artifacts/:id, download, or tools).",
       parameters: [
         { name: "query", in: "query", required: false, schema: { type: "string" } },
         { name: "sort", in: "query", required: false, schema: { type: "string" } },
@@ -472,9 +464,6 @@ export function createArtifactRoutes({
         return c.json({ artifact: artifactJson }, 201);
       } catch (error) {
         if (error instanceof ArtifactSizeError) {
-          return c.json({ error: error.message }, 400);
-        }
-        if (error instanceof WebSiteContentError) {
           return c.json({ error: error.message }, 400);
         }
         throw error;
@@ -659,7 +648,7 @@ export function createArtifactRoutes({
         403: { description: "No resolvable principal" },
         404: {
           description:
-            "Artifact not found — also the answer for a malformed id, a skill-draft, and another tenant's artifact",
+            "Artifact not found — also the answer for a malformed id and another tenant's artifact",
         },
       },
     }),
@@ -714,7 +703,7 @@ export function createArtifactRoutes({
         403: { description: "No resolvable principal" },
         404: {
           description:
-            "Artifact not found — also the answer for a malformed id, a skill-draft, another tenant's artifact, or an unknown version",
+            "Artifact not found — also the answer for a malformed id, another tenant's artifact, or an unknown version",
         },
       },
     }),
@@ -750,7 +739,7 @@ export function createArtifactRoutes({
       tags: ["Artifacts"],
       summary: "Revise an artifact, creating a new version",
       description:
-        "Locks the row FOR UPDATE and bumps version by one; a unique (artifactId, version) index backstops a racing writer. Archived and skill-draft artifacts present as not found. `metadata` is optional and opaque; when omitted, the prior version's metadata carries forward, and an explicit `null` clears it. An optional `expectedVersion` is checked under the same lock: a mismatch answers 409 and writes nothing.",
+        "Locks the row FOR UPDATE and bumps version by one; a unique (artifactId, version) index backstops a racing writer. Archived artifacts present as not found. `metadata` is optional and opaque; when omitted, the prior version's metadata carries forward, and an explicit `null` clears it. An optional `expectedVersion` is checked under the same lock: a mismatch answers 409 and writes nothing.",
       parameters: [idParam],
       responses: {
         200: { description: "New version created" },
@@ -805,9 +794,6 @@ export function createArtifactRoutes({
           );
         }
         if (error instanceof ArtifactSizeError) {
-          return c.json({ error: error.message }, 400);
-        }
-        if (error instanceof WebSiteContentError) {
           return c.json({ error: error.message }, 400);
         }
         throw error;
@@ -941,88 +927,6 @@ export function createArtifactRoutes({
       // Buffer (nonzero byteOffset) would leak adjacent, unrelated memory.
       const { buffer, byteOffset, byteLength } = result.body;
       return c.body(buffer.slice(byteOffset, byteOffset + byteLength) as ArrayBuffer);
-    },
-  );
-
-  app.post(
-    "/instances/:instanceId/mail-attachments",
-    describeRoute({
-      tags: ["Artifacts"],
-      summary: "Associate file artifacts with a sent message",
-      description:
-        "Records which artifacts were attached to a message so a transcript can rehydrate its chips after reload. No bytes move — the files are already artifacts. Idempotent per (mailId, artifactId).",
-      parameters: [
-        { name: "instanceId", in: "path", required: true, schema: { type: "string" } },
-      ],
-      responses: {
-        201: { description: "References recorded" },
-        400: {
-          description:
-            "Invalid request body, or a referenced artifact is not an attachable file/image kind",
-        },
-        403: { description: "Tenant not accessible" },
-        404: { description: "A referenced artifact is not visible to the caller" },
-        413: { description: "Declared Content-Length over the content ceiling" },
-      },
-    }),
-    async (c) => {
-      const scope = await scopeFor(c);
-      if (!scope) return c.json({ error: "Tenant not accessible" }, 403);
-      if (contentLengthOverCeiling(c)) {
-        return c.json(
-          {
-            error: `Request body exceeds the ${MAX_ARTIFACT_CONTENT_BYTES} byte limit`,
-          },
-          413,
-        );
-      }
-      const raw = await readJson(c);
-      const body = SaveMailAttachmentRefsSchema(raw);
-      if (body instanceof type.errors) return c.json({ error: body.summary }, 400);
-      try {
-        await saveMailAttachmentRefs(db, {
-          scope,
-          instanceId: c.req.param("instanceId")!,
-          body,
-        });
-      } catch (err) {
-        // Same body as every detail route, so naming another tenant's artifact
-        // here is indistinguishable from naming one that never existed.
-        if (err instanceof ArtifactNotFoundError) {
-          return c.json({ error: "Artifact not found" }, 404);
-        }
-        // Visible but wrong kind: the id is real to this tenant, so 400 rather
-        // than collapsing into the 404 existence oracle.
-        if (err instanceof MailAttachmentKindError) {
-          return c.json({ error: err.message }, 400);
-        }
-        throw err;
-      }
-      return c.json({}, 201);
-    },
-  );
-
-  app.get(
-    "/instances/:instanceId/mail-attachments",
-    describeRoute({
-      tags: ["Artifacts"],
-      summary: "List artifact↔message associations for an instance",
-      parameters: [
-        { name: "instanceId", in: "path", required: true, schema: { type: "string" } },
-      ],
-      responses: {
-        200: { description: "All references for this instance" },
-      },
-    }),
-    async (c) => {
-      // A collection read, so the no-member asymmetry makes this an empty 200:
-      // a caller with no resolvable principal has no references, which is a
-      // fact, not a refusal. It names no artifact, so answering leaks nothing.
-      const scope = await scopeFor(c);
-      if (!scope) return c.json({ refs: [] });
-      return c.json({
-        refs: await listMailAttachmentRefs(db, scope, c.req.param("instanceId")!),
-      });
     },
   );
 

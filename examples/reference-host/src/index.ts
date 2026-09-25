@@ -167,7 +167,7 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
   }
   await runArtifactMigrations(config, { schema: "public" });
   await db.execute(
-    sql`TRUNCATE TABLE "artifacts"."artifact", "artifacts"."artifact_version", "artifacts"."upload", "artifacts"."mail_attachment_ref" CASCADE`,
+    sql`TRUNCATE TABLE "artifacts"."artifact", "artifacts"."artifact_version", "artifacts"."upload" CASCADE`,
   );
   await db.execute(sql`DELETE FROM "principal" WHERE "tenant_id" IN
     (SELECT "id" FROM "tenant" WHERE "slug" = 'reference')`);
@@ -304,7 +304,7 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
     });
     // Mounted @corbits/* modules serve under `/api`, matching Interchange's
     // own convention (`app.route("/api/me", …)`). The core registers its
-    // routes root-relative (`/artifacts*`, `/instances/:id/mail-attachments`).
+    // routes root-relative (`/artifacts*`).
     // The host wraps them in its own `api` sub-app so the principal middleware
     // below stays scoped to `/api`. Served paths: `/api/artifacts*` — no `/v1`
     // segment, no vendor prefix.

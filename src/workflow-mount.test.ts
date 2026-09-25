@@ -7,7 +7,7 @@ import {
 } from "./workflow-mount.js";
 import { InlineContentStore } from "./content-store.js";
 import { getArtifact } from "./artifacts.js";
-import { seedArtifact, seedSkillDraft, testDb } from "./test-helpers.js";
+import { seedArtifact, testDb } from "./test-helpers.js";
 import type { ArtifactDb } from "./db.js";
 
 const RUN_SCOPE: ResolvedWorkflowRunScope = {
@@ -208,15 +208,6 @@ describe("GET /artifacts/:id", () => {
     ]);
     expect(foreignRes.status).toBe(404);
     expect(ghostRes.status).toBe(404);
-  });
-
-  test("404s a skill-draft row", async () => {
-    const db = await testDb();
-    const draftId = await seedSkillDraft(db, "scratch");
-    const app = host(db);
-
-    const res = await app.request(`/artifacts/${draftId}`, { headers: authed });
-    expect(res.status).toBe(404);
   });
 });
 

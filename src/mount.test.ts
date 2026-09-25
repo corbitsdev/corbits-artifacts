@@ -20,7 +20,7 @@ import {
 import type { ArtifactDb } from "./db.js";
 import type { CreateArtifactRoutesDeps } from "./mount.js";
 import type { ResolvedPrincipal } from "./ports.js";
-import { seedArtifact, seedSkillDraft, SCOPE, testDb } from "./test-helpers.js";
+import { seedArtifact, SCOPE, testDb } from "./test-helpers.js";
 
 /** Places tenant/principal on the context the way a real host's session
  * middleware does, without pinning it to any one `requireGrant` wiring. */
@@ -449,11 +449,10 @@ describe("every way of not getting an artifact is indistinguishable", () => {
     [`/artifacts/${id}/download`, {}],
   ];
 
-  test("skill-draft, ghost id, cross-tenant and malformed id agree on all six routes", async () => {
+  test("ghost id, cross-tenant and malformed id agree on all six routes", async () => {
     const db = await testDb();
     const app = host(db);
     const cases: [string, string][] = [
-      ["skill-draft", await seedSkillDraft(db, "scratch")],
       ["ghost id", "00000000-0000-4000-8000-000000000000"],
       ["cross-tenant", (await seedArtifact(db, { tenantId: "other" })).id],
       ["malformed id", "not-a-uuid"],
@@ -722,64 +721,6 @@ describe("versions", () => {
     await setArtifactArchived(db, row, true);
     const res = await host(db).request(`/artifacts/${row.id}/versions`, json({ content: "x" }));
     expect(res.status).toBe(404);
-  });
-
-  // Named for exactly what it asserts: every single-artifact route.
-  // These all funnel through `loadScoped`, and the point of the test is that
-  // none of them can drift away from the choke point unnoticed.
-  test("a skill-draft is 404 on read, versions, revise, archive, unarchive and download", async () => {
-    const db = await testDb();
-    const id = await seedSkillDraft(db, "scratch");
-    const app = host(db);
-
-    const GET = {} as const;
-    const POST = { method: "POST" } as const;
-    const routes: [string, RequestInit][] = [
-      [`/artifacts/${id}`, GET],
-      [`/artifacts/${id}/versions`, GET],
-      [`/artifacts/${id}/versions`, json({ content: "x" })],
-      [`/artifacts/${id}/versions/1`, GET],
-      [`/artifacts/${id}/archive`, POST],
-      [`/artifacts/${id}/unarchive`, POST],
-      [`/artifacts/${id}/download`, GET],
-    ];
-    for (const [path, init] of routes) {
-      const res = await app.request(path, init);
-      expect({
-        route: `${init.method ?? "GET"} ${path}`,
-        status: res.status,
-        body: await res.json(),
-      }).toEqual({
-        route: `${init.method ?? "GET"} ${path}`,
-        status: 404,
-        body: { error: "Artifact not found" },
-      });
-    }
-  });
-
-  // The archive route mutates before it answers, so a mere status assertion
-  // would still pass if the row had already been changed. Read the row back.
-  test("a refused skill-draft archive leaves the row untouched", async () => {
-    const db = await testDb();
-    const id = await seedSkillDraft(db, "scratch");
-    expect((await host(db).request(`/artifacts/${id}/archive`, { method: "POST" })).status).toBe(
-      404,
-    );
-    const rows = await db.execute<{ archived_at: Date | null }>(
-      sql`SELECT "archived_at" FROM "artifacts"."artifact" WHERE "id" = ${id}`,
-    );
-    expect(rows[0]!.archived_at).toBeNull();
-  });
-
-  // A skill-draft is invisible, not merely un-writable: the id must not be
-  // distinguishable from one that was never minted.
-  test("an unknown id and a skill-draft id are indistinguishable", async () => {
-    const db = await testDb();
-    const app = host(db);
-    const draft = await app.request(`/artifacts/${await seedSkillDraft(db, "scratch")}`);
-    const unknown = await app.request("/artifacts/00000000-0000-4000-8000-000000000000");
-    expect(draft.status).toBe(unknown.status);
-    expect(await draft.json()).toEqual(await unknown.json());
   });
 });
 
@@ -1345,146 +1286,6 @@ describe("download over HTTP", () => {
   });
 });
 
-describe("mail attachment references", () => {
-  // Auth before body parse on the write route.
-  test("POST is 403 for an unauthenticated caller even with an empty or invalid body", async () => {
-    const db = await testDb();
-    const app = host(db, { principal: null });
-    for (const body of ["", "{", "{}", "null"]) {
-      const res = await app.request("/instances/inst-1/mail-attachments", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body,
-      });
-      expect({ body, status: res.status, json: await res.json() }).toEqual({
-        body,
-        status: 403,
-        json: { error: "Tenant not accessible" },
-      });
-    }
-  });
-
-  test("records and lists an artifact↔message association, idempotently", async () => {
-    const db = await testDb();
-    const app = host(db);
-    const file = await seedArtifact(db, { kind: "file", title: "a.pdf" });
-
-    const body = {
-      mailId: "mail-1",
-      attachments: [
-        { artifactId: file.id, name: "a.pdf", type: "application/pdf", size: 12 },
-      ],
-    };
-    expect((await app.request("/instances/inst-1/mail-attachments", json(body))).status).toBe(
-      201,
-    );
-    expect((await app.request("/instances/inst-1/mail-attachments", json(body))).status).toBe(
-      201,
-    );
-
-    const listed = (await (
-      await app.request("/instances/inst-1/mail-attachments")
-    ).json()) as { refs: unknown[] };
-    expect(listed.refs).toEqual([
-      { mailId: "mail-1", artifactId: file.id, name: "a.pdf", type: "application/pdf", size: 12 },
-    ]);
-  });
-
-  test("rejects a malformed body and refuses the WRITE without a principal", async () => {
-    const db = await testDb();
-    expect(
-      (
-        await host(db).request(
-          "/instances/inst-1/mail-attachments",
-          json({ mailId: "", attachments: [] }),
-        )
-      ).status,
-    ).toBe(400);
-    // The write is a mutation, so 403. The matching READ is a collection read
-    // and answers an empty 200 — see the no-principal route-class block below.
-    expect(
-      (
-        await host(db, { principal: null }).request(
-          "/instances/inst-1/mail-attachments",
-          json({
-            mailId: "mail-1",
-            attachments: [
-              { artifactId: "a", name: "a.pdf", type: "application/pdf", size: 1 },
-            ],
-          }),
-        )
-      ).status,
-    ).toBe(403);
-  });
-
-  // The route used to accept ANY string as an artifactId with no existence and
-  // no tenant check, so a reference to another tenant's artifact was recorded
-  // and answered 201. This table is an artifact↔message association; an
-  // association to something that is not this tenant's artifact is not one.
-  test("an artifactId the caller cannot see is refused, and nothing is written", async () => {
-    const db = await testDb();
-    const app = host(db);
-    const foreign = await seedArtifact(db, { tenantId: "other" });
-    const draft = await seedSkillDraft(db, "scratch");
-
-    const post = (artifactId: string, mailId: string) =>
-      app.request(
-        "/instances/inst-1/mail-attachments",
-        json({
-          mailId,
-          attachments: [
-            { artifactId, name: "a.pdf", type: "application/pdf", size: 1 },
-          ],
-        }),
-      );
-
-    for (const [cause, artifactId] of [
-      ["ghost id", "00000000-0000-4000-8000-000000000000"],
-      ["cross-tenant", foreign.id],
-      ["skill-draft", draft],
-      ["malformed id", "not-a-uuid"],
-    ] as [string, string][]) {
-      const res = await post(artifactId, `mail-${cause}`);
-      expect({ cause, status: res.status, body: await res.json() }).toEqual({
-        cause,
-        status: 404,
-        body: { error: "Artifact not found" },
-      });
-    }
-
-    const listed = (await (
-      await app.request("/instances/inst-1/mail-attachments")
-    ).json()) as { refs: unknown[] };
-    expect(listed.refs).toEqual([]);
-  });
-
-  // All-or-nothing: one bad reference in a batch refuses the batch, so a
-  // caller cannot smuggle a foreign id alongside a legitimate one.
-  test("one unusable reference in a batch refuses the whole batch", async () => {
-    const db = await testDb();
-    const app = host(db);
-    const mine = await seedArtifact(db, { kind: "file", title: "a.pdf" });
-    const foreign = await seedArtifact(db, { tenantId: "other" });
-
-    const res = await app.request(
-      "/instances/inst-1/mail-attachments",
-      json({
-        mailId: "mail-1",
-        attachments: [
-          { artifactId: mine.id, name: "a.pdf", type: "application/pdf", size: 1 },
-          { artifactId: foreign.id, name: "b.pdf", type: "application/pdf", size: 1 },
-        ],
-      }),
-    );
-    expect(res.status).toBe(404);
-
-    const listed = (await (
-      await app.request("/instances/inst-1/mail-attachments")
-    ).json()) as { refs: unknown[] };
-    expect(listed.refs).toEqual([]);
-  });
-});
-
 describe("post-commit side effects never turn a committed write into a 500", () => {
   // Enrichment runs against HOST-supplied decorator after the transaction commits.
   // A throwing host must not make a durable mutation report failure: the client
@@ -1550,10 +1351,6 @@ describe("no-principal response: every route matches the cross-core rule", () =>
     const list = await app.request("/artifacts");
     expect(list.status).toBe(200);
     expect(await list.json()).toEqual({ artifacts: [], nextCursor: null });
-
-    const refs = await app.request("/instances/inst-1/mail-attachments");
-    expect(refs.status).toBe(200);
-    expect(await refs.json()).toEqual({ refs: [] });
   });
 
   // Detail reads name one artifact, and whether it exists is not a signed-out
@@ -1598,19 +1395,6 @@ describe("no-principal response: every route matches the cross-core rule", () =>
     expect(
       (await app.request(`/artifacts/${row.id}/unarchive`, { method: "POST" })).status,
     ).toBe(403);
-    expect(
-      (
-        await app.request(
-          "/instances/inst-1/mail-attachments",
-          json({
-            mailId: "mail-1",
-            attachments: [
-              { artifactId: row.id, name: "a.pdf", type: "application/pdf", size: 1 },
-            ],
-          }),
-        )
-      ).status,
-    ).toBe(403);
   });
 
   // A refused mutation must also not have happened. A 403 that still wrote
@@ -1643,20 +1427,6 @@ describe("hardening regressions", () => {
     });
     expect((await revise(allowed)).status).toBe(200);
     expect(checks).toEqual([{ resource: `artifact:${row.id}`, action: "write" }]);
-  });
-
-  test("revising a web_site with invalid content is 400, not 404", async () => {
-    const db = await testDb();
-    const app = host(db);
-    const row = await seedArtifact(db, {
-      kind: "web_site",
-      content: JSON.stringify({ entry: "index.html", files: { "index.html": "<p>" } }),
-    });
-    const res = await app.request(
-      `/artifacts/${row.id}/versions`,
-      json({ content: JSON.stringify({ files: {} }) }),
-    );
-    expect(res.status).toBe(400);
   });
 
   test("kind must agree with mode on import", async () => {

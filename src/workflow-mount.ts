@@ -27,7 +27,6 @@ import {
   MetadataShape,
   serializeArtifact,
   serializeArtifactListItem,
-  SKILL_DRAFT_KIND,
   writeArtifactVersion,
   type SerializedArtifact,
   type SerializedArtifactListItem,
@@ -431,7 +430,7 @@ export function mountWorkflowArtifacts(
     const scope = c.get("workflowRunScope");
     const artifactId = c.req.param("id");
     const existing = await getArtifact(db, artifactId);
-    if (existing === null || existing.tenantId !== scope.tenantId || existing.kind === SKILL_DRAFT_KIND) {
+    if (existing === null || existing.tenantId !== scope.tenantId) {
       return c.json({ error: "Artifact not found" }, 404);
     }
     const written = await writeArtifactVersion(db, {
@@ -450,13 +449,11 @@ export function mountWorkflowArtifacts(
 
   app.get("/artifacts/:id/read", async (c) => {
     const scope = c.get("workflowRunScope");
-    const path = c.req.query("path");
     try {
       const data = await readArtifact(db, {
         scope: { tenantId: scope.tenantId, principalId: scope.principalId },
         artifactId: c.req.param("id"),
         ...parseVersionQuery(c.req.query("version")),
-        ...(path !== undefined && path !== "" ? { path } : {}),
       });
       return c.json({ data });
     } catch (err) {
@@ -485,9 +482,9 @@ export function mountWorkflowArtifacts(
     const artifactId = c.req.param("id");
     const row = await getArtifact(db, artifactId);
     // Fetch-then-check, exactly mirroring the tenant routes' single-artifact
-    // handlers: an id from another tenant, or a skill-draft, reads back
+    // handlers: an id from another tenant reads back
     // identically to an id that never existed — never a distinguishable 403.
-    if (row === null || row.tenantId !== scope.tenantId || row.kind === SKILL_DRAFT_KIND) {
+    if (row === null || row.tenantId !== scope.tenantId) {
       return c.json({ error: "Artifact not found" }, 404);
     }
     const artifact: SerializedArtifact = serializeArtifact(row);
