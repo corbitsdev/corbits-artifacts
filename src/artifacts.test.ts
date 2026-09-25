@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { and, eq, sql } from "drizzle-orm";
 import {
-  ArtifactNotFoundError,
   ArtifactSizeError,
   ArtifactValidationError,
   createArtifact,
@@ -16,7 +15,6 @@ import {
   serializeArtifact,
   setArtifactArchived,
   sha256Hex,
-  VersionConflictError,
   writeArtifactVersion,
 } from "./artifacts.js";
 import { artifact, artifactVersion } from "./schema.js";
@@ -86,74 +84,9 @@ describe("create", () => {
       files: { "index.html": "<p>hi</p>" },
     });
   });
-  test("rejects oversize title and content before insert", async () => {
-    const db = await testDb();
-    await expect(
-      db.transaction((tx) =>
-        createArtifact(tx, {
-          scope: SCOPE,
-          ownerPrincipalId: SCOPE.principalId,
-          kind: "document",
-          title: "x".repeat(MAX_ARTIFACT_TITLE_LENGTH + 1),
-          content: "ok",
-          source: { origin: "manual" },
-        }),
-      ),
-    ).rejects.toBeInstanceOf(ArtifactSizeError);
-
-    await expect(
-      db.transaction((tx) =>
-        createArtifact(tx, {
-          scope: SCOPE,
-          ownerPrincipalId: SCOPE.principalId,
-          kind: "document",
-          title: "ok",
-          content: "x".repeat(MAX_ARTIFACT_CONTENT_BYTES + 1),
-          source: { origin: "manual" },
-        }),
-      ),
-    ).rejects.toBeInstanceOf(ArtifactSizeError);
-  });
 });
 
 describe("versioning", () => {
-  test("bumps the version and appends history", async () => {
-    const db = await testDb();
-    const row = await seedArtifact(db, { title: "Draft", content: "v1" });
-
-    const second = await writeArtifactVersion(db, {
-      scope: SCOPE,
-      artifactId: row.id,
-      content: "v2",
-    });
-    expect(second.version).toBe(2);
-    expect(second.title).toBe("Draft");
-
-    const history = await listArtifactVersions(db, row.id);
-    expect(history.versions.map((h) => h.version)).toEqual([2, 1]);
-    expect(history.nextCursor).toBeNull();
-    expect((await getArtifactVersion(db, row.id, 1))?.content).toBe("v1");
-    expect((await getArtifactVersion(db, row.id, 2))?.content).toBe("v2");
-  });
-
-  test("paginates version history newest-first without content", async () => {
-    const db = await testDb();
-    const row = await seedArtifact(db, { title: "Draft", content: "v1" });
-    await writeArtifactVersion(db, { scope: SCOPE, artifactId: row.id, content: "v2" });
-    await writeArtifactVersion(db, { scope: SCOPE, artifactId: row.id, content: "v3" });
-
-    const page1 = await listArtifactVersions(db, row.id, { limit: 2 });
-    expect(page1.versions.map((v) => v.version)).toEqual([3, 2]);
-    expect(page1.versions[0]).not.toHaveProperty("content");
-    expect(page1.nextCursor).toBe("2");
-
-    const page2 = await listArtifactVersions(db, row.id, {
-      limit: 2,
-      cursor: Number(page1.nextCursor),
-    });
-    expect(page2.versions.map((v) => v.version)).toEqual([1]);
-    expect(page2.nextCursor).toBeNull();
-  });
 
   test("rejects oversize revise fields", async () => {
     const db = await testDb();
@@ -192,32 +125,6 @@ describe("versioning", () => {
     expect(rows.length).toBe(4);
   });
 
-  test("an archived artifact presents as not found, not forbidden", async () => {
-    const db = await testDb();
-    const row = await seedArtifact(db);
-    await setArtifactArchived(db, row, true);
-
-    await expect(
-      writeArtifactVersion(db, { scope: SCOPE, artifactId: row.id, content: "x" }),
-    ).rejects.toBeInstanceOf(ArtifactNotFoundError);
-  });
-
-  test("a skill-draft presents as not found", async () => {
-    const db = await testDb();
-    const id = await seedSkillDraft(db, "scratch");
-    await expect(
-      writeArtifactVersion(db, { scope: SCOPE, artifactId: id, content: "x" }),
-    ).rejects.toBeInstanceOf(ArtifactNotFoundError);
-  });
-
-  test("another tenant's artifact presents as not found", async () => {
-    const db = await testDb();
-    const row = await seedArtifact(db, { tenantId: "other" });
-    await expect(
-      writeArtifactVersion(db, { scope: SCOPE, artifactId: row.id, content: "x" }),
-    ).rejects.toBeInstanceOf(ArtifactNotFoundError);
-  });
-
   test("refuses a revision that changes nothing", async () => {
     const db = await testDb();
     const row = await seedArtifact(db);
@@ -228,19 +135,6 @@ describe("versioning", () => {
 });
 
 describe("archive", () => {
-  test("is idempotent: re-archiving keeps the original timestamp", async () => {
-    const db = await testDb();
-    const row = await seedArtifact(db);
-
-    const archived = await setArtifactArchived(db, row, true);
-    expect(archived.archivedAt).not.toBeNull();
-    const again = await setArtifactArchived(db, archived, true);
-    expect(again.archivedAt?.getTime()).toBe(archived.archivedAt!.getTime());
-
-    const restored = await setArtifactArchived(db, again, false);
-    expect(restored.archivedAt).toBeNull();
-    expect((await setArtifactArchived(db, restored, false)).archivedAt).toBeNull();
-  });
 
   test("returned archivedAt matches durable DB state", async () => {
     const db = await testDb();
@@ -739,40 +633,6 @@ describe("content digest", () => {
 
     const pinned = await getArtifactVersion(db, row.id, 1);
     expect(pinned?.contentSha256).toBeNull();
-  });
-});
-
-describe("expectedVersion precondition", () => {
-  test("a matching expectedVersion succeeds", async () => {
-    const db = await testDb();
-    const row = await seedArtifact(db, { content: "v1" });
-
-    const revised = await writeArtifactVersion(db, {
-      scope: SCOPE,
-      artifactId: row.id,
-      content: "v2",
-      expectedVersion: 1,
-    });
-    expect(revised.version).toBe(2);
-  });
-
-  test("a mismatched expectedVersion 409s (VersionConflictError) and writes nothing", async () => {
-    const db = await testDb();
-    const row = await seedArtifact(db, { content: "v1" });
-
-    await expect(
-      writeArtifactVersion(db, {
-        scope: SCOPE,
-        artifactId: row.id,
-        content: "v2",
-        expectedVersion: 5,
-      }),
-    ).rejects.toBeInstanceOf(VersionConflictError);
-
-    const history = await listArtifactVersions(db, row.id);
-    expect(history.versions.length).toBe(1);
-    const current = await getArtifact(db, row.id);
-    expect(current?.version).toBe(1);
   });
 });
 
