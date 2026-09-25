@@ -12,7 +12,7 @@ always called out under their own heading.
 ### Added
 
 - Run-scoped `POST /artifacts`, `POST /artifacts/binary`, and
-  `PATCH /artifacts/:id` (`mountWorkflowArtifacts`) accept an optional
+  `PATCH /artifacts/:id` (`createWorkflowArtifactRoutes`) accept an optional
   `metadata` field, matching the tenant routes' semantics exactly: omitted on
   a revise carries the prior version's metadata forward, an explicit `null`
   clears it, and any other value must be a JSON object or the request is

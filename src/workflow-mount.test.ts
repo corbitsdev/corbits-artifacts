@@ -1,9 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { Hono } from "hono";
 import {
-  mountWorkflowArtifacts,
+  createWorkflowArtifactRoutes,
   type ResolvedWorkflowRunScope,
-  type WorkflowArtifactEnv,
 } from "./workflow-mount.js";
 import { InlineContentStore } from "./content-store.js";
 import { getArtifact } from "./artifacts.js";
@@ -20,8 +18,7 @@ const VALID_TOKEN = "sidecar-token";
 const VALID_ADDRESS = "run-1@acme";
 
 function host(db: ArtifactDb, opts: { resolves?: ResolvedWorkflowRunScope | null } = {}) {
-  const app = new Hono<WorkflowArtifactEnv>();
-  return mountWorkflowArtifacts(app, {
+  return createWorkflowArtifactRoutes({
     db,
     contentStore: InlineContentStore,
     resolveRunScope: (token, address) => {
@@ -151,7 +148,7 @@ describe("POST /artifacts", () => {
 
   test("413s content over the configured character ceiling", async () => {
     const db = await testDb();
-    const app = mountWorkflowArtifacts(new Hono<WorkflowArtifactEnv>(), {
+    const app = createWorkflowArtifactRoutes({
       db,
       contentStore: InlineContentStore,
       resolveRunScope: () => RUN_SCOPE,
@@ -266,7 +263,7 @@ describe("POST /artifacts/binary", () => {
 
   test("413s bytes over the configured byte ceiling", async () => {
     const db = await testDb();
-    const app = mountWorkflowArtifacts(new Hono<WorkflowArtifactEnv>(), {
+    const app = createWorkflowArtifactRoutes({
       db,
       contentStore: InlineContentStore,
       resolveRunScope: () => RUN_SCOPE,

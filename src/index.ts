@@ -2,12 +2,12 @@
 export { createArtifactRoutes } from "./mount.js";
 export type { CreateArtifactRoutesDeps } from "./mount.js";
 
-export { mountWorkflowArtifacts } from "./workflow-mount.js";
+export { createWorkflowArtifactRoutes } from "./workflow-mount.js";
 export type {
   AgentTokenAuth,
   AgentTokenIdentity,
   CreatedWorkflowArtifact,
-  MountWorkflowArtifactsOpts,
+  CreateWorkflowArtifactRoutesDeps,
   ResolvedWorkflowRunScope,
   WorkflowArtifactEnv,
   WorkflowRunResolver,

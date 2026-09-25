@@ -14,7 +14,7 @@ import type { RuntimeCapabilities } from "@intx/types/runtime-capabilities";
 
 import { ARTIFACT_TOOL_DEFINITIONS } from "./tools.js";
 
-/** Where a host mounts `mountWorkflowArtifacts`. The bundle has no options of
+/** Where a host mounts `createWorkflowArtifactRoutes`. The bundle has no options of
  * its own — the loader constructs it — so the path is a shared constant
  * rather than per-deploy configuration. */
 export const WORKFLOW_ARTIFACTS_BASE_PATH = "/api/workflow-artifacts";

@@ -17,7 +17,7 @@
  * however it likes) — this module only draws the auth + CRUD seam.
  */
 import { type } from "arktype";
-import type { Context, Hono, MiddlewareHandler } from "hono";
+import { Hono, type Context, type MiddlewareHandler } from "hono";
 import {
   ArtifactNotFoundError,
   createArtifact,
@@ -99,7 +99,7 @@ export type AgentTokenAuth = {
   ) => Promise<ResolvedWorkflowRunScope | null> | ResolvedWorkflowRunScope | null;
 };
 
-export type MountWorkflowArtifactsOpts = {
+export type CreateWorkflowArtifactRoutesDeps = {
   db: ArtifactDb;
   contentStore: ContentStore;
   resolveRunScope: WorkflowRunResolver;
@@ -193,24 +193,22 @@ function parseRecentLimit(raw: string | undefined): number {
 }
 
 /**
- * Mount the run-scoped artifact routes onto a host Hono app. Unlike
+ * Build the run-scoped artifact routes as a sub-app the host mounts with
+ * `app.route`, at `WORKFLOW_ARTIFACTS_BASE_PATH`. Unlike
  * `createArtifactRoutes`, every route here is behind its own bearer-token
  * middleware — there is no unauthenticated collection-read case, since a
  * workflow run always presents credentials.
  */
-export function mountWorkflowArtifacts(
-  app: Hono<WorkflowArtifactEnv>,
-  opts: MountWorkflowArtifactsOpts,
-): Hono<WorkflowArtifactEnv> {
-  const {
-    db,
-    contentStore,
-    resolveRunScope,
-    agentToken,
-    uploadPolicy = ARTIFACT_UPLOAD_POLICY,
-    maxBinaryBytes = MAX_UPLOAD_BYTES,
-    maxContentChars = DEFAULT_MAX_WORKFLOW_CONTENT_CHARS,
-  } = opts;
+export function createWorkflowArtifactRoutes({
+  db,
+  contentStore,
+  resolveRunScope,
+  agentToken,
+  uploadPolicy = ARTIFACT_UPLOAD_POLICY,
+  maxBinaryBytes = MAX_UPLOAD_BYTES,
+  maxContentChars = DEFAULT_MAX_WORKFLOW_CONTENT_CHARS,
+}: CreateWorkflowArtifactRoutesDeps): Hono<WorkflowArtifactEnv> {
+  const app = new Hono<WorkflowArtifactEnv>();
 
   const authenticate: MiddlewareHandler<WorkflowArtifactEnv> = async (c, next) => {
     const authHeader = c.req.header("authorization") ?? "";
