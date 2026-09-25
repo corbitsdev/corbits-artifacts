@@ -37,6 +37,12 @@ export type TestDb = {
   close: () => Promise<void>;
 };
 
+export function connectionString(config: DBConfig): string {
+  const user = encodeURIComponent(config.user);
+  const password = encodeURIComponent(config.password ?? "");
+  return `postgres://${user}:${password}@${config.host}:${config.port}/${config.database}`;
+}
+
 async function admin<T>(run: (sql: postgres.Sql) => Promise<T>): Promise<T> {
   const sql = postgres(DATABASE_URL, { max: 1, onnotice: () => undefined });
   try {
