@@ -119,6 +119,10 @@ always called out under their own heading.
 
 ### Breaking
 
+- The drizzle tables (`artifact`, `artifactVersion`, `upload`,
+  `mailAttachmentRef`) are no longer exported from the package entry. Hosts
+  reach artifacts through the routes and functions; `ARTIFACTS_SCHEMA` and the
+  `*Row` types stay public.
 - `mountArtifacts` takes `Hono<TenantEnv>`, reads the host-provided tenant and
   principal context natively, and requires the host's Interchange `RequireGrant`
   middleware. The `resolvePrincipal`, `isAdmin`, and `identity` options and the

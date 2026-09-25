@@ -76,9 +76,10 @@ rendered SQL, so editing one that has already been applied fails with
 `MigrationChecksumError` on the next boot rather than letting fresh and existing
 databases diverge. Add a new migration instead.
 
-`schema.ts` and `migrations.ts` must agree — the drizzle table objects are public
-exports, and a test asserts the migrations create exactly the tables `schema.ts`
-declares, no more and no less. Change one, change the other, in the same commit.
+`schema.ts` and `migrations.ts` must agree — every query goes through the drizzle
+table objects, and a test asserts the migrations create exactly the tables
+`schema.ts` declares, no more and no less. Change one, change the other, in the
+same commit.
 
 ## Pull requests
 
