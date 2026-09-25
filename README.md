@@ -56,7 +56,7 @@ app.route(
 );
 ```
 
-### 2. Hub-side, run-scoped: `mountWorkflowArtifacts`
+### 2. Hub-side, run-scoped: `createWorkflowArtifactRoutes`
 
 A parallel mount for a workflow run, which has no browser session — only a bearer token and an `x-workflow-run-address` header. Mount it at `/api/workflow-artifacts`, the path the sidecar bundle below calls, rather than under the tenant prefix. `resolveRunScope` is the host's existing sidecar-token → run lookup; `agentToken` is a second, optional auth path so a deployed agent can present the bearer the hub minted for its own definition instead of the sidecar's token.
 
@@ -71,29 +71,22 @@ A parallel mount for a workflow run, which has no browser session — only a bea
 
 ```ts
 import type { Hono } from "hono";
+import type { TenantEnv } from "@intx/hub-api";
 import {
   InlineContentStore,
-  mountWorkflowArtifacts,
+  createWorkflowArtifactRoutes,
   type ArtifactDb,
-  type WorkflowArtifactEnv,
   type WorkflowRunResolver,
-  type AgentTokenAuth,
 } from "@corbits/artifacts";
 
 export function mountWorkflowArtifactRoutes(
-  app: Hono<WorkflowArtifactEnv>,
-  deps: {
-    db: ArtifactDb;
-    resolveRunScope: WorkflowRunResolver;
-    agentToken?: AgentTokenAuth;
-  },
+  app: Hono<TenantEnv>,
+  db: ArtifactDb,
+  resolveRunScope: WorkflowRunResolver,
 ): void {
-  mountWorkflowArtifacts(app, {
-    db: deps.db,
-    contentStore: InlineContentStore,
-    resolveRunScope: deps.resolveRunScope,
-    ...(deps.agentToken !== undefined ? { agentToken: deps.agentToken } : {}),
-  });
+  app.route(
+      createWorkflowArtifactRoutes({ db, contentStore: InlineContentStore, resolveRunScope }),
+  );
 }
 ```
 
