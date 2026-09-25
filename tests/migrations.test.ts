@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { sql } from "drizzle-orm";
-import { runArtifactMigrations } from "../src/index.js";
-import { createTestDb, seedActor, type TestDb } from "./lib/db-harness.js";
+import { createArtifactDb, runArtifactMigrations } from "../src/index.js";
+import { connectionString, createTestDb, seedActor, type TestDb } from "./lib/db-harness.js";
 
 const TABLES = ["artifact", "artifact_version", "mail_attachment_ref", "upload"];
 
@@ -44,5 +44,19 @@ describe("runArtifactMigrations", () => {
       sql`SELECT "title" FROM "artifacts"."artifact"`,
     );
     expect(rows.map((row) => row.title)).toEqual(["kept"]);
+  });
+
+  test("a host boots with createArtifactDb after migrating, and close releases it", async () => {
+    const { db, close } = createArtifactDb(connectionString(testDb.config));
+    try {
+      const rows = await db.execute<{ table_name: string }>(sql`
+        SELECT table_name FROM information_schema.tables
+        WHERE table_schema = 'artifacts'
+        ORDER BY table_name
+      `);
+      expect(rows.map((row) => row.table_name)).toEqual(TABLES);
+    } finally {
+      await close();
+    }
   });
 });
