@@ -16,7 +16,7 @@ It ships no UI and no object store: the host renders artifacts and brings its ow
 ## Install
 
 ```bash
-npm add @corbits/artifacts \
+bun add @corbits/artifacts \
   @intx/db @intx/hub-api @intx/types drizzle-orm hono hono-openapi postgres
 ```
 
@@ -24,32 +24,28 @@ Add `@intx/agent` only if an agent uses the sidecar tools. Runs on Node >= 24.
 
 ## Quickstart
 
+With `DATABASE_URL` pointing at a hub database that has run `runArtifactMigrations` (see [Using with Interchange](#using-with-interchange)):
+
 ```ts
-import { createDB, type DBConfig } from "@intx/db";
-import type { RequireGrant, TenantEnv } from "@intx/hub-api";
-import type { Hono } from "hono";
-import {
-  createArtifactRoutes,
-  InlineContentStore,
-  runArtifactMigrations,
-} from "@corbits/artifacts";
+import { createArtifact, createArtifactDb, getArtifact } from "@corbits/artifacts";
 
-declare const app: Hono<TenantEnv>;
-declare const dbConfig: DBConfig;
-declare const requireGrant: RequireGrant;
+const { db, close } = createArtifactDb(process.env.DATABASE_URL!);
 
-await runArtifactMigrations(dbConfig, { schema: "public" });
-const { db, close } = createDB(dbConfig);
-
-app.route(
-  "/api",
-  createArtifactRoutes({ db, contentStore: InlineContentStore, requireGrant }),
+const created = await db.transaction((tx) =>
+  createArtifact(tx, {
+    scope: { tenantId: "acme", principalId: "alice" },
+    ownerPrincipalId: "alice",
+    kind: "document",
+    title: "Notes",
+    content: "Hello",
+    source: { origin: "manual" },
+  }),
 );
-
-process.once("SIGTERM", close);
+console.log(await getArtifact(db, created.id));
+await close();
 ```
 
-A principal with `create` on `artifact:*` can now `POST /api/artifacts` with `{ "kind": "document", "title": "Notes", "content": "Hello" }`, and `GET /api/artifacts` returns it.
+`acme` and `alice` must be a tenant and principal in the hub. It prints the artifact at version 1.
 
 ## Where it fits
 
@@ -165,7 +161,7 @@ export function buildAssistant(sources: readonly InferencePreference[]) {
 ## Upgrading from 0.1
 
 - `mountArtifacts(app, opts)` is now `createArtifactRoutes(deps)`, and `mountWorkflowArtifacts(app, opts)` is now `createWorkflowArtifactRoutes(deps)`. Mount both with `app.route`.
-- `POST /artifacts` and `POST /artifacts/upload` need `create` on `artifact:*`. Grant it to existing principals before upgrading, or they get `403`.
+- `POST /artifacts` and `POST /artifacts/upload` need `create` on `artifact:*`. The upgrade grants it to every principal that has already created an artifact in its tenant; grant it to new principals yourself.
 - `runArtifactMigrations(db)` is now `runArtifactMigrations(dbConfig, { schema })`. Existing 0.1.0 data upgrades in place on the first boot.
 - That boot drops the 0.1.0 migration ledger. You cannot roll back to 0.1.0, and 0.1.0 and 0.2.0 replicas must not share a database.
 - The drizzle tables, the `web_site` helpers, `SKILL_DRAFT_KIND`, `windowContent` and the mail-attachment routes and helpers are removed. The `mail_attachment_ref` table is dropped.

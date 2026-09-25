@@ -1,6 +1,8 @@
 // A database migrated and written by the published 0.1.0 package upgrades in
 // place under this version's runArtifactMigrations.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { schema as intx } from "@intx/db";
+import { generateId } from "@intx/hub-common";
 import { sql } from "drizzle-orm";
 import * as v010 from "@corbits/artifacts-0.1.0";
 import { runArtifactMigrations } from "../src/index.js";
@@ -19,6 +21,7 @@ const PDF = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37, 0x00
 let testDb: TestDb;
 let actor: Actor;
 let fileId: string;
+let newcomer: Actor;
 
 beforeAll(async () => {
   testDb = await createTestDb(async (config) => {
@@ -30,6 +33,8 @@ beforeAll(async () => {
     }
   });
   actor = await seedActor(testDb.db, "acme");
+  // 0.1.0 needed no create grant; the upgrade has to supply it.
+  await testDb.db.execute(sql`DELETE FROM "grant" WHERE action = 'create'`);
   await grant(testDb.db, actor, "artifact:*", "write");
   const scope = { tenantId: actor.tenant.id, principalId: actor.principal.id };
 
@@ -62,13 +67,49 @@ beforeAll(async () => {
   }
 
   await runArtifactMigrations(testDb.config, { schema: "public" });
+  const [principal] = await testDb.db
+    .insert(intx.principal)
+    .values({
+      id: generateId("principal"),
+      tenantId: actor.tenant.id,
+      kind: "user",
+      refId: "user-newcomer",
+      status: "active",
+    })
+    .returning();
+  newcomer = { tenant: actor.tenant, principal: principal! };
 });
 
 afterAll(async () => {
   await testDb?.close();
 });
 
+const createDoc = (as: Actor) =>
+  artifactApp(testDb.db, as).request("/api/artifacts", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mode: "text", title: "After upgrade", content: "hi" }),
+  });
+
 describe("upgrading a 0.1.0 database", () => {
+  test("a 0.1.0 creator keeps creating; a new principal needs the grant", async () => {
+    expect((await createDoc(actor)).status).toBe(201);
+    expect((await createDoc(newcomer)).status).toBe(403);
+  });
+
+  test("rerunning the migrations grants nothing new", async () => {
+    const count = async () =>
+      (
+        await testDb.db.execute<{ n: number }>(sql`
+          SELECT count(*)::int AS n FROM "grant"
+          WHERE resource = 'artifact:*' AND action = 'create'
+        `)
+      )[0]!.n;
+    const before = await count();
+    await runArtifactMigrations(testDb.config, { schema: "public" });
+    expect(await count()).toBe(before);
+  });
+
   test("drops mail_attachment_ref and the 0.1.0 migration ledger", async () => {
     const rows = await testDb.db.execute<{ table_name: string }>(sql`
       SELECT table_name FROM information_schema.tables
