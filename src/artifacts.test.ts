@@ -34,6 +34,7 @@ describe("create", () => {
       metadata: null,
       parentVersionIds: null,
       contentSha256: sha256Hex("first"),
+      source: { origin: "manual" },
     });
   });
 

@@ -46,6 +46,7 @@ beforeAll(async () => {
       }),
     );
     fileId = file.id;
+    await v010.writeArtifactVersion(legacy.db, { scope, artifactId: file.id, title: "deck v2.pdf" });
     await v010.saveMailAttachmentRefs(legacy.db, {
       scope,
       instanceId: "inst-1",
@@ -81,9 +82,33 @@ describe("upgrading a 0.1.0 database", () => {
     ]);
   });
 
-  test("a 0.1.0 upload still downloads its bytes", async () => {
-    const res = await artifactApp(testDb.db, actor).request(`/api/artifacts/${fileId}/download`);
+  test("every version of a 0.1.0 upload downloads its bytes", async () => {
+    const app = artifactApp(testDb.db, actor);
+    for (const query of ["?version=1", "?version=2", ""]) {
+      const res = await app.request(`/api/artifacts/${fileId}/download${query}`);
+      expect(res.status).toBe(200);
+      expect(new Uint8Array(await res.arrayBuffer())).toEqual(PDF);
+    }
+  });
+
+  test("revising a 0.1.0 upload with new bytes keeps version 1's bytes", async () => {
+    const app = artifactApp(testDb.db, actor);
+    const revised = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x32]);
+    const form = new FormData();
+    form.append("file", new File([revised], "deck.pdf", { type: "application/pdf" }));
+    const res = await app.request(`/api/artifacts/${fileId}/versions`, {
+      method: "POST",
+      body: form,
+    });
     expect(res.status).toBe(200);
-    expect(new Uint8Array(await res.arrayBuffer())).toEqual(PDF);
+    expect(await res.json()).toMatchObject({ version: 3 });
+
+    const bytesOf = async (query: string) =>
+      new Uint8Array(
+        await (await app.request(`/api/artifacts/${fileId}/download${query}`)).arrayBuffer(),
+      );
+    expect(await bytesOf("?version=1")).toEqual(PDF);
+    expect(await bytesOf("?version=3")).toEqual(revised);
+    expect(await bytesOf("")).toEqual(revised);
   });
 });

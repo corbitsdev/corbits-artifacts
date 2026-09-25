@@ -51,15 +51,23 @@ always called out under their own heading.
   `GET /api/artifacts/:id`, and the same response shape. A malformed or
   sub-1 version is `400`; an unknown version collapses into the same `404
   Artifact not found` every other single-artifact failure mode does.
-- `GET /api/artifacts/:id/download?version=N` — pins the download to that
-  version's content for the data-URL and downloadable-text conventions,
-  where content really is per-version; omitting `version` is unchanged. Same
-  `400`/`404` rules as the new versions route, plus one more: a blob-backed
-  upload's `ContentStore` reference lives on the artifact row's own
-  `source`, never per-version, so `?version=N` for one is `400 "Uploaded
-  file content is not versioned"` unless `N` names the current version —
-  rather than silently answering with today's blob under an older version's
-  name.
+- `GET /api/artifacts/:id/download?version=N` serves that version's exact
+  content; omitting `version` serves the latest. Same `400`/`404` rules as
+  the new versions route. Upload bytes are versioned: each version records
+  its own content reference and size in the new `artifact_version.source`
+  (jsonb, mirrored onto `artifact.source` for the current version, added by
+  `0004_version_source`), so an upload's `?version=1` returns its original
+  bytes after a revision instead of `400`. The migration backfills every
+  existing version from its artifact's `source`, so an upload written by
+  0.1.0 keeps downloading as version 1 (and as each later title/metadata
+  revision).
+- `POST /api/artifacts/:id/versions` revises an uploaded file with new bytes
+  when sent as `multipart/form-data` with one `file` field and an optional
+  `expectedVersion`. The bytes go through the configured `ContentStore` and
+  the upload policy (`415` for a refused type, `413` over
+  `MAX_UPLOAD_BYTES`); the title becomes the file's name. A non-upload
+  artifact, or a file that would change the kind between `file` and
+  `image`, is `400`. `reviseFileArtifact` is the underlying function.
 - `artifact_version.metadata` (jsonb, nullable) and
   `artifact_version.parent_version_ids` (text[], nullable), added by the new
   `0004_version_metadata` migration. `metadata` is opaque to the package —
