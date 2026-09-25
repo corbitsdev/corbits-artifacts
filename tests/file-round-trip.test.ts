@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hono } from "hono";
@@ -66,5 +66,26 @@ describe("upload, version, download on a filesystem ContentStore", () => {
       expect(res.status).toBe(200);
       expect(new Uint8Array(await res.arrayBuffer())).toEqual(bytes);
     }
+
+    const sources = [];
+    for (const version of [1, 3]) {
+      const res = await app.request(`/api/artifacts/${id}/versions/${version}`);
+      expect(res.status).toBe(200);
+      sources.push(((await res.json()) as { artifact: { source: unknown } }).artifact.source);
+    }
+    expect(sources[0]).toMatchObject({ upload: { size: v1Bytes.length } });
+    expect(sources[1]).toMatchObject({ upload: { size: v3Bytes.length } });
+
+    const storedFiles = async () => (await readdir(dir, { recursive: true })).length;
+    const before = await storedFiles();
+    const stale = new FormData();
+    stale.append("file", new File([v3Bytes], "report.pdf", { type: "application/pdf" }));
+    stale.append("expectedVersion", "1");
+    const conflict = await app.request(`/api/artifacts/${id}/versions`, {
+      method: "POST",
+      body: stale,
+    });
+    expect(conflict.status).toBe(409);
+    expect(await storedFiles()).toBe(before);
   });
 });

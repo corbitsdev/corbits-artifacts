@@ -281,20 +281,22 @@ export async function reviseFileArtifact(
   if (!args.policy.accepts(args.mimeType)) {
     throw new UnsupportedUploadTypeError(args.filename, args.mimeType);
   }
-  const stored = await contentStore.put(tx, args.scope, {
-    filename: args.filename,
-    mimeType: args.mimeType,
-    bytes: args.bytes,
-  });
   return await reviseArtifactVersion(
     tx,
     {
       scope: args.scope,
       artifactId: args.artifact.id,
-      content: stored.content,
-      file: {
-        source: { ...(args.artifact.source as Record<string, unknown>), ...stored.source },
-        contentSha256: bytesSha256(args.bytes),
+      storeFile: async (locked) => {
+        const stored = await contentStore.put(tx, args.scope, {
+          filename: args.filename,
+          mimeType: args.mimeType,
+          bytes: args.bytes,
+        });
+        return {
+          content: stored.content,
+          source: { ...(locked.source as Record<string, unknown>), ...stored.source },
+          contentSha256: bytesSha256(args.bytes),
+        };
       },
       ...(args.expectedVersion !== undefined ? { expectedVersion: args.expectedVersion } : {}),
     },
