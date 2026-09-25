@@ -33,7 +33,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await host.close();
+  await host?.close();
 });
 
 // The one artifact the later scenarios (archive, authz, deep link) reuse.

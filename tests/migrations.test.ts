@@ -12,7 +12,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await testDb.close();
+  await testDb?.close();
 });
 
 async function packageTables(): Promise<string[]> {
