@@ -80,6 +80,9 @@ boot, so every statement must be idempotent (`IF NOT EXISTS`, `IF EXISTS`). Ther
 is no ledger: a schema change is a new file whose statements are safe to re-run,
 never an edit that assumes it runs once.
 
+Because every file re-runs on every boot, a data backfill must be cheap once it has
+run: guard it so an already-migrated database does no work beyond a quick check.
+
 `schema.ts` and `migrations/` must agree — every query goes through the drizzle
 table objects, and the route suites fail when a column they write is missing.
 Change one, change the other, in the same commit.
