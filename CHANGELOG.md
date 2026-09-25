@@ -165,6 +165,25 @@ always called out under their own heading.
   authorization concept on top of the platform's — the failure mode this PR
   exists to remove. If a real need for it surfaces, it belongs in
   Interchange's grant model, not a per-package workaround.
+- `SKILL_DRAFT_KIND` is removed. `skill-draft` is no longer a reserved kind:
+  create, list, find-by-title and every read treat it like any other `kind`.
+- `web_site` handling is removed: `web_site` content is no longer normalized
+  on write, `readArtifact` no longer takes `path` or returns a site summary,
+  `artifact_read_chunk` no longer refuses it, and the sidecar's
+  `artifact_read` no longer forwards `path`. `WEB_SITE_KIND`,
+  `WEB_SITE_MAX_FILES`, `WEB_SITE_MAX_PATH_LENGTH`, `WEB_SITE_MAX_TOTAL_BYTES`,
+  `WebSiteContentError`, `normalizeWebSiteContent`, `normalizeWebSitePath`,
+  `parseWebSiteContentJson`, `serializeWebSiteContent`,
+  `summarizeWebSiteContent`, `WebSiteContent` and `WebSiteReadSummary` are no
+  longer exported.
+- Mail attachment references are removed: `POST` and `GET
+  /instances/:instanceId/mail-attachments`, `saveMailAttachmentRefs`,
+  `listMailAttachmentRefs`, `MAIL_ATTACHABLE_KINDS`,
+  `MailAttachmentKindError`, `MAX_MAIL_ATTACHMENT_BYTES`,
+  `MAX_MAIL_ATTACHMENTS_PER_MAIL` and `MailAttachmentRefRow`. The new
+  `0003_drop_mail_attachment_ref` migration drops the `mail_attachment_ref`
+  table and its rows.
+- `windowContent` is no longer exported; it is internal to the tool reads.
 
 ## [0.1.0] — first release
 

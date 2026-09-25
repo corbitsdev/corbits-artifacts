@@ -57,27 +57,3 @@ CREATE TABLE IF NOT EXISTS "artifacts"."upload" (
 CREATE INDEX IF NOT EXISTS "upload_tenant_idx" ON "artifacts"."upload" ("tenant_id");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "upload_principal_idx" ON "artifacts"."upload" ("principal_id");
---> statement-breakpoint
-CREATE TABLE IF NOT EXISTS "artifacts"."mail_attachment_ref" (
-  "id" text PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  "tenant_id" text NOT NULL REFERENCES "public"."tenant"("id") ON DELETE CASCADE,
-  "principal_id" text REFERENCES "public"."principal"("id") ON DELETE SET NULL,
-  "instance_id" text NOT NULL,
-  "mail_id" text NOT NULL,
-  "artifact_id" text NOT NULL,
-  "name" text NOT NULL,
-  "mime_type" text NOT NULL,
-  "size" integer NOT NULL,
-  "created_at" timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT "mail_attachment_ref_mail_id_artifact_id" UNIQUE ("mail_id", "artifact_id"),
-  CONSTRAINT "mail_attachment_ref_size_gte_0" CHECK ("size" >= 0)
-);
---> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "mail_attachment_ref_instance_idx"
-  ON "artifacts"."mail_attachment_ref" ("instance_id");
---> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "mail_attachment_ref_tenant_idx"
-  ON "artifacts"."mail_attachment_ref" ("tenant_id");
---> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "mail_attachment_ref_principal_idx"
-  ON "artifacts"."mail_attachment_ref" ("principal_id");

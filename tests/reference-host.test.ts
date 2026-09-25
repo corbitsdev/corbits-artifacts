@@ -172,25 +172,6 @@ describe.each<[string, ContentStore]>([
     expect(attached.headers.get("content-disposition")).toStartWith("attachment;");
     expect(inline.headers.get("content-disposition")).toStartWith("inline;");
   });
-
-  test("mail_attachment_ref is an idempotent artifact↔message association", async () => {
-    const pdfId = uploaded[1]!.id;
-    const body = {
-      mailId: `mail-${name}`,
-      attachments: [
-        { artifactId: pdfId, name: "deck.pdf", type: "application/pdf", size: PDF.length },
-      ],
-    };
-    // Posted twice: the file already IS an artifact, so no bytes move and the
-    // second post must record nothing new.
-    for (let i = 0; i < 2; i += 1) {
-      await app.request(`/api/instances/inst-${name}/mail-attachments`, postJson(body));
-    }
-    const refs = await json<{ refs: { artifactId: string }[] }>(
-      await app.request(`/api/instances/inst-${name}/mail-attachments`),
-    );
-    expect(refs.refs.map((r) => r.artifactId)).toEqual([pdfId]);
-  });
 });
 
 // Only DataUrlContentStore keeps its bytes IN `content`, so it is the store
@@ -435,12 +416,6 @@ describe("no session", () => {
     expect((await json<{ artifacts: unknown[] }>(res)).artifacts).toEqual([]);
   });
 
-  test("the mail-attachment collection read is also an empty 200, not a 403", async () => {
-    const res = await host.request("/api/instances/inst-InlineContentStore/mail-attachments");
-    expect(res.status).toBe(200);
-    expect((await json<{ refs: unknown[] }>(res)).refs).toEqual([]);
-  });
-
   test("creating is refused 403", async () => {
     const res = await host.request(
       "/api/artifacts",
@@ -516,32 +491,6 @@ describe("a cross-tenant request fails closed", () => {
     }
   });
 
-  test("a mail-attachment reference to another tenant's artifact is refused", async () => {
-    const [foreign] = await host.db.execute<{ id: string }>(sql`
-      SELECT "id" FROM "artifacts"."artifact" WHERE "title" = 'Other tenant secret' LIMIT 1
-    `);
-    const res = await host.request(
-      "/api/instances/inst-cross/mail-attachments",
-      postJson({
-        mailId: "mail-cross",
-        attachments: [
-          {
-            artifactId: foreign!.id,
-            name: "secret.pdf",
-            type: "application/pdf",
-            size: 1,
-          },
-        ],
-      }),
-    );
-    expect(res.status).toBe(404);
-
-    const refs = await json<{ refs: unknown[] }>(
-      await host.request("/api/instances/inst-cross/mail-attachments"),
-    );
-    expect(refs.refs).toEqual([]);
-  });
-
   // The archived artifact left behind by the archive scenarios above is
   // restored there; nothing here mutates, so no cleanup is needed.
 });
@@ -605,7 +554,7 @@ describe("pdf parsing is the host's, and the module's contract with it holds", (
         filename: "report.pdf",
         mimeType: "application/pdf",
         bytes: PDF,
-        // The chat/mail attachment surface, whose route the HOST owns — and
+        // The chat attachment surface, whose route the HOST owns — and
         // which is still gated by this module's allowlist, because `policy` is
         // a required argument.
         policy: PARSED_DOCUMENT_POLICY,
@@ -638,43 +587,6 @@ describe("pdf parsing is the host's, and the module's contract with it holds", (
         }),
       ),
     ).rejects.toThrow(UnsupportedUploadTypeError);
-  });
-});
-
-describe("a skill-draft is invisible over the mounted host", () => {
-  // End to end, on a real host rather than a unit-test Hono app: the
-  // kind is not addressable by ANY single-artifact route.
-  test("every detail route answers 404", async () => {
-    const draftAuthor = host.agentPrincipal;
-    const [draft] = await host.db.execute<{ id: string }>(sql`
-      INSERT INTO "artifacts"."artifact" ("tenant_id", "principal_id", "owner_principal_id",
-        "kind", "title", "content", "source", "version")
-      VALUES (${host.tenantId}, ${draftAuthor}, ${draftAuthor}, 'skill-draft', 'Scratch',
-        'draft body', '{"origin":"agent"}'::jsonb, 1)
-      RETURNING "id"
-    `);
-    const id = draft!.id;
-    const routes: [string, RequestInit][] = [
-      [`/api/artifacts/${id}`, {}],
-      [`/api/artifacts/${id}/versions`, {}],
-      [`/api/artifacts/${id}/versions`, postJson({ content: "x" })],
-      [`/api/artifacts/${id}/versions/1`, {}],
-      [`/api/artifacts/${id}/archive`, { method: "POST" }],
-      [`/api/artifacts/${id}/unarchive`, { method: "POST" }],
-      [`/api/artifacts/${id}/download`, {}],
-    ];
-    for (const [path, init] of routes) {
-      const res = await host.request(path, init);
-      expect({ route: `${init.method ?? "GET"} ${path}`, status: res.status }).toEqual({
-        route: `${init.method ?? "GET"} ${path}`,
-        status: 404,
-      });
-    }
-
-    const listed = await json<{ artifacts: { id: string }[] }>(
-      await host.request("/api/artifacts?limit=100"),
-    );
-    expect(listed.artifacts.some((a) => a.id === id)).toBe(false);
   });
 });
 

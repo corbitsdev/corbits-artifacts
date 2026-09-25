@@ -166,7 +166,7 @@ export async function testDb(): Promise<ArtifactDb> {
     await runArtifactMigrations(databaseConfig(DATABASE_URL), { schema: "public" });
   }
   await db.execute(
-    sql`TRUNCATE TABLE "artifacts"."artifact", "artifacts"."artifact_version", "artifacts"."upload", "artifacts"."mail_attachment_ref" CASCADE`,
+    sql`TRUNCATE TABLE "artifacts"."artifact", "artifacts"."artifact_version", "artifacts"."upload" CASCADE`,
   );
   return db;
 }
@@ -198,16 +198,4 @@ export async function seedArtifact(
       source: overrides.source ?? { origin: "manual" },
     }),
   );
-}
-
-/** Bypasses `createArtifact` so a test can plant a kind the module refuses to mint. */
-export async function seedSkillDraft(db: ArtifactDb, title: string): Promise<string> {
-  const rows = await db.execute<{ id: string }>(sql`
-    INSERT INTO "artifacts"."artifact" ("tenant_id", "principal_id", "owner_principal_id",
-      "kind", "title", "content", "source", "version")
-    VALUES (${SCOPE.tenantId}, ${SCOPE.principalId}, ${SCOPE.principalId},
-      'skill-draft', ${title}, 'draft body', '{"origin":"agent"}'::jsonb, 1)
-    RETURNING "id"
-  `);
-  return rows[0]!.id;
 }

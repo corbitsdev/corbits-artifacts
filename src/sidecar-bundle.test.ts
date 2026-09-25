@@ -221,8 +221,8 @@ describe("every declared tool maps onto a route", () => {
     ],
     [
       "artifact_read",
-      { artifactId: "a1", path: "index.html" },
-      "/api/workflow-artifacts/artifacts/a1/read?path=index.html",
+      { artifactId: "a1", version: 2 },
+      "/api/workflow-artifacts/artifacts/a1/read?version=2",
     ],
   ];
 

@@ -79,6 +79,7 @@
     }
   },
   "devDependencies": {
+    "@corbits/artifacts-0.1.0": "npm:@corbits/artifacts@0.1.0",
     "@intx/types": "0.4.0",
     "@types/bun": "1.1.14",
     "@types/node": "22.10.5",
