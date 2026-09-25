@@ -30,32 +30,41 @@ async function download(id: string, version?: number): Promise<Response> {
 }
 
 describe("upload, version, download on a filesystem ContentStore", () => {
-  test("the uploaded bytes come back unchanged across a new version", async () => {
-    const bytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x00, 0xff, 0x10, 0x80]);
+  test("each version downloads its own bytes", async () => {
+    const v1Bytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x00, 0xff, 0x10, 0x80]);
+    const v3Bytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x01, 0x02]);
     const form = new FormData();
-    form.append("files", new File([bytes], "report.pdf", { type: "application/pdf" }));
+    form.append("files", new File([v1Bytes], "report.pdf", { type: "application/pdf" }));
     const uploaded = await app.request("/api/artifacts/upload", { method: "POST", body: form });
     expect(uploaded.status).toBe(201);
     const { artifacts } = (await uploaded.json()) as { artifacts: { id: string }[] };
     const id = artifacts[0]!.id;
 
-    const v1 = await download(id, 1);
-    expect(v1.status).toBe(200);
-    expect(new Uint8Array(await v1.arrayBuffer())).toEqual(bytes);
-
-    const revised = await app.request(`/api/artifacts/${id}/versions`, {
+    const renamed = await app.request(`/api/artifacts/${id}/versions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ title: "report (final).pdf" }),
     });
+    expect(renamed.status).toBe(200);
+
+    const revise = new FormData();
+    revise.append("file", new File([v3Bytes], "report.pdf", { type: "application/pdf" }));
+    const revised = await app.request(`/api/artifacts/${id}/versions`, {
+      method: "POST",
+      body: revise,
+    });
     expect(revised.status).toBe(200);
+    expect(await revised.json()).toMatchObject({ version: 3 });
 
-    const v2 = await download(id, 2);
-    expect(v2.status).toBe(200);
-    expect(new Uint8Array(await v2.arrayBuffer())).toEqual(bytes);
-
-    // Uploaded bytes live in the store, not in version history, so an older
-    // version of a stored file is refused rather than served as current bytes.
-    expect((await download(id, 1)).status).toBe(400);
+    for (const [version, bytes] of [
+      [1, v1Bytes],
+      [2, v1Bytes],
+      [3, v3Bytes],
+      [undefined, v3Bytes],
+    ] as const) {
+      const res = await download(id, version);
+      expect(res.status).toBe(200);
+      expect(new Uint8Array(await res.arrayBuffer())).toEqual(bytes);
+    }
   });
 });
