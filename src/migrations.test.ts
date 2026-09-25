@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { getTableName, is, sql } from "drizzle-orm";
 import { PgTable } from "drizzle-orm/pg-core";
 import { createArtifactDb } from "./db.js";
@@ -23,7 +23,7 @@ const DECLARED_TABLES = (Object.values(schema) as unknown[])
   .map(getTableName)
   .sort();
 
-const { db } = createArtifactDb(DATABASE_URL);
+const { db, close } = createArtifactDb(DATABASE_URL);
 
 async function packageTables(): Promise<string[]> {
   const rows = await db.execute<{ table_name: string }>(sql`
@@ -44,6 +44,8 @@ beforeAll(async () => {
   assertDestructiveArtifactTestsAllowed(DATABASE_URL);
   await ensureControlPlane(db);
 });
+
+afterAll(close);
 
 describe("runArtifactMigrations", () => {
   test("creates exactly the tables schema.ts declares, and re-running is a no-op", async () => {
