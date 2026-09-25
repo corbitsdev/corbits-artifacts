@@ -124,6 +124,13 @@ always called out under their own heading.
 
 ### Breaking
 
+- `runArtifactMigrations(config, { schema })` takes the same arguments as
+  Interchange's `runMigrations`: a `DBConfig` and the host schema holding
+  `tenant` and `principal`. It applies the SQL files shipped under
+  `migrations/`, all idempotent, with no ledger. The `adopt` option,
+  `RunArtifactMigrationsOptions`, `MigrationChecksumError` and
+  `MigrationAdoptError` are removed, and the `artifacts.migrations` ledger
+  table is dropped on the next boot.
 - The drizzle tables (`artifact`, `artifactVersion`, `upload`,
   `mailAttachmentRef`) are no longer exported from the package entry. Hosts
   reach artifacts through the routes and functions; `ARTIFACTS_SCHEMA` and the
