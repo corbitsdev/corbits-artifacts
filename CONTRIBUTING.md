@@ -39,6 +39,13 @@ ephemeral database (`artifact_core`, or any name ending in `_test`). Without bot
 suite throws before mutating. The gate itself is pure URL/env parsing and is covered by
 unit tests that do not need Postgres.
 
+End-to-end suites live in `tests/`. `tests/lib/db-harness.ts` creates a fresh
+`artifact_<random>_test` database per suite on the `ARTIFACT_DATABASE_URL` server,
+applies Interchange's `runMigrations` and `runArtifactMigrations`, and drops it
+afterwards. `artifactApp` mounts `createArtifactRoutes` for a seeded tenant
+principal, authorized by the platform's real `createRequireGrant` over the
+database's `grant` table. `bun run test` runs `src/` and `tests/`.
+
 ## The reference host is the acceptance suite, not a demo
 
 `examples/reference-host` mounts the package on a real `@intx/hub-api` app against a
