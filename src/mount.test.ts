@@ -1759,6 +1759,21 @@ describe("GET /artifacts/counts", () => {
     expect(await res.json()).toEqual({ all: 3, document: 1, sheet: 2 });
   });
 
+  test("walks past one page, skipping other tenants and archived rows", async () => {
+    const db = await testDb();
+    await Promise.all(
+      Array.from({ length: 120 }, (_, i) =>
+        seedArtifact(db, { kind: "document", title: `doc-${i}` }),
+      ),
+    );
+    await seedArtifact(db, { tenantId: "other" });
+    await setArtifactArchived(db, await seedArtifact(db), true);
+    const app = host(db, { countSegments: { document: (row) => row.kind === "document" } });
+
+    const res = await app.request("/artifacts/counts");
+    expect(await res.json()).toEqual({ all: 120, document: 120 });
+  });
+
   test("403s with no resolvable principal, matching every other collection-adjacent route's auth story here", async () => {
     const db = await testDb();
     const app = host(db, { principal: null });
