@@ -242,6 +242,23 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
     (p) => p.kind === "agent" && p.refId === "user-alice",
   )!.id;
 
+  // The routes check `artifact:*` / `create` before any create, the same way
+  // hub-api checks `grant:*` / `create` before minting a grant. This demo
+  // grants it to the principals it seeds here; a real host decides who may.
+  await db.insert(intxSchema.grant).values(
+    principals.map((principal) => ({
+      id: generateId("grant"),
+      tenantId: tenant.id,
+      principalId: principal.id,
+      roleId: null,
+      resource: "artifact:*",
+      action: "create",
+      effect: "allow" as const,
+      origin: "system" as const,
+      conditions: null,
+    })),
+  );
+
   let currentSession: Session = { userId: "user-alice" };
 
   const getSession = async (_headers: Headers) => {

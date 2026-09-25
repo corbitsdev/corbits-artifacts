@@ -129,6 +129,12 @@ always called out under their own heading.
   which returns a `Hono<TenantEnv>` sub-app the host mounts with
   `app.route(...)` instead of mutating the host app. `MountArtifactsOpts` is
   renamed `CreateArtifactRoutesDeps`; the options are unchanged.
+- `POST /artifacts` and `POST /artifacts/upload` now require
+  `requireGrant("artifact:*", "create")`, as hub-api's `createGrantRoutes`
+  requires `create` on `grant:*`. A host must grant its principals `create`
+  on `artifact:*` for them to keep creating artifacts. An unauthenticated
+  caller of these two routes now gets `{ "error": "Forbidden" }` instead of
+  `{ "error": "Tenant not accessible" }`.
 - `runArtifactMigrations(config, { schema })` takes the same arguments as
   Interchange's `runMigrations`: a `DBConfig` and the host schema holding
   `tenant` and `principal`. It applies the SQL files shipped under

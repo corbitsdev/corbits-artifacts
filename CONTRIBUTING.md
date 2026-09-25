@@ -183,7 +183,9 @@ invents authorization policy nor decides who a newly created row belongs to
 for grant purposes — it hands the host the row, inside the transaction that
 made it durable, and the host decides.
 
-`examples/reference-host` provisions a real `creator`-origin grant on create —
+Creating needs its own grant, `create` on `artifact:*`, checked before the
+body is read; the reference host seeds it for every principal in its tenant.
+`examples/reference-host` then provisions a real `creator`-origin grant on create —
 `write` and `archive` on `artifact:<id>` for the creating principal, inserted
 into Interchange's own `grant` table via `@intx/db`'s schema, in the same
 transaction as the artifact row. Its `buildApp`'s default `requireGrant` is the

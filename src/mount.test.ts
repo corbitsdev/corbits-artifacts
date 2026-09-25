@@ -252,7 +252,7 @@ describe("POST /artifacts", () => {
       expect({ body, status: res.status, json: await res.json() }).toEqual({
         body,
         status: 403,
-        json: { error: "Tenant not accessible" },
+        json: { error: "Forbidden" },
       });
     }
   });
@@ -955,6 +955,30 @@ describe("authorization through the real platform grant evaluator", () => {
     expect(current!.content).toBe("v2");
   });
 
+  test("creating needs a create grant on artifact:*; without one, nothing is written", async () => {
+    const db = await testDb();
+    const grants = [
+      grantRule({ resource: "artifact:*", action: "create", principalId: OWNER.principalId }),
+    ];
+    const body = { mode: "text", title: "Gated", content: "body" };
+    const form = () => {
+      const f = new FormData();
+      f.append("files", new File(["a"], "a.txt", { type: "text/plain" }));
+      return { method: "POST", body: f };
+    };
+
+    const granted = hostWithGrants(db, OWNER, grants);
+    const ungranted = hostWithGrants(db, NON_OWNER, grants);
+
+    expect((await granted.request("/artifacts", json(body))).status).toBe(201);
+    expect((await granted.request("/artifacts/upload", form())).status).toBe(201);
+    expect((await ungranted.request("/artifacts", json(body))).status).toBe(403);
+    expect((await ungranted.request("/artifacts/upload", form())).status).toBe(403);
+
+    const rows = await listArtifacts(db, SCOPE.tenantId, {});
+    expect(rows.rows.length).toBe(2);
+  });
+
   test("a grant for the wrong action does not authorize a different one", async () => {
     const db = await testDb();
     const row = await seedArtifact(db);
@@ -1020,8 +1044,7 @@ describe("authorization through the real platform grant evaluator", () => {
  */
 describe("onArtifactCreated: the host's grant-provisioning seam", () => {
   // These tests are about the hook, not authorization, so the grant check
-  // itself is a trivial always-allow — `requireGrant` isn't even reached by
-  // POST /artifacts or /artifacts/upload, which authorize nothing on create.
+  // itself is a trivial always-allow.
   const allowAll: RequireGrant = () => async (_c, next) => next();
 
   test("runs once with the created row and the creating scope", async () => {

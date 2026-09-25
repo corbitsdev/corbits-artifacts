@@ -64,7 +64,9 @@ export type CreateArtifactRoutesDeps = {
   /**
    * The host's grant middleware factory (Interchange `createRequireGrant`).
    * Authorize is the host's responsibility: artifact-core implements no owner,
-   * agent-owner, membership, or admin policy. The mutating routes that act on
+   * agent-owner, membership, or admin policy. Creating an artifact
+   * (`POST /artifacts`, `POST /artifacts/upload`) requires
+   * `requireGrant("artifact:*", "create")`; the mutating routes that act on
    * one artifact are guarded with `requireGrant(idResource("artifact", "id"),
    * <action>)`.
    */
@@ -176,6 +178,10 @@ const ReviseArtifactRequest = type({
     body.metadata !== undefined ||
     ctx.mustBe("a body with content, title, and/or metadata"),
 );
+
+/** The resource creating an artifact is authorized against, as hub-api's
+ * `createGrantRoutes` authorizes creating a grant against `grant:*`. */
+const ARTIFACT_COLLECTION = "artifact:*";
 
 const idParam = {
   name: "id",
@@ -418,15 +424,18 @@ export function createArtifactRoutes({
       responses: {
         201: { description: "Artifact created" },
         400: { description: "Invalid request body" },
-        403: { description: "Tenant not accessible" },
+        403: { description: "No resolvable principal, or not permitted" },
         413: { description: "Declared Content-Length over the content ceiling" },
       },
     }),
+    // Principal and grant before body: an unauthenticated or unpermitted
+    // caller gets 403 without learning whether the JSON was well-formed.
+    principalRequired,
+    requireGrant(ARTIFACT_COLLECTION, "create"),
     async (c) => {
-      // Principal before body: unauthenticated callers get 403 without learning
-      // whether the JSON was well-formed.
       const scope = await scopeFor(c);
-      if (!scope) return c.json({ error: "Tenant not accessible" }, 403);
+      // principalRequired already ran; a null scope here would mean it didn't.
+      if (!scope) return c.json({ error: "Forbidden" }, 403);
       if (contentLengthOverCeiling(c)) {
         return c.json(
           {
@@ -483,14 +492,17 @@ export function createArtifactRoutes({
       responses: {
         201: { description: "Artifacts created" },
         400: { description: "No files supplied" },
-        403: { description: "Tenant not accessible" },
+        403: { description: "No resolvable principal, or not permitted" },
         413: { description: "Too many files, or a file/aggregate over the limit" },
         415: { description: "A file has an unsupported type" },
       },
     }),
+    principalRequired,
+    requireGrant(ARTIFACT_COLLECTION, "create"),
     async (c) => {
       const scope = await scopeFor(c);
-      if (!scope) return c.json({ error: "Tenant not accessible" }, 403);
+      // principalRequired already ran; a null scope here would mean it didn't.
+      if (!scope) return c.json({ error: "Forbidden" }, 403);
 
       const parsed = await c.req.parseBody({ all: true });
       const files: File[] = [];
