@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { sql } from "drizzle-orm";
 import { createArtifactDb, runArtifactMigrations } from "../src/index.js";
-import { connectionString, createTestDb, seedActor, type TestDb } from "./lib/db-harness.js";
+import { seedActor } from "./fixtures.js";
+import { connectionString, createTestDb, type TestDb } from "./helpers.js";
 
 const TABLES = ["artifact", "artifact_version", "upload"];
 

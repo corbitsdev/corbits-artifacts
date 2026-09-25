@@ -2,11 +2,12 @@ import { describe, expect, test } from "bun:test";
 import {
   createWorkflowArtifactRoutes,
   type ResolvedWorkflowRunScope,
-} from "./workflow-mount.js";
-import { InlineContentStore } from "./content-store.js";
-import { getArtifact } from "./artifacts.js";
-import { seedArtifact, testDb } from "./test-helpers.js";
-import type { ArtifactDb } from "./db.js";
+} from "../src/workflow-mount.js";
+import { InlineContentStore } from "../src/content-store.js";
+import { getArtifact } from "../src/artifacts.js";
+import { seedArtifact } from "./fixtures.js";
+import { testDb } from "./helpers.js";
+import type { ArtifactDb } from "../src/db.js";
 
 const RUN_SCOPE: ResolvedWorkflowRunScope = {
   tenantId: "acme",

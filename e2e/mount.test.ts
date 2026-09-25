@@ -4,24 +4,25 @@ import { Hono } from "hono";
 import { createRequireGrant, type RequireGrant, type TenantEnv } from "@intx/hub-api";
 import { createInMemoryGrantStore } from "@intx/authz";
 import type { GrantRule } from "@intx/types/authz";
-import { createArtifactRoutes } from "./mount.js";
-import { InlineContentStore } from "./content-store.js";
+import { createArtifactRoutes } from "../src/mount.js";
+import { InlineContentStore } from "../src/content-store.js";
 import {
   getArtifact,
   listArtifacts,
   MAX_ARTIFACT_CONTENT_BYTES,
   setArtifactArchived,
   sha256Hex,
-} from "./artifacts.js";
+} from "../src/artifacts.js";
 import {
   MAX_UPLOAD_BYTES,
   MAX_UPLOAD_FILE_COUNT,
   MAX_UPLOAD_TOTAL_BYTES,
-} from "./uploads.js";
-import type { ArtifactDb } from "./db.js";
-import type { CreateArtifactRoutesDeps } from "./mount.js";
-import type { ResolvedPrincipal } from "./ports.js";
-import { seedArtifact, SCOPE, testDb } from "./test-helpers.js";
+} from "../src/uploads.js";
+import type { ArtifactDb } from "../src/db.js";
+import type { CreateArtifactRoutesDeps } from "../src/mount.js";
+import type { ResolvedPrincipal } from "../src/ports.js";
+import { seedArtifact, SCOPE } from "./fixtures.js";
+import { testDb } from "./helpers.js";
 
 /** Places tenant/principal on the context the way a real host's session
  * middleware does, without pinning it to any one `requireGrant` wiring. */

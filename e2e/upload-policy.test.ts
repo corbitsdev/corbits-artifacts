@@ -2,7 +2,8 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Hono } from "hono";
 import type { TenantEnv } from "@intx/hub-api";
 import { MAX_UPLOAD_BYTES } from "../src/index.js";
-import { artifactApp, createTestDb, seedActor, type TestDb } from "./lib/db-harness.js";
+import { seedActor } from "./fixtures.js";
+import { artifactApp, createTestDb, type TestDb } from "./helpers.js";
 
 let testDb: TestDb;
 let app: Hono<TenantEnv>;

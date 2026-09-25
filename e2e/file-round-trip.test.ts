@@ -4,8 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hono } from "hono";
 import type { TenantEnv } from "@intx/hub-api";
-import { artifactApp, createTestDb, grant, seedActor, type TestDb } from "./lib/db-harness.js";
-import { createFsContentStore } from "./lib/fs-content-store.js";
+import { grant, seedActor } from "./fixtures.js";
+import {
+  artifactApp,
+  createTestDb,
+  type TestDb,
+  createFsContentStore,
+} from "./helpers.js";
 
 let testDb: TestDb;
 let dir: string;

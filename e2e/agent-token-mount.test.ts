@@ -3,10 +3,11 @@ import {
   createWorkflowArtifactRoutes,
   type AgentTokenAuth,
   type ResolvedWorkflowRunScope,
-} from "./workflow-mount.js";
-import { InlineContentStore } from "./content-store.js";
-import { seedArtifact, testDb } from "./test-helpers.js";
-import type { ArtifactDb } from "./db.js";
+} from "../src/workflow-mount.js";
+import { InlineContentStore } from "../src/content-store.js";
+import { seedArtifact } from "./fixtures.js";
+import { testDb } from "./helpers.js";
+import type { ArtifactDb } from "../src/db.js";
 
 const RUN_SCOPE: ResolvedWorkflowRunScope = {
   tenantId: "acme",

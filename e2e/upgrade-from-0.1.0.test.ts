@@ -6,15 +6,8 @@ import { generateId } from "@intx/hub-common";
 import { sql } from "drizzle-orm";
 import * as v010 from "@corbits/artifacts-0.1.0";
 import { runArtifactMigrations } from "../src/index.js";
-import {
-  artifactApp,
-  connectionString,
-  createTestDb,
-  grant,
-  seedActor,
-  type Actor,
-  type TestDb,
-} from "./lib/db-harness.js";
+import { grant, seedActor, type Actor } from "./fixtures.js";
+import { artifactApp, connectionString, createTestDb, type TestDb } from "./helpers.js";
 
 const PDF = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37, 0x00, 0xff]);
 
