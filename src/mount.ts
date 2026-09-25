@@ -1,6 +1,6 @@
 import "./arktype.js";
 import { type } from "arktype";
-import type { Context, Hono } from "hono";
+import { Hono, type Context } from "hono";
 import type { MiddlewareHandler } from "hono";
 import { describeRoute } from "hono-openapi";
 import { idResource, type RequireGrant, type TenantEnv } from "@intx/hub-api";
@@ -58,7 +58,7 @@ import {
 } from "./uploads.js";
 import { WebSiteContentError } from "./web-site.js";
 
-export type MountArtifactsOpts = {
+export type CreateArtifactRoutesDeps = {
   db: ArtifactDb;
   contentStore: ContentStore;
   /**
@@ -195,31 +195,28 @@ const VersionRef = type("string").pipe((raw, ctx) => {
 });
 
 /**
- * Mount the artifact routes onto a host Hono app.
+ * Build the artifact routes as a sub-app the host mounts with `app.route`.
  *
- * Takes `Hono<TenantEnv>` so it composes with a host app mounted beneath
- * Interchange's auth + tenant middleware, which puts the resolved `tenant` and
- * `principal` on the context. The host owns principal resolution and grants;
- * this package reads the principal from context and authorizes the mutating
- * routes through the host's `requireGrant`.
+ * Typed `Hono<TenantEnv>` so it composes beneath Interchange's auth + tenant
+ * middleware, which puts the resolved `tenant` and `principal` on the context.
+ * The host owns principal resolution and grants; this package reads the
+ * principal from context and authorizes the mutating routes through the
+ * host's `requireGrant`.
  *
  * With no principal on the context, collection reads answer an empty 200 while
  * detail reads and mutations answer 403 — the same rule every `@corbits/*-core`
  * package follows. See "No principal on the context" in the README for why.
  */
-export function mountArtifacts(
-  app: Hono<TenantEnv>,
-  opts: MountArtifactsOpts,
-): Hono<TenantEnv> {
-  const {
-    db,
-    contentStore,
-    requireGrant,
-    decorate = async () => {},
-    onArtifactCreated = async () => {},
-    uploadPolicy = ARTIFACT_UPLOAD_POLICY,
-    countSegments = {},
-  } = opts;
+export function createArtifactRoutes({
+  db,
+  contentStore,
+  requireGrant,
+  decorate = async () => {},
+  onArtifactCreated = async () => {},
+  uploadPolicy = ARTIFACT_UPLOAD_POLICY,
+  countSegments = {},
+}: CreateArtifactRoutesDeps): Hono<TenantEnv> {
+  const app = new Hono<TenantEnv>();
 
   // The handler context is TenantEnv. `principal` (and `tenant`) is placed by
   // Interchange's middleware; nothing here resolves it.

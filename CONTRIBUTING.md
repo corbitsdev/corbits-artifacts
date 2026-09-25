@@ -47,7 +47,7 @@ built `dist/` — the same artifact a consumer installs. That is why `test:accep
 builds first: running it against stale output is how a green acceptance run stops
 meaning anything.
 
-If you change the mount seam, a port, or anything about how a host wires this up, the
+If you change the route factory, a port, or anything about how a host wires this up, the
 reference host is where that change has to be shown working.
 
 ## Dependency rule
@@ -103,27 +103,25 @@ Interchange serves its own routes under (`app.route("/api/me", …)`,
 `app.route("/api/tenants", …)`). No `/v1` segment, no vendor prefix.
 
 ```ts
-const api = new Hono<TenantEnv>();
 // Host middleware has already placed `tenant` and `principal` on the context.
-mountArtifacts(api, { db, contentStore, requireGrant });
-app.route("/api", api);
+app.route("/api", createArtifactRoutes({ db, contentStore, requireGrant }));
 ```
 
 which serves `/api/artifacts`, `/api/artifacts/:id`,
 `/api/artifacts/:id/versions`, `/api/artifacts/:id/download`, and
-`/api/instances/:instanceId/mail-attachments`. Nesting rather than teaching the
-core a base path keeps the mount free of a configurable base path.
+`/api/instances/:instanceId/mail-attachments`. Returning a sub-app rather than
+taking a base path keeps the factory free of a configurable base path.
 
-Everything else it needs arrives through `opts` or the host's request context.
+Everything else it needs arrives through `deps` or the host's request context.
 Nothing is reached for.
 
-### The mount seam
+### The route factory
 
-`mountArtifacts(app: Hono<TenantEnv>, opts): Hono<TenantEnv>` takes Interchange's
-`TenantEnv` so it composes with a host app mounted beneath Interchange auth +
-tenant middleware. The host places full `tenant` and `principal` rows on the
-context; this package reads them natively and never invents a second principal
-resolution path.
+`createArtifactRoutes(deps): Hono<TenantEnv>` returns a sub-app typed with
+Interchange's `TenantEnv`, built the way hub-api's `createGrantRoutes` is, so it
+composes beneath Interchange auth + tenant middleware. The host places full
+`tenant` and `principal` rows on the context; this package reads them natively
+and never invents a second principal resolution path.
 
 Three options have no sensible default — `db`, `contentStore`, `requireGrant` —
 and the rest degrade a *feature*, never safety, when omitted. The README's option
