@@ -194,6 +194,29 @@ const VersionRef = type("string").pipe((raw, ctx) => {
   return n;
 });
 
+// The artifact as it stood at one version, for the version detail and download routes.
+function rowAtVersion(
+  row: ArtifactRow,
+  at: NonNullable<Awaited<ReturnType<typeof getArtifactVersion>>>,
+): ArtifactRow {
+  return {
+    id: row.id,
+    tenantId: row.tenantId,
+    principalId: row.principalId,
+    ownerPrincipalId: row.ownerPrincipalId,
+    kind: row.kind,
+    title: at.title,
+    content: at.content,
+    source: at.source,
+    version: at.version,
+    metadata: at.metadata,
+    contentSha256: at.contentSha256,
+    archivedAt: row.archivedAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
 /**
  * Build the artifact routes as a sub-app the host mounts with `app.route`.
  *
@@ -722,14 +745,7 @@ export function createArtifactRoutes({
       if (!versionRow) return c.json({ error: "Artifact not found" }, 404);
 
       const [artifactJson] = await serialize(loaded.scope, [
-        {
-          ...loaded.row,
-          title: versionRow.title,
-          content: versionRow.content,
-          version: versionRow.version,
-          metadata: versionRow.metadata,
-          contentSha256: versionRow.contentSha256,
-        },
+        rowAtVersion(loaded.row, versionRow),
       ]);
       return c.json({ artifact: artifactJson });
     },
@@ -811,7 +827,7 @@ export function createArtifactRoutes({
     if (uploadRefFromSource(row.source) === null) {
       return c.json({ error: "Only an uploaded file can be revised with a file" }, 400);
     }
-    const parsed = await c.req.parseBody();
+    const parsed = await c.req.parseBody({ all: true });
     const file = parsed["file"];
     if (!(file instanceof File)) {
       return c.json({ error: "Expected one file field named file" }, 400);
@@ -955,13 +971,7 @@ export function createArtifactRoutes({
         }
         const versionRow = await getArtifactVersion(db, loaded.row.id, version);
         if (!versionRow) return c.json({ error: "Artifact not found" }, 404);
-        row = {
-          ...loaded.row,
-          title: versionRow.title,
-          content: versionRow.content,
-          source: versionRow.source,
-          version: versionRow.version,
-        };
+        row = rowAtVersion(loaded.row, versionRow);
       }
 
       const result = await resolveDownload(
