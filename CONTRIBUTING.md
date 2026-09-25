@@ -36,8 +36,7 @@ The harness truncates package tables between tests and drops the package schema 
 couple of migration cases. Those paths are fail-closed: set
 `ALLOW_DESTRUCTIVE_ARTIFACT_TESTS=1` and point `ARTIFACT_DATABASE_URL` at an allowlisted
 ephemeral database (`artifact_core`, or any name ending in `_test`). Without both, the
-suite throws before mutating. The gate itself is pure URL/env parsing and is covered by
-unit tests that do not need Postgres.
+suite throws before mutating.
 
 End-to-end suites live in `tests/`. `tests/lib/db-harness.ts` creates a fresh
 `artifact_<random>_test` database per suite on the `ARTIFACT_DATABASE_URL` server,
