@@ -7,6 +7,7 @@ import type { GrantRule } from "@intx/types/authz";
 import { createArtifactRoutes } from "./mount.js";
 import { InlineContentStore } from "./content-store.js";
 import {
+  getArtifact,
   listArtifacts,
   MAX_ARTIFACT_CONTENT_BYTES,
   setArtifactArchived,
@@ -1245,27 +1246,60 @@ describe("download over HTTP", () => {
     expect(res.status).toBe(400);
   });
 
-  // A blob's bytes live in the ContentStore, referenced from the artifact
-  // row's own `source` — never per-version. Silently serving the current
-  // blob for an older `?version=N` would misrepresent it as that version's
-  // content, so a non-current version is refused instead of lying.
-  test("?version naming a non-current version of a blob-backed upload is 400", async () => {
+  test("?version on a revised upload serves each version's own bytes", async () => {
     const db = await testDb();
     const app = host(db);
-    const png = new File([new Uint8Array([1, 2, 3])], "chart.png", { type: "image/png" });
+    const first = new Uint8Array([1, 2, 3]);
+    const second = new Uint8Array([4, 5, 6, 7]);
+    const data = new FormData();
+    data.append("files", new File([first], "chart.png", { type: "image/png" }));
+    const created = (await (
+      await app.request("/artifacts/upload", { method: "POST", body: data })
+    ).json()) as { artifacts: { id: string }[] };
+    const id = created.artifacts[0]!.id;
+    const revise = new FormData();
+    revise.append("file", new File([second], "chart-v2.png", { type: "image/png" }));
+    const revised = await app.request(`/artifacts/${id}/versions`, {
+      method: "POST",
+      body: revise,
+    });
+    expect(revised.status).toBe(200);
+    expect(await revised.json()).toMatchObject({ version: 2, title: "chart-v2.png" });
+
+    const bytesOf = async (query: string) =>
+      new Uint8Array(await (await app.request(`/artifacts/${id}/download${query}`)).arrayBuffer());
+    expect(await bytesOf("?version=1")).toEqual(first);
+    expect(await bytesOf("?version=2")).toEqual(second);
+    expect(await bytesOf("")).toEqual(second);
+  });
+
+  test("revising with a file is refused for a non-upload, a kind change, or a stale expectedVersion", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const reviseWith = (id: string, file: File, expectedVersion?: string) => {
+      const form = new FormData();
+      form.append("file", file);
+      if (expectedVersion !== undefined) form.append("expectedVersion", expectedVersion);
+      return app.request(`/artifacts/${id}/versions`, { method: "POST", body: form });
+    };
+    const png = new File([new Uint8Array([1])], "a.png", { type: "image/png" });
+
+    const doc = await seedArtifact(db);
+    expect((await reviseWith(doc.id, png)).status).toBe(400);
+
     const data = new FormData();
     data.append("files", png);
     const created = (await (
       await app.request("/artifacts/upload", { method: "POST", body: data })
     ).json()) as { artifacts: { id: string }[] };
     const id = created.artifacts[0]!.id;
-    await app.request(`/artifacts/${id}/versions`, json({ title: "Renamed" }));
-
-    const stale = await app.request(`/artifacts/${id}/download?version=1`);
-    expect(stale.status).toBe(400);
-    expect(await stale.json()).toEqual({
-      error: "Uploaded file content is not versioned",
-    });
+    const pdf = new File([new Uint8Array([2])], "a.pdf", { type: "application/pdf" });
+    expect((await reviseWith(id, pdf)).status).toBe(400);
+    expect((await reviseWith(id, png, "7")).status).toBe(409);
+    expect((await reviseWith(id, png, "zero")).status).toBe(400);
+    const svg = new File(["<svg/>"], "a.svg", { type: "image/svg+xml" });
+    expect((await reviseWith(id, svg)).status).toBe(415);
+    expect((await getArtifact(db, id))!.version).toBe(1);
   });
 
   test("?version naming the CURRENT version of a blob-backed upload still serves it", async () => {

@@ -126,6 +126,13 @@ export const artifactVersion = artifactsSchema.table(
     /** Explicit lineage set by the writer — never inferred from version order. */
     parentVersionIds: text("parent_version_ids").array(),
     /**
+     * This version's `source`, mirrored onto `artifact.source` for the current
+     * version. For a file artifact it carries the version's own content
+     * reference and size (`source.upload`), so `?version=N` downloads that
+     * version's bytes.
+     */
+    source: jsonb("source"),
+    /**
      * sha256 (hex) over the UTF-8 bytes of `content` for text and URL
      * artifacts, or over the uploaded bytes for a blob-backed file artifact's
      * first version. A metadata/title-only revise (content carried forward)

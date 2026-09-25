@@ -85,6 +85,7 @@ export {
   MAX_UPLOAD_FILE_COUNT,
   MAX_UPLOAD_TOTAL_BYTES,
   PARSED_DOCUMENT_POLICY,
+  reviseFileArtifact,
   SPREADSHEET_UPLOAD_POLICY,
   UnsupportedUploadTypeError,
 } from "./uploads.js";
