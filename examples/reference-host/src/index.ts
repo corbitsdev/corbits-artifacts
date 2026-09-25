@@ -11,7 +11,7 @@
 // rows for it.
 //
 // This module only BUILDS the host. The acceptance scenarios live in
-// `tests/reference-host.test.ts` and run under `bun run test`, so they are collected by
+// `e2e/reference-host.test.ts` and run under `bun run test:e2e`, so they are collected by
 // CI like any other test instead of being a hand-rolled assert script nothing
 // executes.
 import { sql } from "drizzle-orm";
@@ -49,7 +49,7 @@ import {
   type ContentStore,
   type SerializedArtifactBase,
 } from "@corbits/artifacts";
-import { databaseConfig, DATABASE_URL } from "../../../src/test-helpers.js";
+import { databaseConfig, DATABASE_URL } from "../../../e2e/helpers.js";
 
 const EPOCH = new Date(0);
 

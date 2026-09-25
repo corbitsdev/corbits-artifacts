@@ -16,9 +16,10 @@ import {
   setArtifactArchived,
   sha256Hex,
   writeArtifactVersion,
-} from "./artifacts.js";
-import { artifact, artifactVersion } from "./schema.js";
-import { seedArtifact, SCOPE, testDb } from "./test-helpers.js";
+} from "../src/artifacts.js";
+import { artifact, artifactVersion } from "../src/schema.js";
+import { seedArtifact, SCOPE } from "./fixtures.js";
+import { testDb } from "./helpers.js";
 
 describe("create", () => {
   test("writes version 1 eagerly, so a pinned read of v1 resolves immediately", async () => {

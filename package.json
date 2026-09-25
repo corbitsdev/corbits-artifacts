@@ -56,8 +56,9 @@
     "typecheck": "tsc --noEmit",
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "prepack": "bun run build",
-    "test": "bun test src tests",
-    "test:coverage": "bun test --coverage src tests"
+    "test": "bun test src",
+    "test:e2e": "bun test e2e",
+    "test:coverage": "bun test --coverage src e2e"
   },
   "dependencies": {
     "@hono/standard-validator": "^0.2.3",
