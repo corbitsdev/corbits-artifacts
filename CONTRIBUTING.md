@@ -3,8 +3,26 @@
 A small, deliberately boring codebase: strict TypeScript, arktype at the boundaries,
 drizzle for data access, no magic.
 
-Setup and the commands are in the [README](./README.md#working-on-it). `bun run
-typecheck` must be clean — it is its own CI step, and `any` is not a way past it. The
+## Development
+
+```sh
+git clone https://github.com/corbitsdev/corbits-artifacts.git
+cd corbits-artifacts
+bun install
+docker run -d --name corbits-artifact-pg -p 5457:5432 \
+  -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=artifact_core postgres:16
+export ALLOW_DESTRUCTIVE_ARTIFACT_TESTS=1
+
+bun run typecheck
+bun run test             # pretest dependency check, then unit + integration
+bun run build            # dist/ (JS + .d.ts)
+bun run test:acceptance  # builds, then examples/reference-host
+```
+
+Tests expect `postgres://postgres:postgres@localhost:5457/artifact_core` (override with
+`ARTIFACT_DATABASE_URL`).
+
+`bun run typecheck` must be clean — it is its own CI step, and `any` is not a way past it. The
 few escapes in the tree each carry a comment explaining why the type system leaves no
 alternative; new ones need the same.
 
