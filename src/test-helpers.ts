@@ -1,4 +1,5 @@
 import { sql } from "drizzle-orm";
+import type { DBConfig } from "@intx/db";
 import { createArtifactDb, type ArtifactDb } from "../src/db.js";
 import { runArtifactMigrations } from "../src/migrations.js";
 import { createArtifact } from "../src/artifacts.js";
@@ -7,6 +8,18 @@ import type { ArtifactRow } from "../src/schema.js";
 export const DATABASE_URL =
   process.env.ARTIFACT_DATABASE_URL ??
   "postgres://postgres:postgres@localhost:5457/artifact_core";
+
+/** `DATABASE_URL` in the shape Interchange's `runMigrations` takes. */
+export function databaseConfig(connectionString: string): DBConfig {
+  const url = new URL(connectionString);
+  return {
+    host: url.hostname,
+    port: Number(url.port || 5432),
+    user: decodeURIComponent(url.username),
+    password: decodeURIComponent(url.password),
+    database: databaseNameFromConnectionString(connectionString),
+  };
+}
 
 /**
  * Explicit opt-in required before the harness runs TRUNCATE or DROP SCHEMA.
@@ -150,7 +163,7 @@ export async function testDb(): Promise<ArtifactDb> {
     db = createArtifactDb(DATABASE_URL).db;
     shared = db;
     await ensureControlPlane(db);
-    await runArtifactMigrations(db);
+    await runArtifactMigrations(databaseConfig(DATABASE_URL), { schema: "public" });
   }
   await db.execute(
     sql`TRUNCATE TABLE "artifacts"."artifact", "artifacts"."artifact_version", "artifacts"."upload", "artifacts"."mail_attachment_ref" CASCADE`,

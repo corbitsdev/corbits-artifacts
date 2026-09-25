@@ -70,12 +70,12 @@ make this package uninstallable outside the project that defines it.
 
 ## Migrations
 
-Shipped migrations are immutable. Each ledger row records a checksum of the migration's
-rendered SQL, so editing one that has already been applied fails with
-`MigrationChecksumError` on the next boot rather than letting fresh and existing
-databases diverge. Add a new migration instead.
+Migrations are SQL files under `migrations/`, applied in filename order on every
+boot, so every statement must be idempotent (`IF NOT EXISTS`, `IF EXISTS`). There
+is no ledger: a schema change is a new file whose statements are safe to re-run,
+never an edit that assumes it runs once.
 
-`schema.ts` and `migrations.ts` must agree — every query goes through the drizzle
+`schema.ts` and `migrations/` must agree — every query goes through the drizzle
 table objects, and a test asserts the migrations create exactly the tables
 `schema.ts` declares, no more and no less. Change one, change the other, in the
 same commit.
@@ -235,12 +235,12 @@ which store is installed.
 ### Data model
 
 Four physical tables — `artifact`, `artifact_version`, `upload`,
-`mail_attachment_ref` — plus this package's own migration ledger.
+`mail_attachment_ref`.
 
 **Hard control-plane foreign keys, by design.** `tenant_id` is `NOT NULL` and
-references `public.tenant(id)` (`ON DELETE CASCADE` — a deleted tenant takes its
+references the host's `tenant(id)` (`ON DELETE CASCADE` — a deleted tenant takes its
 artifacts with it) and `principal_id` / `owner_principal_id` reference
-`public.principal(id)` (`ON DELETE SET NULL` — a removed principal detaches its
+the host's `principal(id)` (`ON DELETE SET NULL` — a removed principal detaches its
 artifacts rather than destroying them). This package is coupled to Interchange:
 it mounts on Interchange-shaped hosts only, and the host's own migrations must
 have run before `runArtifactMigrations`. The internal key —
@@ -248,7 +248,7 @@ have run before `runArtifactMigrations`. The internal key —
 
 **Cheap row-local CHECKs.** `artifact.version` and `artifact_version.version`
 must be ≥ 1; `upload.size` and `mail_attachment_ref.size` must be ≥ 0. These are
-single-column constraints applied by a ledgered migration — free at write time.
+single-column constraints — free at write time.
 
 **Principal↔tenant alignment is host-owned.** The package FKs each column into
 the control plane independently; it does **not** enforce that `principal_id` (or
@@ -302,9 +302,7 @@ path that promises it.
 Separately, this package also has no way to confirm existing tenants are
 already free of duplicate `(title, kind)` rows, which would make even a
 scoped constraint risky to backfill. That is not the main reason for
-rejecting the constraint, and it is not by itself decisive. See
-`0003_schema_invariants` for this repo's own pattern for guarding a
-migration against exactly that kind of bad existing data.
+rejecting the constraint, and it is not by itself decisive.
 
 Instead, `findOrVersionArtifact(db, args)` (in `artifacts.ts`) closes the
 race with a transaction-scoped advisory lock keyed by
@@ -336,55 +334,35 @@ behind it.
 
 ### Migration runner
 
-`runArtifactMigrations(db)` is idempotent and safe to call unconditionally on
-every boot of every replica.
+`runArtifactMigrations(config, { schema })` takes the same arguments as
+Interchange's `runMigrations`, and a host calls it right after that, with the
+same values. `schema` is where the host's `tenant` and `principal` tables live;
+the runner rewrites the `"public".` foreign-key references in the SQL files to
+it. It is idempotent and safe to call on every boot of every replica.
 
-- The whole run is one transaction whose first statements are
-  `SET LOCAL client_min_messages = warning` and a **transaction-scoped**
-  advisory lock. A transaction pins one pooled connection, so the lock, the
-  ledger read and the DDL are the same session; the lock releases on commit or
-  rollback, so there is no unlock call to lose on an error path.
+- The whole run is one transaction whose first statement takes a
+  **transaction-scoped** advisory lock, so the lock releases on commit or
+  rollback and there is no unlock call to lose on an error path.
   `CREATE TABLE IF NOT EXISTS` is not itself race-safe, so the lock — not the
   `IF NOT EXISTS` — is what makes concurrent cold starts safe.
-- Lowering `client_min_messages` is why a re-run prints **nothing**: every
-  statement is `IF NOT EXISTS`, and on the second boot Postgres answers each with
-  a NOTICE that postgres.js would otherwise dump to the console, making a clean
-  re-boot look like a wall of errors. `SET LOCAL` scopes it to the transaction
-  and stops at NOTICE — WARNING and above still reach the host.
-- Each migration applies inside a nested transaction (a savepoint) together with
-  its ledger row, so a migration can never be recorded as applied with only some
-  of its statements run.
-- The ledger is this package's own table, `artifacts.migrations`,
-  never shared with a host's. Each row records a **checksum of the migration's
-  rendered SQL**, so editing a shipped migration fails with
-  `MigrationChecksumError` on the next boot instead of letting existing and
-  fresh databases diverge silently. Ship a new migration instead. The column is
-  `NOT NULL`, so the guarantee is unconditional: there is no unrecorded row for
-  the runner to adopt and wave through.
+- The runner opens its own single-connection client and discards NOTICEs, so a
+  re-run, where Postgres answers every `IF NOT EXISTS` with a NOTICE, prints
+  nothing.
 - Event timestamps (`created_at`, `updated_at`, `archived_at`) are
-  **`timestamptz`**. The initial create migration still lays them down as
-  zoneless `timestamp`; a follow-on migration retypes them with
-  `USING col AT TIME ZONE 'UTC'`, treating existing walls as the UTC clocks the
-  package always assumed. List keyset cursors project through
-  `AT TIME ZONE 'UTC'` and compare with `::timestamptz`, so paging and date
-  filters stay on the absolute instant under any session `TimeZone`. Rollback is
-  the reverse cast (`TYPE timestamp USING col AT TIME ZONE 'UTC'`) plus a new
-  ledgered migration — never edit a shipped one.
-- A later ledgered migration sets `artifact.tenant_id NOT NULL` and adds the
-  version/size CHECKs. If null-tenant rows still exist, that migration raises
-  before altering the column so the operator can clean them up first.
-- Empty ledger + pre-existing package objects fails closed
-  (`MigrationAdoptError`). `{ adopt: true }` records checksums without re-DDL
-  only after shape validation: tables, column types, required nullability, and
-  the named CHECK constraints. Column presence alone is not enough.
+  **`timestamptz`**. List keyset cursors project through `AT TIME ZONE 'UTC'`
+  and compare with `::timestamptz`, so paging and date filters stay on the
+  absolute instant under any session `TimeZone`.
+- Releases up to 0.1.0 kept a checksum ledger in `artifacts.migrations`.
+  `0002_drop_migration_ledger.sql` removes it; a database migrated by 0.1.0
+  already has the shape `0001_artifacts.sql` creates, so its statements no-op.
 
-**The package owns its own Postgres schema.** Every table, index and the ledger
-live in `artifacts`, created by the runner and qualified in every
-DDL statement and every query — nothing resolves through `search_path`, so the
-package shares a database with the host's control plane without ever being able
-to collide with (or silently adopt) a host table of the same name. The coupling
-to the host is explicit instead: `tenant_id` and the principal columns are hard
-FKs into `public.tenant` / `public.principal` (see the data model).
+**The package owns its own Postgres schema.** Every table and index lives in
+`artifacts`, created by the runner and qualified in every DDL statement and
+every query — nothing resolves through `search_path`, so the package shares a
+database with the host's control plane without ever being able to collide with
+(or silently adopt) a host table of the same name. The coupling to the host is
+explicit instead: `tenant_id` and the principal columns are hard FKs into the
+host schema's `tenant` / `principal` (see the data model).
 
 ### Boundaries
 

@@ -45,6 +45,7 @@
   },
   "files": [
     "dist",
+    "migrations",
     "LICENSE",
     "README.md"
   ],
@@ -70,7 +71,8 @@
     "hono-openapi": "^1.2.0",
     "postgres": "^3.4.9",
     "@intx/hub-api": "^0.4.0",
-    "@intx/agent": "^0.4.0"
+    "@intx/agent": "^0.4.0",
+    "@intx/db": "^0.4.0"
   },
   "peerDependenciesMeta": {
     "@intx/agent": {
@@ -88,7 +90,8 @@
     "typescript": "5.7.2",
     "@intx/hub-api": "0.4.0",
     "@intx/authz": "0.4.0",
-    "@intx/agent": "0.4.0"
+    "@intx/agent": "0.4.0",
+    "@intx/db": "0.4.0"
   },
   "overrides": {
     "drizzle-orm": "0.45.2"

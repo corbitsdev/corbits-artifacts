@@ -10,13 +10,17 @@ npm add @corbits/artifacts
 
 Requires Node 24 or newer and `@intx/*` 0.4.0 or newer.
 
-Open a database handle and apply this package's migrations at boot, before mounting any routes. A host that already has a drizzle handle passes that instead of calling `createArtifactDb`.
+At boot, right after Interchange's `runMigrations`, apply this package's migrations with the same `config` and `schema`. The tables go in their own `artifacts` Postgres schema, with tenant and principal foreign keys pointing into `schema`. Then open a database handle for the routes; a host that already has a drizzle handle passes that instead of calling `createArtifactDb`.
 
 ```ts
+import { runMigrations } from "@intx/db";
 import { createArtifactDb, runArtifactMigrations } from "@corbits/artifacts";
 
+// `config` is the host's `DBConfig` from `@intx/db`.
+await runMigrations(config, { schema: "public" });
+await runArtifactMigrations(config, { schema: "public" });
+
 const { db, close } = createArtifactDb(process.env.DATABASE_URL!);
-await runArtifactMigrations(db);
 
 // on shutdown
 await close();
