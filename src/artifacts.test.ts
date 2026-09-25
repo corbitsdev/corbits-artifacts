@@ -173,6 +173,9 @@ describe("find by title", () => {
     const db = await testDb();
     const older = await seedArtifact(db, { title: "Report" });
     await seedArtifact(db, { title: "Report" });
+    // Both seeds land within the same millisecond as the touch below often
+    // enough to tie; move them into the past so the touch is strictly newer.
+    await db.update(artifact).set({ updatedAt: new Date(Date.now() - 60_000) });
     await writeArtifactVersion(db, {
       scope: SCOPE,
       artifactId: older.id,
