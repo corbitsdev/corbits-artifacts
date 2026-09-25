@@ -65,7 +65,8 @@ always called out under their own heading.
   when sent as `multipart/form-data` with one `file` field and an optional
   `expectedVersion`. The bytes go through the configured `ContentStore` and
   the upload policy (`415` for a refused type, `413` over
-  `MAX_UPLOAD_BYTES`); the title becomes the file's name. A non-upload
+  `MAX_UPLOAD_BYTES`); the title carries forward, and the version downloads
+  under the new file's name. A non-upload
   artifact, or a file that would change the kind between `file` and
   `image`, is `400`. `reviseFileArtifact` is the underlying function.
 - `artifact_version.metadata` (jsonb, nullable) and

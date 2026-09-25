@@ -262,7 +262,8 @@ export async function createFileArtifact(
  * Revise a file artifact with new bytes. The bytes go to the ContentStore and
  * the new version records its own content reference, size and digest, so every
  * earlier version keeps serving its own bytes. The artifact's other `source`
- * fields (origin, provenance) carry forward.
+ * fields (origin, provenance) and its title carry forward; the new filename
+ * is what the version downloads as.
  */
 export async function reviseFileArtifact(
   tx: ArtifactTx,
@@ -290,7 +291,6 @@ export async function reviseFileArtifact(
     {
       scope: args.scope,
       artifactId: args.artifact.id,
-      title: args.filename,
       content: stored.content,
       file: {
         source: { ...(args.artifact.source as Record<string, unknown>), ...stored.source },

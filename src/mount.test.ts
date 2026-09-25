@@ -1264,7 +1264,7 @@ describe("download over HTTP", () => {
       body: revise,
     });
     expect(revised.status).toBe(200);
-    expect(await revised.json()).toMatchObject({ version: 2, title: "chart-v2.png" });
+    expect(await revised.json()).toMatchObject({ version: 2, title: "chart.png" });
 
     const bytesOf = async (query: string) =>
       new Uint8Array(await (await app.request(`/artifacts/${id}/download${query}`)).arrayBuffer());
