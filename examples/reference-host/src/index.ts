@@ -40,7 +40,7 @@ import {
 } from "@intx/hub-sessions";
 import {
   InlineContentStore,
-  mountArtifacts,
+  createArtifactRoutes,
   runArtifactMigrations,
   type ArtifactDb,
   type ArtifactRow,
@@ -79,7 +79,7 @@ async function decorate(_tenantId: string, rows: readonly SerializedArtifactBase
  * The worked example this host owes the next `@corbits/*-core` package: what
  * a "the artifact's owner may write to it" grant actually IS, and who mints
  * it. `@corbits/artifacts` provisions nothing itself — this runs through
- * `mountArtifacts`'s `onArtifactCreated` hook, inside the same transaction as
+ * `createArtifactRoutes`' `onArtifactCreated` hook, inside the same transaction as
  * the row it grants on, so a grant never outlives (or fails to accompany) the
  * artifact it names.
  *
@@ -304,12 +304,13 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
     });
     // Mounted @corbits/* modules serve under `/api`, matching Interchange's
     // own convention (`app.route("/api/me", …)`). The core registers its
-    // routes root-relative (`/artifacts*`, `/instances/:id/mail-attachments`),
-    // so the host nests them in a sub-app and routes that at `/api`. Served
-    // paths: `/api/artifacts*` — no `/v1` segment, no vendor prefix.
+    // routes root-relative (`/artifacts*`, `/instances/:id/mail-attachments`).
+    // The host wraps them in its own `api` sub-app so the principal middleware
+    // below stays scoped to `/api`. Served paths: `/api/artifacts*` — no `/v1`
+    // segment, no vendor prefix.
     const api = new Hono<TenantEnv>();
     // Place full tenant/principal rows from the hub session user. Signed-out
-    // (or unknown) callers leave the context empty so mountArtifacts applies
+    // (or unknown) callers leave the context empty so the artifact routes apply
     // the no-principal contract.
     api.use("*", async (c, next) => {
       const user = c.get("user");
@@ -351,13 +352,16 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
             }
             return next();
           };
-    mountArtifacts(api, {
-      db,
-      contentStore,
-      requireGrant,
-      decorate,
-      onArtifactCreated: grantOwnership,
-    });
+    api.route(
+      "/",
+      createArtifactRoutes({
+        db,
+        contentStore,
+        requireGrant,
+        decorate,
+        onArtifactCreated: grantOwnership,
+      }),
+    );
     const mounted = app.route("/api", api);
     // `Hono#request` may answer synchronously; normalize to a promise so every
     // caller can simply await it.
