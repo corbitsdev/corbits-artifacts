@@ -14,9 +14,8 @@ docker run -d --name corbits-artifact-pg -p 5457:5432 \
 export ALLOW_DESTRUCTIVE_ARTIFACT_TESTS=1
 
 bun run typecheck
-bun run test             # unit + integration
+bun run test             # unit, integration and reference-host acceptance
 bun run build            # dist/ (JS + .d.ts)
-bun run test:acceptance  # builds, then examples/reference-host
 ```
 
 Tests expect `postgres://postgres:postgres@localhost:5457/artifact_core` (override with
@@ -48,10 +47,10 @@ database's `grant` table. `bun run test` runs `src/` and `tests/`.
 ## The reference host is the acceptance suite, not a demo
 
 `examples/reference-host` mounts the package on a real `@intx/hub-api` app against a
-live Postgres and asserts the end-to-end scenarios, consuming the package through the
-built `dist/` — the same artifact a consumer installs. That is why `test:acceptance`
-builds first: running it against stale output is how a green acceptance run stops
-meaning anything.
+live Postgres. `tests/reference-host.test.ts` asserts the end-to-end scenarios against
+it as part of `bun run test`; the example imports `@corbits/artifacts`, which the
+root `tsconfig.json` maps to `src/`. CI's Node consumer smoke test covers the built
+`dist/` a consumer installs.
 
 If you change the route factory, a port, or anything about how a host wires this up, the
 reference host is where that change has to be shown working.

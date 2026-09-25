@@ -17,7 +17,7 @@ import {
   UnsupportedUploadTypeError,
   type ContentStore,
 } from "@corbits/artifacts";
-import { createReferenceHost, type ReferenceHost } from "../src/index.js";
+import { createReferenceHost, type ReferenceHost } from "../examples/reference-host/src/index.js";
 
 let host: ReferenceHost;
 const json = async <T>(res: Response): Promise<T> => (await res.json()) as T;

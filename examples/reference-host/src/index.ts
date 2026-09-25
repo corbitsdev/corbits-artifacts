@@ -11,7 +11,7 @@
 // rows for it.
 //
 // This module only BUILDS the host. The acceptance scenarios live in
-// `test/acceptance.test.ts` and run under `bun test`, so they are collected by
+// `tests/reference-host.test.ts` and run under `bun run test`, so they are collected by
 // CI like any other test instead of being a hand-rolled assert script nothing
 // executes.
 import { sql } from "drizzle-orm";
@@ -49,23 +49,9 @@ import {
   type ContentStore,
   type SerializedArtifactBase,
 } from "@corbits/artifacts";
-
-export const DATABASE_URL =
-  process.env.ARTIFACT_DATABASE_URL ??
-  "postgres://postgres:postgres@localhost:5457/artifact_core";
+import { databaseConfig, DATABASE_URL } from "../../../src/test-helpers.js";
 
 const EPOCH = new Date(0);
-
-function parsePostgresUrl(raw: string): DBConfig {
-  const url = new URL(raw);
-  return {
-    host: url.hostname,
-    port: Number(url.port === "" ? "5432" : url.port),
-    user: decodeURIComponent(url.username),
-    password: decodeURIComponent(url.password),
-    database: url.pathname.replace(/^\//, ""),
-  };
-}
 
 /** Display-only decorator. Adds a label, never changes what is returned. */
 async function decorate(_tenantId: string, rows: readonly SerializedArtifactBase[]) {
@@ -138,7 +124,7 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
   // ONE pool. The artifact module mounts on the handle the host already has
   // from `createDB` — the seam takes any drizzle postgres-js instance, so there
   // is no second connection to the same database.
-  const config = parsePostgresUrl(DATABASE_URL);
+  const config = databaseConfig(DATABASE_URL);
   const hub = createDB(config);
   const db: ArtifactDb = hub.db;
 
@@ -285,21 +271,15 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
   };
 
   // A bare Interchange host: real sidecar router, real event-collector
-  // registry. It runs no agent sessions, so its SessionService refuses every
-  // launch verb rather than pretending to serve it.
-  const authenticateSidecar: SidecarAuthenticator = async ({ sidecarId }) => ({
-    kind: "sidecar",
-    sidecarId,
-  });
+  // registry. It runs no sidecars or agent sessions, so it rejects every
+  // sidecar handshake and its SessionService refuses every verb rather than
+  // pretending to serve it.
+  const authenticateSidecar: SidecarAuthenticator = async () => null;
   const refuse = (verb: string) => (): never => {
     throw new Error(`reference-host runs no agent sessions: ${verb}`);
   };
   const sessionService: SessionService = {
     stageWorkflowStep: refuse("stageWorkflowStep"),
-    deployInstanceAtHead: refuse("deployInstanceAtHead"),
-    deploySingleStepAtHead: refuse("deploySingleStepAtHead"),
-    deployWorkflowDefinition: refuse("deployWorkflowDefinition"),
-    sendUserMessage: refuse("sendUserMessage"),
     endSession: refuse("endSession"),
   };
 
@@ -312,7 +292,10 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
       getSession,
       authHandler: () => new Response("", { status: 404 }),
       db: hub.db,
-      sidecarRouter: createSidecarRouter({ authenticateSidecar }),
+      sidecarRouter: createSidecarRouter({
+        authenticateSidecar,
+        validateSidecarIdentity: async () => false,
+      }),
       sessionService,
       eventCollectors: createEventCollectorRegistry({ db: hub.db }),
       assetService: null,
