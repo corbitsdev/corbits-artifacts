@@ -57,8 +57,7 @@
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "prepack": "bun run build",
     "test": "bun test src tests",
-    "test:coverage": "bun test --coverage src tests",
-    "test:acceptance": "bun run build && bun test --cwd examples/reference-host"
+    "test:coverage": "bun test --coverage src tests"
   },
   "dependencies": {
     "@hono/standard-validator": "^0.2.3",
@@ -92,7 +91,8 @@
     "@intx/authz": "0.4.0",
     "@intx/agent": "0.4.0",
     "@intx/db": "0.4.0",
-    "@intx/hub-common": "0.4.0"
+    "@intx/hub-common": "0.4.0",
+    "@intx/hub-sessions": "0.4.0"
   },
   "overrides": {
     "drizzle-orm": "0.45.2"
