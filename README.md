@@ -34,7 +34,7 @@ Returns a `Hono<TenantEnv>` sub-app the host mounts with `app.route`, alongside 
 | --- | --- | --- |
 | `db` | `ArtifactDb` | Artifacts are stored there. `createArtifactDb` opens a handle for a host with none; a hub that already has one passes it through. |
 | `contentStore` | `ContentStore` | Blob storage for file bytes. `InlineContentStore` (exported by this package) fits a minimal host; bring your own store for object storage. |
-| `requireGrant` | `RequireGrant` | The host's grant middleware factory. This package implements no ownership or membership policy of its own — every mutating single-artifact route is gated through it. |
+| `requireGrant` | `RequireGrant` | The host's grant middleware factory. This package implements no ownership or membership policy of its own. Creating an artifact requires `create` on `artifact:*`; revising or archiving one requires `write` or `archive` on `artifact:<id>`. Recording mail-attachment references needs only a principal. |
 | `countSegments` | `ArtifactCountSegments` (optional) | Named predicates over `ArtifactListRow` for `GET /artifacts/counts` (e.g. bucket by `kind`). The taxonomy is entirely host-owned; omitted, the route still answers with the tenant-wide `all` total. |
 | `onArtifactCreated` | `(tx, row, scope) => Promise<void>` (optional) | Runs inside the transaction that creates each artifact. This is where the host mints grants for the new row, e.g. `write` and `archive` on `artifact:<id>` for its creator. The package mints none itself. |
 | `decorate` | `(tenantId, rows) => Promise<void>` (optional) | Adds display-only fields to serialized rows on the way out (provenance labels, host joins). It must never change which rows are returned or who may see them. |
