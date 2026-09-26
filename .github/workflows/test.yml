@@ -39,11 +39,6 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      # No unpublished @workbench/* scope may leak in — it does not exist on
-      # npm, so a leak makes the package uninstallable outside the monorepo.
-      - name: check-deps
-        run: bun run scripts/check-deps.ts
-
       # typecheck builds first: examples import @corbits/artifacts through the
       # published dist types, same path a consumer resolves.
       - name: typecheck

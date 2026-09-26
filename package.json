@@ -55,9 +55,8 @@
     "typecheck": "tsc --noEmit",
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "prepack": "bun run build",
-    "pretest": "bun run scripts/check-deps.ts",
-    "test": "bun run pretest && bun test src",
-    "test:coverage": "bun run pretest && bun test --coverage src",
+    "test": "bun test src",
+    "test:coverage": "bun test --coverage src",
     "test:package": "bun run test",
     "test:acceptance": "bun run build && bun test --cwd examples/reference-host"
   },

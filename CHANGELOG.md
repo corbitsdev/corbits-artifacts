@@ -89,6 +89,8 @@ always called out under their own heading.
 
 ### Changed
 
+- The `scripts/check-deps.ts` pretest is removed; typecheck and tests already
+  fail on an unresolvable `@workbench/*` import.
 - Minimum `@intx/*` is now **0.3.0**. (`@intx/*` lines before 0.3.0 do not
   install — older lines pin the unpublished `@intx/*@0.0.0` or ship raw
   TypeScript.)

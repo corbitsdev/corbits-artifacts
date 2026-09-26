@@ -35,8 +35,7 @@ reference host is where that change has to be shown working.
 ## Dependency rule
 
 No `@workbench/*` imports anywhere — it is an unpublished scope, and importing it would
-make this package uninstallable outside the project that defines it. Checked by
-`scripts/check-deps.ts`, which runs as `pretest` and again in CI.
+make this package uninstallable outside the project that defines it.
 
 ## Tests
 

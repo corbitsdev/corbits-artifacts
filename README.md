@@ -141,7 +141,7 @@ docker run -d --name corbits-artifact-pg -p 5457:5432 \
 export ALLOW_DESTRUCTIVE_ARTIFACT_TESTS=1
 
 bun run typecheck
-bun run test             # pretest dependency check, then unit + integration
+bun run test             # unit + integration
 bun run build            # dist/ (JS + .d.ts)
 bun run test:acceptance  # builds, then examples/reference-host
 ```
