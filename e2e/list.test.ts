@@ -186,13 +186,13 @@ describe("list paging", () => {
     }
 
     const first = await listArtifacts(db, "acme", { sort: "oldest", limit: 2 });
-    expect(first.rows.map((r) => r.id)).toEqual([ids[0], ids[1]]);
+    expect(first.rows.map((r) => r.id)).toEqual([ids[0]!, ids[1]!]);
     const second = await listArtifacts(
       db,
       "acme",
       parseQuery({ sort: "oldest", limit: "2", cursor: first.nextCursor! }),
     );
-    expect(second.rows.map((r) => r.id)).toEqual([ids[2]]);
+    expect(second.rows.map((r) => r.id)).toEqual([ids[2]!]);
   });
 
   test("a malformed cursor is rejected by the query schema", () => {
@@ -302,7 +302,7 @@ describe("list paging", () => {
       const first = await listArtifacts(db, "acme", { limit: 1 });
       // Newest first: 2026-01-03 12:00 UTC — not the LA wall clock 04:00 with a
       // lying Z suffix.
-      expect(first.rows.map((r) => r.id)).toEqual([ids[2]]);
+      expect(first.rows.map((r) => r.id)).toEqual([ids[2]!]);
       expect(first.nextCursor).toBe(`2026-01-03T12:00:00.000000Z__${ids[2]}`);
 
       const second = await listArtifacts(
@@ -310,7 +310,7 @@ describe("list paging", () => {
         "acme",
         parseQuery({ limit: "1", cursor: first.nextCursor! }),
       );
-      expect(second.rows.map((r) => r.id)).toEqual([ids[1]]);
+      expect(second.rows.map((r) => r.id)).toEqual([ids[1]!]);
       expect(second.nextCursor).toBe(`2026-01-02T12:00:00.000000Z__${ids[1]}`);
 
       const third = await listArtifacts(
@@ -318,7 +318,7 @@ describe("list paging", () => {
         "acme",
         parseQuery({ limit: "1", cursor: second.nextCursor! }),
       );
-      expect(third.rows.map((r) => r.id)).toEqual([ids[0]]);
+      expect(third.rows.map((r) => r.id)).toEqual([ids[0]!]);
       expect(third.nextCursor).toBeNull();
 
       // Date filters must also compare absolute instants, not session walls.
@@ -330,7 +330,7 @@ describe("list paging", () => {
           createdBefore: "2026-01-02T23:59:59Z",
         }),
       );
-      expect(filtered.rows.map((r) => r.id)).toEqual([ids[1]]);
+      expect(filtered.rows.map((r) => r.id)).toEqual([ids[1]!]);
     } finally {
       await db.execute(sql`SET TimeZone = 'UTC'`);
     }
