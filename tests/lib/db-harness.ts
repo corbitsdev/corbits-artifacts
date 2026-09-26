@@ -52,8 +52,14 @@ async function admin<T>(run: (sql: postgres.Sql) => Promise<T>): Promise<T> {
   }
 }
 
-/** Creates `artifact_<random>_test`, migrates it, and drops it on `close`. */
-export async function createTestDb(): Promise<TestDb> {
+/**
+ * Creates `artifact_<random>_test`, applies Interchange's migrations and then
+ * `migrateArtifacts` (this package's by default), and drops it on `close`.
+ */
+export async function createTestDb(
+  migrateArtifacts: (config: DBConfig) => Promise<void> = (config) =>
+    runArtifactMigrations(config, { schema: "public" }),
+): Promise<TestDb> {
   assertDestructiveArtifactTestsAllowed(DATABASE_URL);
   const name = `artifact_${randomUUID().replaceAll("-", "").slice(0, 12)}_test`;
   await admin((sql) => sql.unsafe(`CREATE DATABASE "${name}"`));
@@ -66,7 +72,7 @@ export async function createTestDb(): Promise<TestDb> {
     database: name,
   };
   await runMigrations(config, { schema: "public" });
-  await runArtifactMigrations(config, { schema: "public" });
+  await migrateArtifacts(config);
   const handle = createDB(config);
   return {
     db: handle.db,

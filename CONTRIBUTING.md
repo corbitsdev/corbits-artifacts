@@ -99,8 +99,7 @@ How the package is put together and why. Mount options and snippets are in the
 
 ### Where the routes are served
 
-The core registers root-relative paths (`/artifacts*`,
-`/instances/:id/mail-attachments`) and takes no base path, so the *mount point*
+The core registers root-relative paths (`/artifacts*`) and takes no base path, so the *mount point*
 is the host's decision. The convention every `@corbits/*-core` package
 documents, and every example here demonstrates, is **`/api`** — the same prefix
 Interchange serves its own routes under (`app.route("/api/me", …)`,
@@ -112,8 +111,7 @@ app.route("/api", createArtifactRoutes({ db, contentStore, requireGrant }));
 ```
 
 which serves `/api/artifacts`, `/api/artifacts/:id`,
-`/api/artifacts/:id/versions`, `/api/artifacts/:id/download`, and
-`/api/instances/:instanceId/mail-attachments`. Returning a sub-app rather than
+`/api/artifacts/:id/versions`, and `/api/artifacts/:id/download`. Returning a sub-app rather than
 taking a base path keeps the factory free of a configurable base path.
 
 Everything else it needs arrives through `deps` or the host's request context.
@@ -231,15 +229,12 @@ which store is installed.
 | `download.ts` | One download path over the three storage conventions. |
 | `content-store.ts` | The two shipped `ContentStore` implementations. |
 | `tools.ts` | Agent-facing tool definitions and windowed artifact reads (caller tenant only). |
-| `web-site.ts` | The `web-site` kind's content encoding and validation. |
-| `mail-attachments.ts` | Artifact↔message associations. |
 | `ports.ts` | The `ContentStore` type and the shared `ResolvedPrincipal` shape. |
-| `schema.ts` / `migrations.ts` | The four tables, and the DDL that creates them. |
+| `schema.ts` / `migrations.ts` | The three tables, and the DDL that creates them. |
 
 ### Data model
 
-Four physical tables — `artifact`, `artifact_version`, `upload`,
-`mail_attachment_ref`.
+Three physical tables — `artifact`, `artifact_version`, `upload`.
 
 **Hard control-plane foreign keys, by design.** `tenant_id` is `NOT NULL` and
 references the host's `tenant(id)` (`ON DELETE CASCADE` — a deleted tenant takes its
@@ -251,7 +246,7 @@ have run before `runArtifactMigrations`. The internal key —
 `artifact_version.artifact_id` — cascades with its artifact.
 
 **Cheap row-local CHECKs.** `artifact.version` and `artifact_version.version`
-must be ≥ 1; `upload.size` and `mail_attachment_ref.size` must be ≥ 0. These are
+must be ≥ 1; `upload.size` must be ≥ 0. These are
 single-column constraints — free at write time.
 
 **Principal↔tenant alignment is host-owned.** The package FKs each column into
@@ -327,9 +322,7 @@ for every possible way to write an artifact.
 
 **`upload` is never a standalone resource.** There is no `POST /uploads`; every
 upload eagerly mints its artifact, and the row is reachable only through
-`source.upload.id`. `mail_attachment_ref` carries no bytes at all — the file
-already *is* an artifact, and the ref only records which artifacts rode with
-which message.
+`source.upload.id`.
 
 The list index is `(tenant_id, updated_at, id)`. The `id` is the list's
 tie-break and must be *in* the index, or the keyset cursor's row-value
@@ -370,7 +363,7 @@ host schema's `tenant` / `principal` (see the data model).
 
 ### Boundaries
 
-Owned by this package: the four tables and their migrations; the HTTP surface,
+Owned by this package: the three tables and their migrations; the HTTP surface,
 its validation and its status codes; the version and archive semantics; the
 upload **gate** (`createFileArtifact` takes `policy` as a required argument and
 refuses anything outside it before the `ContentStore` is touched); and the
@@ -397,6 +390,6 @@ authenticated `tenant`/`principal` on the request context; the host's
   zero-dependency default, not a recommendation at scale; a large corpus wants a
   `ContentStore` over object storage.
 - **List paging caps at 100** rows (default 20).
-- **One 404 covers four causes** for a resolved caller — never minted,
-  malformed, a `skill-draft`, or another tenant's. Distinguishing them would be
+- **One 404 covers three causes** for a resolved caller — never minted,
+  malformed, or another tenant's. Distinguishing them would be
   an existence oracle. Expect no more detail than that from the API.
