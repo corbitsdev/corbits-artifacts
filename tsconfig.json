@@ -8,7 +8,8 @@
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["node", "@types/bun"]
+    "types": ["node", "@types/bun"],
+    "paths": { "@corbits/artifacts": ["./src/index.ts"] }
   },
-  "include": ["src", "scripts"]
+  "include": ["src", "tests"]
 }

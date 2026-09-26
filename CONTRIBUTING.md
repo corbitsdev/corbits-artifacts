@@ -14,9 +14,8 @@ docker run -d --name corbits-artifact-pg -p 5457:5432 \
 export ALLOW_DESTRUCTIVE_ARTIFACT_TESTS=1
 
 bun run typecheck
-bun run test             # unit + integration
+bun run test             # unit, integration and reference-host acceptance
 bun run build            # dist/ (JS + .d.ts)
-bun run test:acceptance  # builds, then examples/reference-host
 ```
 
 Tests expect `postgres://postgres:postgres@localhost:5457/artifact_core` (override with
@@ -36,16 +35,22 @@ The harness truncates package tables between tests and drops the package schema 
 couple of migration cases. Those paths are fail-closed: set
 `ALLOW_DESTRUCTIVE_ARTIFACT_TESTS=1` and point `ARTIFACT_DATABASE_URL` at an allowlisted
 ephemeral database (`artifact_core`, or any name ending in `_test`). Without both, the
-suite throws before mutating. The gate itself is pure URL/env parsing and is covered by
-unit tests that do not need Postgres.
+suite throws before mutating.
+
+End-to-end suites live in `tests/`. `tests/lib/db-harness.ts` creates a fresh
+`artifact_<random>_test` database per suite on the `ARTIFACT_DATABASE_URL` server,
+applies Interchange's `runMigrations` and `runArtifactMigrations`, and drops it
+afterwards. `artifactApp` mounts `createArtifactRoutes` for a seeded tenant
+principal, authorized by the platform's real `createRequireGrant` over the
+database's `grant` table. `bun run test` runs `src/` and `tests/`.
 
 ## The reference host is the acceptance suite, not a demo
 
 `examples/reference-host` mounts the package on a real `@intx/hub-api` app against a
-live Postgres and asserts the end-to-end scenarios, consuming the package through the
-built `dist/` — the same artifact a consumer installs. That is why `test:acceptance`
-builds first: running it against stale output is how a green acceptance run stops
-meaning anything.
+live Postgres. `tests/reference-host.test.ts` asserts the end-to-end scenarios against
+it as part of `bun run test`; the example imports `@corbits/artifacts`, which the
+root `tsconfig.json` maps to `src/`. CI's Node consumer smoke test covers the built
+`dist/` a consumer installs.
 
 If you change the route factory, a port, or anything about how a host wires this up, the
 reference host is where that change has to be shown working.
@@ -76,9 +81,8 @@ is no ledger: a schema change is a new file whose statements are safe to re-run,
 never an edit that assumes it runs once.
 
 `schema.ts` and `migrations/` must agree — every query goes through the drizzle
-table objects, and a test asserts the migrations create exactly the tables
-`schema.ts` declares, no more and no less. Change one, change the other, in the
-same commit.
+table objects, and the route suites fail when a column they write is missing.
+Change one, change the other, in the same commit.
 
 ## Pull requests
 

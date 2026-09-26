@@ -39,25 +39,14 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      # typecheck builds first: examples import @corbits/artifacts through the
-      # published dist types, same path a consumer resolves.
       - name: typecheck
         run: bun run typecheck
 
-      - name: unit + integration tests
+      - name: unit, integration and reference-host acceptance tests
         run: bun run test:coverage
 
-      # dist/ is already emitted by typecheck; re-run for a clean package build
-      # so acceptance and the node consumer smoke test do not depend on typecheck
-      # having side-effected the tree.
       - name: build
         run: bun run build
-
-      - name: install reference-host dependencies
-        run: bun install --cwd examples/reference-host
-
-      - name: reference-host acceptance
-        run: bun test --cwd examples/reference-host
 
       # A consumer on plain Node must be able to install and import the
       # tarball; Node cannot strip types, so a src-pointing manifest would die

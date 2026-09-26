@@ -16,4 +16,4 @@ coverageThreshold = 0.8
 
 # schema.ts is pure declarations — its "functions" are drizzle index/column
 # callbacks the coverage instrumentation cannot attribute, not logic.
-coveragePathIgnorePatterns = ["src/schema.ts", "src/test-helpers.ts"]
+coveragePathIgnorePatterns = ["src/schema.ts", "src/test-helpers.ts", "tests/lib"]
