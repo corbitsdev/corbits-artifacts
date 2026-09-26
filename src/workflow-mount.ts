@@ -96,7 +96,10 @@ export type AgentTokenAuth = {
   ) => Promise<AgentTokenIdentity | undefined> | AgentTokenIdentity | undefined;
   resolveRun: (
     runAddress: string,
-  ) => Promise<ResolvedWorkflowRunScope | null> | ResolvedWorkflowRunScope | null;
+  ) =>
+    | Promise<ResolvedWorkflowRunScope | null>
+    | ResolvedWorkflowRunScope
+    | null;
 };
 
 export type CreateWorkflowArtifactRoutesDeps = {
@@ -117,7 +120,10 @@ export type CreateWorkflowArtifactRoutesDeps = {
   maxContentChars?: number;
 };
 
-export type CreatedWorkflowArtifact = { readonly id: string; readonly version: number };
+export type CreatedWorkflowArtifact = {
+  readonly id: string;
+  readonly version: number;
+};
 
 // Opaque to this package, same shape `mount.ts` validates: any JSON object,
 // or `null` to clear it explicitly. Mirrors `NullableMetadata` there.
@@ -210,7 +216,10 @@ export function createWorkflowArtifactRoutes({
 }: CreateWorkflowArtifactRoutesDeps): Hono<WorkflowArtifactEnv> {
   const app = new Hono<WorkflowArtifactEnv>();
 
-  const authenticate: MiddlewareHandler<WorkflowArtifactEnv> = async (c, next) => {
+  const authenticate: MiddlewareHandler<WorkflowArtifactEnv> = async (
+    c,
+    next,
+  ) => {
     const authHeader = c.req.header("authorization") ?? "";
     const token = authHeader.startsWith("Bearer ")
       ? authHeader.slice("Bearer ".length)
@@ -224,7 +233,10 @@ export function createWorkflowArtifactRoutes({
         // Same 401 whether the address named no run or named another
         // tenant's: a bearer learns nothing from the difference.
         if (runScope === null || runScope.tenantId !== identity.tenantId) {
-          return c.json({ error: "Missing or unrecognized bearer token / run address" }, 401);
+          return c.json(
+            { error: "Missing or unrecognized bearer token / run address" },
+            401,
+          );
         }
         c.set("workflowRunScope", runScope);
         await next();
@@ -284,7 +296,10 @@ export function createWorkflowArtifactRoutes({
         ...(parsed.metadata !== undefined ? { metadata: parsed.metadata } : {}),
       }),
     );
-    const created: CreatedWorkflowArtifact = { id: row.id, version: row.version };
+    const created: CreatedWorkflowArtifact = {
+      id: row.id,
+      version: row.version,
+    };
     return c.json({ data: created }, 201);
   });
 
@@ -324,7 +339,10 @@ export function createWorkflowArtifactRoutes({
     }
 
     const scope = c.get("workflowRunScope");
-    const artifactScope = { tenantId: scope.tenantId, principalId: scope.principalId };
+    const artifactScope = {
+      tenantId: scope.tenantId,
+      principalId: scope.principalId,
+    };
     try {
       const row = await db.transaction((tx) =>
         createFileArtifact(tx, contentStore, {
@@ -338,10 +356,15 @@ export function createWorkflowArtifactRoutes({
           bytes: new Uint8Array(bytes),
           policy: uploadPolicy,
           generatedBy: scope.runId,
-          ...(parsed.metadata !== undefined ? { metadata: parsed.metadata } : {}),
+          ...(parsed.metadata !== undefined
+            ? { metadata: parsed.metadata }
+            : {}),
         }),
       );
-      const created: CreatedWorkflowArtifact = { id: row.id, version: row.version };
+      const created: CreatedWorkflowArtifact = {
+        id: row.id,
+        version: row.version,
+      };
       return c.json({ data: created }, 201);
     } catch (err) {
       if (err instanceof UnsupportedUploadTypeError) {
@@ -360,7 +383,9 @@ export function createWorkflowArtifactRoutes({
       limit: parseRecentLimit(c.req.query("limit")),
       ...(kind !== undefined && kind !== "" ? { kind } : {}),
     });
-    const data: readonly SerializedArtifactListItem[] = page.rows.map(serializeArtifactListItem);
+    const data: readonly SerializedArtifactListItem[] = page.rows.map(
+      serializeArtifactListItem,
+    );
     return c.json({ data });
   });
 
@@ -399,7 +424,10 @@ export function createWorkflowArtifactRoutes({
       ...(parsed.preview !== undefined ? { preview: parsed.preview } : {}),
       sessionId: scope.runId,
     });
-    const created: CreatedWorkflowArtifact = { id: row.id, version: row.version };
+    const created: CreatedWorkflowArtifact = {
+      id: row.id,
+      version: row.version,
+    };
     return c.json({ data: created }, 201);
   });
 
@@ -414,7 +442,10 @@ export function createWorkflowArtifactRoutes({
     if (parsed instanceof type.errors) {
       return c.json({ error: parsed.summary }, 400);
     }
-    if (parsed.content !== undefined && parsed.content.length > maxContentChars) {
+    if (
+      parsed.content !== undefined &&
+      parsed.content.length > maxContentChars
+    ) {
       return c.json(
         {
           error:

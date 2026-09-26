@@ -66,7 +66,11 @@ function windowContent(
   limit?: number,
 ): ArtifactReadResult {
   const total = content.length;
-  if (offset === undefined && limit === undefined && total <= DEFAULT_READ_LIMIT) {
+  if (
+    offset === undefined &&
+    limit === undefined &&
+    total <= DEFAULT_READ_LIMIT
+  ) {
     const whole = { ...base, content };
     if (encodedLength(whole) <= SAFE_ENCODED_BUDGET) return whole;
   }
@@ -81,7 +85,9 @@ function windowContent(
       start +
       Math.max(
         1,
-        Math.floor((end - start) * (SAFE_ENCODED_BUDGET / encodedLength(result))),
+        Math.floor(
+          (end - start) * (SAFE_ENCODED_BUDGET / encodedLength(result)),
+        ),
       );
     end = shrunk >= end ? end - 1 : shrunk;
     result = chunk(base, content, start, end, total);
@@ -105,7 +111,10 @@ async function resolveForRead(
     .select()
     .from(artifact)
     .where(
-      and(eq(artifact.id, args.artifactId), eq(artifact.tenantId, args.scope.tenantId)),
+      and(
+        eq(artifact.id, args.artifactId),
+        eq(artifact.tenantId, args.scope.tenantId),
+      ),
     )
     .limit(1);
   if (!row) {
@@ -254,8 +263,7 @@ export const ARTIFACT_TOOL_DEFINITIONS: readonly ArtifactToolDefinition[] = [
         title: { type: "string", description: "Artifact title." },
         kind: {
           type: "string",
-          description:
-            "Artifact kind, such as document, email, memo, or note.",
+          description: "Artifact kind, such as document, email, memo, or note.",
         },
         content: { type: "string", description: "The full text content." },
         metadata: {
@@ -283,7 +291,8 @@ export const ARTIFACT_TOOL_DEFINITIONS: readonly ArtifactToolDefinition[] = [
         },
         preview: {
           type: "string",
-          description: "Optional short preview shown before the file is opened.",
+          description:
+            "Optional short preview shown before the file is opened.",
         },
       },
       required: ["title", "kind", "path"],
@@ -317,7 +326,8 @@ export const ARTIFACT_TOOL_DEFINITIONS: readonly ArtifactToolDefinition[] = [
         artifactId: { type: "string", description: "The artifact id to read." },
         offset: {
           type: "number",
-          description: "Zero-based character offset to start from. Defaults to 0.",
+          description:
+            "Zero-based character offset to start from. Defaults to 0.",
         },
         limit: {
           type: "number",
@@ -339,7 +349,10 @@ export const ARTIFACT_TOOL_DEFINITIONS: readonly ArtifactToolDefinition[] = [
     inputSchema: {
       type: "object",
       properties: {
-        artifactId: { type: "string", description: "The artifact id to revise." },
+        artifactId: {
+          type: "string",
+          description: "The artifact id to revise.",
+        },
         title: { type: "string", description: "New title." },
         content: { type: "string", description: "New full content." },
         metadata: {

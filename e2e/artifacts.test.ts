@@ -61,7 +61,6 @@ describe("create", () => {
 });
 
 describe("versioning", () => {
-
   test("rejects oversize revise fields", async () => {
     const db = await testDb();
     const row = await seedArtifact(db);
@@ -86,9 +85,21 @@ describe("versioning", () => {
     const row = await seedArtifact(db, { content: "base" });
 
     const results = await Promise.all([
-      writeArtifactVersion(db, { scope: SCOPE, artifactId: row.id, content: "a" }),
-      writeArtifactVersion(db, { scope: SCOPE, artifactId: row.id, content: "b" }),
-      writeArtifactVersion(db, { scope: SCOPE, artifactId: row.id, content: "c" }),
+      writeArtifactVersion(db, {
+        scope: SCOPE,
+        artifactId: row.id,
+        content: "a",
+      }),
+      writeArtifactVersion(db, {
+        scope: SCOPE,
+        artifactId: row.id,
+        content: "b",
+      }),
+      writeArtifactVersion(db, {
+        scope: SCOPE,
+        artifactId: row.id,
+        content: "c",
+      }),
     ]);
     expect(results.map((r) => r.version).sort()).toEqual([2, 3, 4]);
 
@@ -109,7 +120,6 @@ describe("versioning", () => {
 });
 
 describe("archive", () => {
-
   test("returned archivedAt matches durable DB state", async () => {
     const db = await testDb();
     const row = await seedArtifact(db);
@@ -183,7 +193,9 @@ describe("find by title", () => {
       content: "touched",
     });
 
-    expect((await findArtifactByTitle(db, "acme", "Report"))?.artifactId).toBe(older.id);
+    expect((await findArtifactByTitle(db, "acme", "Report"))?.artifactId).toBe(
+      older.id,
+    );
   });
 
   test("never returns an archived artifact", async () => {
@@ -198,9 +210,9 @@ describe("find by title", () => {
     const db = await testDb();
     await seedArtifact(db, { title: "Same", kind: "document" });
     const csv = await seedArtifact(db, { title: "Same", kind: "csv-export" });
-    expect((await findArtifactByTitle(db, "acme", "Same", "csv-export"))?.artifactId).toBe(
-      csv.id,
-    );
+    expect(
+      (await findArtifactByTitle(db, "acme", "Same", "csv-export"))?.artifactId,
+    ).toBe(csv.id);
   });
 });
 
@@ -239,7 +251,10 @@ describe("find-or-version", () => {
     expect(result.artifact.version).toBe(2);
     expect(result.artifact.content).toBe("v2");
 
-    const rows = await db.select().from(artifact).where(eq(artifact.tenantId, "acme"));
+    const rows = await db
+      .select()
+      .from(artifact)
+      .where(eq(artifact.tenantId, "acme"));
     expect(rows.length).toBe(1);
   });
 
@@ -257,7 +272,10 @@ describe("find-or-version", () => {
     });
 
     expect(result.outcome).toBe("created");
-    const rows = await db.select().from(artifact).where(eq(artifact.title, "Report"));
+    const rows = await db
+      .select()
+      .from(artifact)
+      .where(eq(artifact.title, "Report"));
     expect(rows.length).toBe(2);
   });
 
@@ -306,10 +324,18 @@ describe("find-or-version", () => {
     ]);
 
     expect(first.artifact.id).toBe(second.artifact.id);
-    expect([first.outcome, second.outcome].sort()).toEqual(["created", "revised"]);
-    expect([first.artifact.version, second.artifact.version].sort()).toEqual([1, 2]);
+    expect([first.outcome, second.outcome].sort()).toEqual([
+      "created",
+      "revised",
+    ]);
+    expect([first.artifact.version, second.artifact.version].sort()).toEqual([
+      1, 2,
+    ]);
 
-    const rows = await db.select().from(artifact).where(eq(artifact.tenantId, "acme"));
+    const rows = await db
+      .select()
+      .from(artifact)
+      .where(eq(artifact.tenantId, "acme"));
     expect(rows.length).toBe(1);
     const versions = await db
       .select()
@@ -342,12 +368,17 @@ describe("find-or-version", () => {
     const artifactIds = new Set(results.map((r) => r.artifact.id));
     expect(artifactIds.size).toBe(1);
     expect(results.filter((r) => r.outcome === "created").length).toBe(1);
-    expect(results.filter((r) => r.outcome === "revised").length).toBe(callerCount - 1);
-    expect(results.map((r) => r.artifact.version).sort((a, b) => a - b)).toEqual([
-      1, 2, 3, 4, 5,
-    ]);
+    expect(results.filter((r) => r.outcome === "revised").length).toBe(
+      callerCount - 1,
+    );
+    expect(
+      results.map((r) => r.artifact.version).sort((a, b) => a - b),
+    ).toEqual([1, 2, 3, 4, 5]);
 
-    const rows = await db.select().from(artifact).where(eq(artifact.tenantId, "acme"));
+    const rows = await db
+      .select()
+      .from(artifact)
+      .where(eq(artifact.tenantId, "acme"));
     expect(rows.length).toBe(1);
     const versions = await db
       .select()
@@ -392,7 +423,11 @@ describe("version history isolation", () => {
     const db = await testDb();
     const a = await seedArtifact(db, { title: "A" });
     const b = await seedArtifact(db, { title: "B" });
-    await writeArtifactVersion(db, { scope: SCOPE, artifactId: a.id, content: "a2" });
+    await writeArtifactVersion(db, {
+      scope: SCOPE,
+      artifactId: a.id,
+      content: "a2",
+    });
 
     const bRows = await db
       .select()
@@ -530,7 +565,10 @@ describe("version metadata and lineage", () => {
           title: "x",
           content: "y",
           source: { origin: "manual" },
-          metadata: ["not", "an", "object"] as unknown as Record<string, unknown>,
+          metadata: ["not", "an", "object"] as unknown as Record<
+            string,
+            unknown
+          >,
         }),
       ),
     ).rejects.toBeInstanceOf(ArtifactValidationError);
@@ -609,4 +647,3 @@ describe("content digest", () => {
     expect(pinned?.contentSha256).toBeNull();
   });
 });
-

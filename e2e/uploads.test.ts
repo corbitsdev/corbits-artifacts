@@ -20,18 +20,25 @@ import { artifact, upload } from "../src/schema.js";
 import { SCOPE } from "./fixtures.js";
 import { testDb } from "./helpers.js";
 
-const XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const XLSX =
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
 describe("MIME gating", () => {
   test("trusts a declared type the policy accepts", () => {
     expect(
-      effectiveUploadMime({ name: "a.png", type: "image/png" }, ARTIFACT_UPLOAD_POLICY),
+      effectiveUploadMime(
+        { name: "a.png", type: "image/png" },
+        ARTIFACT_UPLOAD_POLICY,
+      ),
     ).toBe("image/png");
   });
 
   test("falls back to the extension when the browser omits the type", () => {
     expect(
-      effectiveUploadMime({ name: "sheet.XLSX", type: "" }, ARTIFACT_UPLOAD_POLICY),
+      effectiveUploadMime(
+        { name: "sheet.XLSX", type: "" },
+        ARTIFACT_UPLOAD_POLICY,
+      ),
     ).toBe(XLSX);
   });
 
@@ -46,7 +53,10 @@ describe("MIME gating", () => {
 
   test("rejects a file that resolves through neither type nor extension", () => {
     expect(
-      effectiveUploadMime({ name: "payload.bin", type: "" }, ARTIFACT_UPLOAD_POLICY),
+      effectiveUploadMime(
+        { name: "payload.bin", type: "" },
+        ARTIFACT_UPLOAD_POLICY,
+      ),
     ).toBe("");
     expect(
       effectiveUploadMime(
@@ -62,16 +72,28 @@ describe("MIME gating", () => {
     expect(ARTIFACT_UPLOAD_POLICY.accepts("application/x-tar")).toBe(true);
 
     expect(
-      effectiveUploadMime({ name: "build.tar.gz", type: "" }, ARTIFACT_UPLOAD_POLICY),
+      effectiveUploadMime(
+        { name: "build.tar.gz", type: "" },
+        ARTIFACT_UPLOAD_POLICY,
+      ),
     ).toBe("application/gzip");
     expect(
-      effectiveUploadMime({ name: "build.tgz", type: "" }, ARTIFACT_UPLOAD_POLICY),
+      effectiveUploadMime(
+        { name: "build.tgz", type: "" },
+        ARTIFACT_UPLOAD_POLICY,
+      ),
     ).toBe("application/gzip");
     expect(
-      effectiveUploadMime({ name: "build.gz", type: "" }, ARTIFACT_UPLOAD_POLICY),
+      effectiveUploadMime(
+        { name: "build.gz", type: "" },
+        ARTIFACT_UPLOAD_POLICY,
+      ),
     ).toBe("application/gzip");
     expect(
-      effectiveUploadMime({ name: "build.tar", type: "" }, ARTIFACT_UPLOAD_POLICY),
+      effectiveUploadMime(
+        { name: "build.tar", type: "" },
+        ARTIFACT_UPLOAD_POLICY,
+      ),
     ).toBe("application/x-tar");
   });
 
@@ -80,7 +102,11 @@ describe("MIME gating", () => {
     expect(uploadArtifactKind("application/x-gzip")).toBe("file");
     expect(uploadArtifactKind("application/x-tar")).toBe("file");
 
-    for (const mime of ["application/gzip", "application/x-gzip", "application/x-tar"]) {
+    for (const mime of [
+      "application/gzip",
+      "application/x-gzip",
+      "application/x-tar",
+    ]) {
       expect(disposition(mime, false)).toBe("attachment");
       expect(disposition(mime, true)).toBe("attachment");
     }
@@ -107,15 +133,21 @@ describe("MIME gating", () => {
     expect(PARSED_DOCUMENT_POLICY.accepts("application/pdf")).toBe(true);
     expect(PARSED_DOCUMENT_POLICY.accepts(XLSX)).toBe(false);
     expect(PARSED_DOCUMENT_POLICY.accepts("image/svg+xml")).toBe(false);
-    expect(effectiveUploadMime({ name: "sheet.xlsx", type: "" }, PARSED_DOCUMENT_POLICY)).toBe(
-      "",
-    );
+    expect(
+      effectiveUploadMime(
+        { name: "sheet.xlsx", type: "" },
+        PARSED_DOCUMENT_POLICY,
+      ),
+    ).toBe("");
 
     expect(ARTIFACT_UPLOAD_POLICY.accepts("image/png")).toBe(true);
     expect(ARTIFACT_UPLOAD_POLICY.accepts("application/pdf")).toBe(true);
 
     expect(
-      effectiveUploadMime({ name: "a.png", type: "image/png" }, SPREADSHEET_UPLOAD_POLICY),
+      effectiveUploadMime(
+        { name: "a.png", type: "image/png" },
+        SPREADSHEET_UPLOAD_POLICY,
+      ),
     ).toBe("");
   });
 
@@ -156,31 +188,37 @@ describe("every entry-point policy gates createFileArtifact", () => {
       }),
     );
 
-  const SURFACES: [string, UploadPolicy, [string, string], [string, string]][] = [
+  const SURFACES: [string, UploadPolicy, [string, string], [string, string]][] =
     [
-      "ARTIFACT_UPLOAD_POLICY (gallery import — this package's own route)",
-      ARTIFACT_UPLOAD_POLICY,
-      ["chart.png", "image/png"],
-      // An SVG can carry inline <script>: stored XSS on the app origin.
-      ["logo.svg", "image/svg+xml"],
-    ],
-    [
-      "SPREADSHEET_UPLOAD_POLICY (host-owned spreadsheet ingest)",
-      SPREADSHEET_UPLOAD_POLICY,
-      ["book.xlsx", XLSX],
-      // The narrow surface must stay narrow: a PDF here would reach a parser
-      // that only understands one format.
-      ["report.pdf", "application/pdf"],
-    ],
-    [
-      "PARSED_DOCUMENT_POLICY (host-owned chat/mail attachment divert)",
-      PARSED_DOCUMENT_POLICY,
-      ["notes.txt", "text/plain"],
-      ["logo.svg", "image/svg+xml"],
-    ],
-  ];
+      [
+        "ARTIFACT_UPLOAD_POLICY (gallery import — this package's own route)",
+        ARTIFACT_UPLOAD_POLICY,
+        ["chart.png", "image/png"],
+        // An SVG can carry inline <script>: stored XSS on the app origin.
+        ["logo.svg", "image/svg+xml"],
+      ],
+      [
+        "SPREADSHEET_UPLOAD_POLICY (host-owned spreadsheet ingest)",
+        SPREADSHEET_UPLOAD_POLICY,
+        ["book.xlsx", XLSX],
+        // The narrow surface must stay narrow: a PDF here would reach a parser
+        // that only understands one format.
+        ["report.pdf", "application/pdf"],
+      ],
+      [
+        "PARSED_DOCUMENT_POLICY (host-owned chat/mail attachment divert)",
+        PARSED_DOCUMENT_POLICY,
+        ["notes.txt", "text/plain"],
+        ["logo.svg", "image/svg+xml"],
+      ],
+    ];
 
-  for (const [label, policy, [okName, okMime], [badName, badMime]] of SURFACES) {
+  for (const [
+    label,
+    policy,
+    [okName, okMime],
+    [badName, badMime],
+  ] of SURFACES) {
     test(`${label} admits its own type and refuses one outside it`, async () => {
       const db = await testDb();
 
@@ -231,7 +269,10 @@ describe("createFileArtifact", () => {
 
     expect(row.kind).toBe("file");
     expect(row.title).toBe("report.pdf");
-    expect(row.source).toMatchObject({ origin: "imported", generatedBy: "Weekly Report" });
+    expect(row.source).toMatchObject({
+      origin: "imported",
+      generatedBy: "Weekly Report",
+    });
     expect(row.version).toBe(1);
   });
 

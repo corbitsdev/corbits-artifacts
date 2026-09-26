@@ -20,7 +20,10 @@ afterAll(async () => {
 async function upload(file: File): Promise<Response> {
   const form = new FormData();
   form.append("files", file);
-  return await app.request("/api/artifacts/upload", { method: "POST", body: form });
+  return await app.request("/api/artifacts/upload", {
+    method: "POST",
+    body: form,
+  });
 }
 
 async function artifactCount(): Promise<number> {
@@ -38,7 +41,9 @@ describe("upload policy through the mounted app", () => {
   });
 
   test("a disallowed MIME type is 415 and stores nothing", async () => {
-    const script = new File(["#!/bin/sh\n"], "run.sh", { type: "application/x-sh" });
+    const script = new File(["#!/bin/sh\n"], "run.sh", {
+      type: "application/x-sh",
+    });
     expect((await upload(script)).status).toBe(415);
     expect(await artifactCount()).toBe(0);
   });

@@ -18,7 +18,9 @@ const RUN_SCOPE: ResolvedWorkflowRunScope = {
 const ADDRESS = "run-1@acme";
 const AGENT_TOKEN = "agent-token";
 
-function agentTokenAuth(overrides: Partial<AgentTokenAuth> = {}): AgentTokenAuth {
+function agentTokenAuth(
+  overrides: Partial<AgentTokenAuth> = {},
+): AgentTokenAuth {
   return {
     verify: (ctx) => {
       const c = ctx as { req: { header(name: string): string | undefined } };
@@ -52,7 +54,9 @@ describe("agent-token authentication", () => {
   test("an agent bearer authenticates and scopes to the run's tenant", async () => {
     const db = await testDb();
     const app = host(db);
-    const res = await app.request("/artifacts/recent", { headers: agentHeaders });
+    const res = await app.request("/artifacts/recent", {
+      headers: agentHeaders,
+    });
     expect(res.status).toBe(200);
   });
 
@@ -60,9 +64,13 @@ describe("agent-token authentication", () => {
     const db = await testDb();
     const app = host(
       db,
-      agentTokenAuth({ verify: () => ({ tenantId: "other", definitionId: "def-1" }) }),
+      agentTokenAuth({
+        verify: () => ({ tenantId: "other", definitionId: "def-1" }),
+      }),
     );
-    const res = await app.request("/artifacts/recent", { headers: agentHeaders });
+    const res = await app.request("/artifacts/recent", {
+      headers: agentHeaders,
+    });
     expect(res.status).toBe(401);
   });
 
@@ -79,7 +87,10 @@ describe("agent-token authentication", () => {
     const db = await testDb();
     const app = host(db);
     const res = await app.request("/artifacts/recent", {
-      headers: { authorization: "Bearer sidecar-token", "x-workflow-run-address": ADDRESS },
+      headers: {
+        authorization: "Bearer sidecar-token",
+        "x-workflow-run-address": ADDRESS,
+      },
     });
     expect(res.status).toBe(200);
   });
@@ -93,16 +104,26 @@ describe("the routes the artifact tools call", () => {
     const created = await app.request("/artifacts", {
       method: "POST",
       headers: { "content-type": "application/json", ...agentHeaders },
-      body: JSON.stringify({ title: "Notes", kind: "document", content: "first" }),
+      body: JSON.stringify({
+        title: "Notes",
+        kind: "document",
+        content: "first",
+      }),
     });
     expect(created.status).toBe(201);
-    const { data: artifact } = (await created.json()) as { data: { id: string } };
+    const { data: artifact } = (await created.json()) as {
+      data: { id: string };
+    };
 
-    const listed = await app.request("/artifacts?kind=document", { headers: agentHeaders });
+    const listed = await app.request("/artifacts?kind=document", {
+      headers: agentHeaders,
+    });
     const listedBody = (await listed.json()) as { data: Array<{ id: string }> };
     expect(listedBody.data.map((row) => row.id)).toContain(artifact.id);
 
-    const found = await app.request("/artifacts/find?title=Notes", { headers: agentHeaders });
+    const found = await app.request("/artifacts/find?title=Notes", {
+      headers: agentHeaders,
+    });
     expect((await found.json()) as unknown).toEqual({
       data: { artifactId: artifact.id, version: 1 },
     });
@@ -113,23 +134,37 @@ describe("the routes the artifact tools call", () => {
       body: JSON.stringify({ content: "second" }),
     });
     expect(revised.status).toBe(200);
-    expect((await revised.json()) as { data: { id: string; version: number } }).toEqual({
+    expect(
+      (await revised.json()) as { data: { id: string; version: number } },
+    ).toEqual({
       data: { id: artifact.id, version: 2 },
     });
 
-    const read = await app.request(`/artifacts/${artifact.id}/read`, { headers: agentHeaders });
+    const read = await app.request(`/artifacts/${artifact.id}/read`, {
+      headers: agentHeaders,
+    });
     const readBody = (await read.json()) as { data: { content: string } };
     expect(readBody.data.content).toBe("second");
 
-    const pinned = await app.request(`/artifacts/${artifact.id}/read?version=1`, {
-      headers: agentHeaders,
-    });
-    expect(((await pinned.json()) as { data: { content: string } }).data.content).toBe("first");
+    const pinned = await app.request(
+      `/artifacts/${artifact.id}/read?version=1`,
+      {
+        headers: agentHeaders,
+      },
+    );
+    expect(
+      ((await pinned.json()) as { data: { content: string } }).data.content,
+    ).toBe("first");
 
-    const chunk = await app.request(`/artifacts/${artifact.id}/chunk?offset=0&limit=3`, {
-      headers: agentHeaders,
-    });
-    expect(((await chunk.json()) as { data: { content: string } }).data.content).toBe("sec");
+    const chunk = await app.request(
+      `/artifacts/${artifact.id}/chunk?offset=0&limit=3`,
+      {
+        headers: agentHeaders,
+      },
+    );
+    expect(
+      ((await chunk.json()) as { data: { content: string } }).data.content,
+    ).toBe("sec");
   });
 
   test("links a workspace file without moving any bytes", async () => {
@@ -138,7 +173,11 @@ describe("the routes the artifact tools call", () => {
     const linked = await app.request("/artifacts/link-file", {
       method: "POST",
       headers: { "content-type": "application/json", ...agentHeaders },
-      body: JSON.stringify({ title: "Report", kind: "document", path: "out/report.md" }),
+      body: JSON.stringify({
+        title: "Report",
+        kind: "document",
+        path: "out/report.md",
+      }),
     });
     expect(linked.status).toBe(201);
   });
@@ -147,7 +186,9 @@ describe("the routes the artifact tools call", () => {
     const db = await testDb();
     const foreign = await seedArtifact(db, { tenantId: "other" });
     const app = host(db);
-    const read = await app.request(`/artifacts/${foreign.id}/read`, { headers: agentHeaders });
+    const read = await app.request(`/artifacts/${foreign.id}/read`, {
+      headers: agentHeaders,
+    });
     expect(read.status).toBe(404);
   });
 });

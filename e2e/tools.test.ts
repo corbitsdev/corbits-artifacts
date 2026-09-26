@@ -19,7 +19,8 @@ import { testDb } from "./helpers.js";
 async function read(content: string, offset?: number, limit?: number) {
   const db = await testDb();
   const row = await seedArtifact(db, { content });
-  if (offset === undefined) return await readArtifact(db, { scope: SCOPE, artifactId: row.id });
+  if (offset === undefined)
+    return await readArtifact(db, { scope: SCOPE, artifactId: row.id });
   return await readArtifactChunk(db, {
     scope: SCOPE,
     artifactId: row.id,
@@ -82,7 +83,11 @@ describe("artifact_read", () => {
   test("reads the latest version by default", async () => {
     const db = await testDb();
     const row = await seedArtifact(db, { title: "Doc", content: "v1" });
-    await writeArtifactVersion(db, { scope: SCOPE, artifactId: row.id, content: "v2" });
+    await writeArtifactVersion(db, {
+      scope: SCOPE,
+      artifactId: row.id,
+      content: "v2",
+    });
 
     const result = await readArtifact(db, { scope: SCOPE, artifactId: row.id });
     expect(result).toMatchObject({ version: 2, content: "v2" });
@@ -103,7 +108,11 @@ describe("artifact_read", () => {
       artifactId: row.id,
       version: 1,
     });
-    expect(result).toMatchObject({ version: 1, content: "v1", title: "Old title" });
+    expect(result).toMatchObject({
+      version: 1,
+      content: "v1",
+      title: "Old title",
+    });
   });
 
   test("a missing version is an error naming the version", async () => {
@@ -143,7 +152,11 @@ describe("artifact_read_chunk", () => {
   test("reads a pinned version's content in chunks", async () => {
     const db = await testDb();
     const row = await seedArtifact(db, { content: "original" });
-    await writeArtifactVersion(db, { scope: SCOPE, artifactId: row.id, content: "revised" });
+    await writeArtifactVersion(db, {
+      scope: SCOPE,
+      artifactId: row.id,
+      content: "revised",
+    });
 
     const result = await readArtifactChunk(db, {
       scope: SCOPE,
@@ -161,14 +174,18 @@ describe("tool definitions", () => {
     expect(new Set(names).size).toBe(names.length);
     for (const definition of ARTIFACT_TOOL_DEFINITIONS) {
       for (const required of definition.inputSchema.required) {
-        expect(Object.keys(definition.inputSchema.properties)).toContain(required);
+        expect(Object.keys(definition.inputSchema.properties)).toContain(
+          required,
+        );
       }
     }
   });
 
   test("artifact_create and artifact_write both declare an optional metadata object", () => {
     for (const name of ["artifact_create", "artifact_write"]) {
-      const definition = ARTIFACT_TOOL_DEFINITIONS.find((d) => d.name === name)!;
+      const definition = ARTIFACT_TOOL_DEFINITIONS.find(
+        (d) => d.name === name,
+      )!;
       expect(definition.inputSchema.properties["metadata"]).toEqual({
         type: "object",
         description:
@@ -179,10 +196,14 @@ describe("tool definitions", () => {
   });
 
   test("only the mutating tools declare a write side effect", () => {
-    const writes = ARTIFACT_TOOL_DEFINITIONS.filter((d) => d.sideEffect === "write").map(
-      (d) => d.name,
-    );
-    expect(writes.sort()).toEqual(["artifact_create", "artifact_link_file", "artifact_write"]);
+    const writes = ARTIFACT_TOOL_DEFINITIONS.filter(
+      (d) => d.sideEffect === "write",
+    ).map((d) => d.name);
+    expect(writes.sort()).toEqual([
+      "artifact_create",
+      "artifact_link_file",
+      "artifact_write",
+    ]);
   });
 
   // A descriptor with no behavior behind it is worse than a missing tool: the
@@ -222,12 +243,18 @@ describe("artifact_link_file", () => {
 
   test("mints the artifact and its version 1, recording the workspace path", async () => {
     const db = await testDb();
-    const row = await linkFileArtifact(db, linkArgs({ preview: "Slide 1: revenue" }));
+    const row = await linkFileArtifact(
+      db,
+      linkArgs({ preview: "Slide 1: revenue" }),
+    );
 
     expect(row.version).toBe(1);
     expect(row.kind).toBe("file");
     expect(row.content).toBe("Slide 1: revenue");
-    expect(row.source).toEqual({ origin: "agent", workspace: { path: "out/deck.pdf" } });
+    expect(row.source).toEqual({
+      origin: "agent",
+      workspace: { path: "out/deck.pdf" },
+    });
 
     const versions = await listArtifactVersions(db, row.id);
     expect(versions.versions.map((v) => v.version)).toEqual([1]);
@@ -237,7 +264,9 @@ describe("artifact_link_file", () => {
   test("no bytes move: nothing is written to the blob side-table", async () => {
     const db = await testDb();
     await linkFileArtifact(db, linkArgs());
-    const uploads = await db.execute<{ n: string }>(sql`SELECT count(*)::text AS n FROM "artifacts"."upload"`);
+    const uploads = await db.execute<{ n: string }>(
+      sql`SELECT count(*)::text AS n FROM "artifacts"."upload"`,
+    );
     expect(uploads[0]!.n).toBe("0");
   });
 
@@ -249,18 +278,26 @@ describe("artifact_link_file", () => {
 
   test("a blank path is refused, and no artifact is left behind", async () => {
     const db = await testDb();
-    await expect(linkFileArtifact(db, linkArgs({ path: "   " }))).rejects.toThrow(
-      "requires a workspace path",
+    await expect(
+      linkFileArtifact(db, linkArgs({ path: "   " })),
+    ).rejects.toThrow("requires a workspace path");
+    const rows = await db.execute<{ n: string }>(
+      sql`SELECT count(*)::text AS n FROM "artifacts"."artifact"`,
     );
-    const rows = await db.execute<{ n: string }>(sql`SELECT count(*)::text AS n FROM "artifacts"."artifact"`);
     expect(rows[0]!.n).toBe("0");
   });
 
-
   test("a linked artifact is readable through artifact_read", async () => {
     const db = await testDb();
-    const row = await linkFileArtifact(db, linkArgs({ preview: "Slide 1: revenue" }));
+    const row = await linkFileArtifact(
+      db,
+      linkArgs({ preview: "Slide 1: revenue" }),
+    );
     const read = await readArtifact(db, { scope: SCOPE, artifactId: row.id });
-    expect(read).toMatchObject({ title: "Quarterly deck", version: 1, content: "Slide 1: revenue" });
+    expect(read).toMatchObject({
+      title: "Quarterly deck",
+      version: 1,
+      content: "Slide 1: revenue",
+    });
   });
 });

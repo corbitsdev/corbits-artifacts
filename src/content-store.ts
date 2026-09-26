@@ -26,14 +26,12 @@ const UploadRefSource = type({
     filename: "string",
     mimeType: "string",
     "size?": "unknown",
-  }).pipe(
-    (ref): UploadRef => ({
-      ...(typeof ref.id === "string" && ref.id.length > 0 ? { id: ref.id } : {}),
-      filename: ref.filename,
-      mimeType: ref.mimeType,
-      size: typeof ref.size === "number" ? ref.size : 0,
-    }),
-  ),
+  }).pipe((ref): UploadRef => ({
+    ...(typeof ref.id === "string" && ref.id.length > 0 ? { id: ref.id } : {}),
+    filename: ref.filename,
+    mimeType: ref.mimeType,
+    size: typeof ref.size === "number" ? ref.size : 0,
+  })),
 });
 
 /** Read `source.upload` off an artifact row's opaque jsonb bag. */
@@ -88,7 +86,8 @@ export const InlineContentStore: ContentStore = {
     if (!row) return null;
     return {
       filename: row.filename,
-      mimeType: row.mimeType.length > 0 ? row.mimeType : "application/octet-stream",
+      mimeType:
+        row.mimeType.length > 0 ? row.mimeType : "application/octet-stream",
       bytes: Uint8Array.from(row.content),
     };
   },
