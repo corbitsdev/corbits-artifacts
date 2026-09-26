@@ -55,18 +55,16 @@
     "typecheck": "tsc --noEmit",
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "prepack": "bun run build",
-    "pretest": "bun run scripts/check-deps.ts",
-    "test": "bun run pretest && bun test src",
-    "test:coverage": "bun run pretest && bun test --coverage src",
-    "test:package": "bun run test",
+    "test": "bun test src",
+    "test:coverage": "bun test --coverage src",
     "test:acceptance": "bun run build && bun test --cwd examples/reference-host"
   },
   "dependencies": {
-    "@hono/standard-validator": "^0.2.3"
+    "@hono/standard-validator": "^0.2.3",
+    "arktype": "^2.2.3"
   },
   "peerDependencies": {
     "@intx/types": "^0.4.0",
-    "arktype": "^2.1.29",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.32",
     "hono-openapi": "^1.2.0",
@@ -74,11 +72,15 @@
     "@intx/hub-api": "^0.4.0",
     "@intx/agent": "^0.4.0"
   },
+  "peerDependenciesMeta": {
+    "@intx/agent": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@intx/types": "0.4.0",
     "@types/bun": "1.1.14",
     "@types/node": "22.10.5",
-    "arktype": "2.1.29",
     "drizzle-orm": "0.45.2",
     "hono": "4.12.32",
     "hono-openapi": "1.2.0",

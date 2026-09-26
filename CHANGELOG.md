@@ -89,6 +89,11 @@ always called out under their own heading.
 
 ### Changed
 
+- `@intx/agent` is an optional peer. Only `@corbits/artifacts/sidecar-bundle`
+  imports it, so a host that mounts the routes alone need not install it.
+- `arktype` is a regular dependency (`^2.2.3`) instead of a peer, so hosts no
+  longer install it themselves. The exported query schemas are still arktype
+  types; a host on another arktype version gets its own copy alongside.
 - Minimum `@intx/*` is now **0.3.0**. (`@intx/*` lines before 0.3.0 do not
   install — older lines pin the unpublished `@intx/*@0.0.0` or ship raw
   TypeScript.)
@@ -119,6 +124,10 @@ always called out under their own heading.
 
 ### Breaking
 
+- The drizzle tables (`artifact`, `artifactVersion`, `upload`,
+  `mailAttachmentRef`) are no longer exported from the package entry. Hosts
+  reach artifacts through the routes and functions; `ARTIFACTS_SCHEMA` and the
+  `*Row` types stay public.
 - `mountArtifacts` takes `Hono<TenantEnv>`, reads the host-provided tenant and
   principal context natively, and requires the host's Interchange `RequireGrant`
   middleware. The `resolvePrincipal`, `isAdmin`, and `identity` options and the
