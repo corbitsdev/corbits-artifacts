@@ -26,7 +26,7 @@ import type { Actor } from "./fixtures.js";
 
 export const DATABASE_URL =
   process.env.ARTIFACT_DATABASE_URL ??
-  "postgres://postgres:postgres@localhost:5457/artifact_core";
+  "postgres://postgres:postgres@localhost:5432/artifact_core";
 
 /** `DATABASE_URL` in the shape Interchange's `runMigrations` takes. */
 export function databaseConfig(connectionString: string): DBConfig {
