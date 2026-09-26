@@ -30,9 +30,13 @@ export async function runArtifactMigrations(
     throw new Error("runArtifactMigrations: schema name must not be empty");
   }
   const schemaIdent = quoteIdentifier(options.schema);
-  const files = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith(".sql")).sort();
+  const files = (await readdir(MIGRATIONS_DIR))
+    .filter((f) => f.endsWith(".sql"))
+    .sort();
   if (files.length === 0) {
-    throw new Error(`runArtifactMigrations: no .sql files found in ${MIGRATIONS_DIR}`);
+    throw new Error(
+      `runArtifactMigrations: no .sql files found in ${MIGRATIONS_DIR}`,
+    );
   }
   const statements: string[] = [];
   for (const file of files) {

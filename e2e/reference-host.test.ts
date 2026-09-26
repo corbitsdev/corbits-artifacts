@@ -17,7 +17,10 @@ import {
   UnsupportedUploadTypeError,
   type ContentStore,
 } from "@corbits/artifacts";
-import { createReferenceHost, type ReferenceHost } from "../examples/reference-host/src/index.js";
+import {
+  createReferenceHost,
+  type ReferenceHost,
+} from "../examples/reference-host/src/index.js";
 
 let host: ReferenceHost;
 const json = async <T>(res: Response): Promise<T> => (await res.json()) as T;
@@ -49,10 +52,16 @@ describe("import a URL, read it back, revise it, read the history", () => {
   test("a URL import creates the artifact at version 1", async () => {
     const res = await host.request(
       "/api/artifacts",
-      postJson({ mode: "url", title: "Launch plan", content: "https://example.com/plan" }),
+      postJson({
+        mode: "url",
+        title: "Launch plan",
+        content: "https://example.com/plan",
+      }),
     );
     expect(res.status).toBe(201);
-    const created = await json<{ artifact: { id: string; version: number } }>(res);
+    const created = await json<{ artifact: { id: string; version: number } }>(
+      res,
+    );
     expect(created.artifact.version).toBe(1);
     artifactId = created.artifact.id;
   });
@@ -67,13 +76,16 @@ describe("import a URL, read it back, revise it, read the history", () => {
   test("revising bumps to version 2 and version 1 keeps its original title", async () => {
     const revised = await host.request(
       `/api/artifacts/${artifactId}/versions`,
-      postJson({ title: "Launch plan v2", content: "https://example.com/plan-2" }),
+      postJson({
+        title: "Launch plan v2",
+        content: "https://example.com/plan-2",
+      }),
     );
     expect((await json<{ version: number }>(revised)).version).toBe(2);
 
-    const history = await json<{ versions: { version: number; title: string }[] }>(
-      await host.request(`/api/artifacts/${artifactId}/versions`),
-    );
+    const history = await json<{
+      versions: { version: number; title: string }[];
+    }>(await host.request(`/api/artifacts/${artifactId}/versions`));
     expect(history.versions.map((v) => v.version)).toEqual([2, 1]);
     expect(history.versions[1]!.title).toBe("Launch plan");
   });
@@ -84,7 +96,9 @@ describe("import a URL, read it back, revise it, read the history", () => {
       postJson({ content: "https://example.com/plan-3", expectedVersion: 1 }),
     );
     expect(conflict.status).toBe(409);
-    expect(await json<{ error: string; currentVersion: number }>(conflict)).toEqual({
+    expect(
+      await json<{ error: string; currentVersion: number }>(conflict),
+    ).toEqual({
       error: "Version conflict",
       currentVersion: 2,
     });
@@ -96,9 +110,9 @@ describe("import a URL, read it back, revise it, read the history", () => {
   });
 
   test("GET /versions/:version serves version 1's own content, unaffected by the revision", async () => {
-    const v1 = await json<{ artifact: { version: number; title: string; content: string } }>(
-      await host.request(`/api/artifacts/${artifactId}/versions/1`),
-    );
+    const v1 = await json<{
+      artifact: { version: number; title: string; content: string };
+    }>(await host.request(`/api/artifacts/${artifactId}/versions/1`));
     expect(v1.artifact).toMatchObject({
       version: 1,
       title: "Launch plan",
@@ -108,12 +122,19 @@ describe("import a URL, read it back, revise it, read the history", () => {
     const v2 = await json<{ artifact: { version: number; content: string } }>(
       await host.request(`/api/artifacts/${artifactId}/versions/2`),
     );
-    expect(v2.artifact).toMatchObject({ version: 2, content: "https://example.com/plan-2" });
+    expect(v2.artifact).toMatchObject({
+      version: 2,
+      content: "https://example.com/plan-2",
+    });
   });
 
   test("GET /versions/:version is 404 for an unknown version and 400 for a malformed one", async () => {
-    expect((await host.request(`/api/artifacts/${artifactId}/versions/99`)).status).toBe(404);
-    expect((await host.request(`/api/artifacts/${artifactId}/versions/0`)).status).toBe(400);
+    expect(
+      (await host.request(`/api/artifacts/${artifactId}/versions/99`)).status,
+    ).toBe(404);
+    expect(
+      (await host.request(`/api/artifacts/${artifactId}/versions/0`)).status,
+    ).toBe(400);
   });
 });
 
@@ -141,9 +162,15 @@ describe.each<[string, ContentStore]>([
     app = host.buildApp(store);
     const form = new FormData();
     form.append("files", new File([PNG], "chart.png", { type: "image/png" }));
-    form.append("files", new File([PDF], "deck.pdf", { type: "application/pdf" }));
+    form.append(
+      "files",
+      new File([PDF], "deck.pdf", { type: "application/pdf" }),
+    );
     form.append("generatedBy", "Reference host");
-    const res = await app.request("/api/artifacts/upload", { method: "POST", body: form });
+    const res = await app.request("/api/artifacts/upload", {
+      method: "POST",
+      body: form,
+    });
     expect(res.status).toBe(201);
     uploaded = (await json<{ artifacts: Uploaded[] }>(res)).artifacts;
   });
@@ -161,7 +188,9 @@ describe.each<[string, ContentStore]>([
     const png = await app.request(`/api/artifacts/${uploaded[0]!.id}/download`);
     expect(png.headers.get("content-type")).toBe("image/png");
     expect(png.headers.get("x-content-type-options")).toBe("nosniff");
-    expect(png.headers.get("content-disposition")).toBe('attachment; filename="chart.png"');
+    expect(png.headers.get("content-disposition")).toBe(
+      'attachment; filename="chart.png"',
+    );
     expect(new Uint8Array(await png.arrayBuffer())).toEqual(PNG);
   });
 
@@ -169,7 +198,9 @@ describe.each<[string, ContentStore]>([
     const id = uploaded[1]!.id;
     const attached = await app.request(`/api/artifacts/${id}/download`);
     const inline = await app.request(`/api/artifacts/${id}/download?inline=1`);
-    expect(attached.headers.get("content-disposition")).toStartWith("attachment;");
+    expect(attached.headers.get("content-disposition")).toStartWith(
+      "attachment;",
+    );
     expect(inline.headers.get("content-disposition")).toStartWith("inline;");
   });
 });
@@ -183,19 +214,29 @@ describe("download an older version's content over HTTP (DataUrlContentStore)", 
   beforeAll(async () => {
     app = host.buildApp(DataUrlContentStore);
     const form = new FormData();
-    form.append("files", new File([ORIGINAL], "chart.png", { type: "image/png" }));
+    form.append(
+      "files",
+      new File([ORIGINAL], "chart.png", { type: "image/png" }),
+    );
     const uploaded = await json<{ artifacts: { id: string }[] }>(
-      await app.request("/api/artifacts/upload", { method: "POST", body: form }),
+      await app.request("/api/artifacts/upload", {
+        method: "POST",
+        body: form,
+      }),
     );
     id = uploaded.artifacts[0]!.id;
     await app.request(
       `/api/artifacts/${id}/versions`,
-      postJson({ content: `data:image/png;base64,${Buffer.from(REVISED).toString("base64")}` }),
+      postJson({
+        content: `data:image/png;base64,${Buffer.from(REVISED).toString("base64")}`,
+      }),
     );
   });
 
   test("?version=1 downloads the original bytes; omitted downloads the current version", async () => {
-    const original = await app.request(`/api/artifacts/${id}/download?version=1`);
+    const original = await app.request(
+      `/api/artifacts/${id}/download?version=1`,
+    );
     expect(new Uint8Array(await original.arrayBuffer())).toEqual(ORIGINAL);
 
     const current = await app.request(`/api/artifacts/${id}/download`);
@@ -203,8 +244,12 @@ describe("download an older version's content over HTTP (DataUrlContentStore)", 
   });
 
   test("an unknown ?version is 404 and a non-integer one is 400", async () => {
-    expect((await app.request(`/api/artifacts/${id}/download?version=99`)).status).toBe(404);
-    expect((await app.request(`/api/artifacts/${id}/download?version=abc`)).status).toBe(400);
+    expect(
+      (await app.request(`/api/artifacts/${id}/download?version=99`)).status,
+    ).toBe(404);
+    expect(
+      (await app.request(`/api/artifacts/${id}/download?version=abc`)).status,
+    ).toBe(400);
   });
 });
 
@@ -217,14 +262,26 @@ describe("?version on a blob-backed upload (InlineContentStore) serves that vers
   beforeAll(async () => {
     app = host.buildApp(InlineContentStore);
     const form = new FormData();
-    form.append("files", new File([ORIGINAL], "chart.png", { type: "image/png" }));
+    form.append(
+      "files",
+      new File([ORIGINAL], "chart.png", { type: "image/png" }),
+    );
     const uploaded = await json<{ artifacts: { id: string }[] }>(
-      await app.request("/api/artifacts/upload", { method: "POST", body: form }),
+      await app.request("/api/artifacts/upload", {
+        method: "POST",
+        body: form,
+      }),
     );
     id = uploaded.artifacts[0]!.id;
     const revise = new FormData();
-    revise.append("file", new File([REVISED], "chart.png", { type: "image/png" }));
-    await app.request(`/api/artifacts/${id}/versions`, { method: "POST", body: revise });
+    revise.append(
+      "file",
+      new File([REVISED], "chart.png", { type: "image/png" }),
+    );
+    await app.request(`/api/artifacts/${id}/versions`, {
+      method: "POST",
+      body: revise,
+    });
   });
 
   test("?version=1 downloads the original bytes", async () => {
@@ -247,8 +304,14 @@ describe("an unsupported upload is refused, leaving nothing behind", () => {
       await host.request("/api/artifacts?limit=100"),
     );
     const form = new FormData();
-    form.append("files", new File(["<svg/>"], "logo.svg", { type: "image/svg+xml" }));
-    const res = await host.request("/api/artifacts/upload", { method: "POST", body: form });
+    form.append(
+      "files",
+      new File(["<svg/>"], "logo.svg", { type: "image/svg+xml" }),
+    );
+    const res = await host.request("/api/artifacts/upload", {
+      method: "POST",
+      body: form,
+    });
     const after = await json<{ artifacts: unknown[] }>(
       await host.request("/api/artifacts?limit=100"),
     );
@@ -260,9 +323,10 @@ describe("an unsupported upload is refused, leaving nothing behind", () => {
 
 describe("list: keyset paging and the archived toggle", () => {
   test("a keyset cursor is minted and the next page repeats nothing", async () => {
-    const page1 = await json<{ artifacts: { id: string }[]; nextCursor: string | null }>(
-      await host.request("/api/artifacts?limit=2"),
-    );
+    const page1 = await json<{
+      artifacts: { id: string }[];
+      nextCursor: string | null;
+    }>(await host.request("/api/artifacts?limit=2"));
     expect(page1.artifacts.length).toBe(2);
     expect(page1.nextCursor).not.toBeNull();
 
@@ -281,7 +345,11 @@ describe("list: keyset paging and the archived toggle", () => {
 describe("archive is a soft-hide, not a revocation", () => {
   test("archiving hides the artifact from the default listing only", async () => {
     expect(
-      (await host.request(`/api/artifacts/${artifactId}/archive`, { method: "POST" })).status,
+      (
+        await host.request(`/api/artifacts/${artifactId}/archive`, {
+          method: "POST",
+        })
+      ).status,
     ).toBe(200);
 
     const listed = await json<{ artifacts: { id: string }[] }>(
@@ -294,7 +362,9 @@ describe("archive is a soft-hide, not a revocation", () => {
     );
     expect(archivedView.artifacts.some((a) => a.id === artifactId)).toBe(true);
 
-    expect((await host.request(`/api/artifacts/${artifactId}`)).status).toBe(200);
+    expect((await host.request(`/api/artifacts/${artifactId}`)).status).toBe(
+      200,
+    );
   });
 
   test("revising an archived artifact is refused as not found", async () => {
@@ -303,14 +373,18 @@ describe("archive is a soft-hide, not a revocation", () => {
       postJson({ content: "sneaky" }),
     );
     expect(res.status).toBe(404);
-    await host.request(`/api/artifacts/${artifactId}/unarchive`, { method: "POST" });
+    await host.request(`/api/artifacts/${artifactId}/unarchive`, {
+      method: "POST",
+    });
   });
 });
 
 describe("host grant authorization", () => {
   test("a denied grant returns 403 and leaves archived_at null", async () => {
     const app = host.buildApp(InlineContentStore, () => false);
-    const res = await app.request(`/api/artifacts/${artifactId}/archive`, { method: "POST" });
+    const res = await app.request(`/api/artifacts/${artifactId}/archive`, {
+      method: "POST",
+    });
     expect(res.status).toBe(403);
 
     const [row] = await host.db.execute<{ archived_at: string | null }>(
@@ -326,7 +400,9 @@ describe("host grant authorization", () => {
       return true;
     });
 
-    const res = await app.request(`/api/artifacts/${artifactId}/archive`, { method: "POST" });
+    const res = await app.request(`/api/artifacts/${artifactId}/archive`, {
+      method: "POST",
+    });
     expect(res.status).toBe(200);
     expect(checks).toContainEqual({
       resource: `artifact:${artifactId}`,
@@ -334,7 +410,11 @@ describe("host grant authorization", () => {
     });
 
     expect(
-      (await app.request(`/api/artifacts/${artifactId}/unarchive`, { method: "POST" })).status,
+      (
+        await app.request(`/api/artifacts/${artifactId}/unarchive`, {
+          method: "POST",
+        })
+      ).status,
     ).toBe(200);
   });
 });
@@ -376,15 +456,21 @@ describe("ownership-derived grants: real provisioning, real refusal", () => {
         postJson({ content: "bob was here" }),
       );
       expect(revise.status).toBe(403);
-      const archive = await host.request(`/api/artifacts/${artifactId}/archive`, {
-        method: "POST",
-      });
+      const archive = await host.request(
+        `/api/artifacts/${artifactId}/archive`,
+        {
+          method: "POST",
+        },
+      );
       expect(archive.status).toBe(403);
     } finally {
       host.setSession({ userId: "user-alice" });
     }
 
-    const [row] = await host.db.execute<{ content: string; archived_at: string | null }>(
+    const [row] = await host.db.execute<{
+      content: string;
+      archived_at: string | null;
+    }>(
       sql`SELECT "content", "archived_at" FROM "artifacts"."artifact" WHERE "id" = ${artifactId}`,
     );
     expect(row!.content).not.toBe("bob was here");
@@ -421,7 +507,9 @@ describe("no session", () => {
   });
 
   test("a single-artifact detail read is refused 403", async () => {
-    expect((await host.request(`/api/artifacts/${artifactId}`)).status).toBe(403);
+    expect((await host.request(`/api/artifacts/${artifactId}`)).status).toBe(
+      403,
+    );
   });
 });
 
@@ -444,10 +532,14 @@ describe("a cross-tenant request fails closed", () => {
       VALUES ('some-other-tenant', 'outsider', 'outsider', 'document',
         'Other tenant secret', 'not yours', '{"origin":"manual"}'::jsonb, 1)
     `);
-    const res = await host.request("/api/artifacts?tenantId=some-other-tenant&limit=100");
+    const res = await host.request(
+      "/api/artifacts?tenantId=some-other-tenant&limit=100",
+    );
     expect(res.status).toBe(200);
     const body = await json<{ artifacts: { title: string }[] }>(res);
-    expect(body.artifacts.some((a) => a.title === "Other tenant secret")).toBe(false);
+    expect(body.artifacts.some((a) => a.title === "Other tenant secret")).toBe(
+      false,
+    );
   });
 
   // Filtering the LIST is only half of failing closed: the artifact still has
@@ -521,8 +613,11 @@ describe("pdf parsing is the host's, and the module's contract with it holds", (
   };
 
   const count = async () =>
-    (await json<{ artifacts: unknown[] }>(await host.request("/api/artifacts?limit=100")))
-      .artifacts.length;
+    (
+      await json<{ artifacts: unknown[] }>(
+        await host.request("/api/artifacts?limit=100"),
+      )
+    ).artifacts.length;
 
   test("a host parse failure mints no artifact and stores no bytes", async () => {
     const before = await count();
@@ -530,7 +625,9 @@ describe("pdf parsing is the host's, and the module's contract with it holds", (
       sql`SELECT count(*)::int AS n FROM "artifacts"."upload"`,
     );
 
-    expect(() => parsePdf(new Uint8Array(Buffer.from("not a pdf at all")))).toThrow();
+    expect(() =>
+      parsePdf(new Uint8Array(Buffer.from("not a pdf at all"))),
+    ).toThrow();
 
     expect(await count()).toBe(before);
     const afterUploads = await host.db.execute<{ n: number }>(
@@ -560,7 +657,9 @@ describe("pdf parsing is the host's, and the module's contract with it holds", (
 
     // The artifact and its version 1 exist, and the bytes serve back inline
     // for a PDF that asks — the half of "pdf parse+inline" this module owns.
-    const inline = await host.request(`/api/artifacts/${row.id}/download?inline=1`);
+    const inline = await host.request(
+      `/api/artifacts/${row.id}/download?inline=1`,
+    );
     expect(inline.headers.get("content-disposition")).toStartWith("inline;");
     expect(new Uint8Array(await inline.arrayBuffer())).toEqual(PDF);
 

@@ -18,20 +18,28 @@ const RUN_SCOPE: ResolvedWorkflowRunScope = {
 const VALID_TOKEN = "sidecar-token";
 const VALID_ADDRESS = "run-1@acme";
 
-function host(db: ArtifactDb, opts: { resolves?: ResolvedWorkflowRunScope | null } = {}) {
+function host(
+  db: ArtifactDb,
+  opts: { resolves?: ResolvedWorkflowRunScope | null } = {},
+) {
   return createWorkflowArtifactRoutes({
     db,
     contentStore: InlineContentStore,
     resolveRunScope: (token, address) => {
       if (opts.resolves === undefined) {
-        return token === VALID_TOKEN && address === VALID_ADDRESS ? RUN_SCOPE : null;
+        return token === VALID_TOKEN && address === VALID_ADDRESS
+          ? RUN_SCOPE
+          : null;
       }
       return opts.resolves;
     },
   });
 }
 
-const authed = { authorization: `Bearer ${VALID_TOKEN}`, "x-workflow-run-address": VALID_ADDRESS };
+const authed = {
+  authorization: `Bearer ${VALID_TOKEN}`,
+  "x-workflow-run-address": VALID_ADDRESS,
+};
 
 const json = (body: unknown, headers: Record<string, string> = authed) => ({
   method: "POST",
@@ -39,7 +47,10 @@ const json = (body: unknown, headers: Record<string, string> = authed) => ({
   body: JSON.stringify(body),
 });
 
-const patchJson = (body: unknown, headers: Record<string, string> = authed) => ({
+const patchJson = (
+  body: unknown,
+  headers: Record<string, string> = authed,
+) => ({
   method: "PATCH",
   headers: { "content-type": "application/json", ...headers },
   body: JSON.stringify(body),
@@ -77,7 +88,9 @@ describe("POST /artifacts", () => {
       json({ title: "Brief", kind: "document", content: "hello" }),
     );
     expect(res.status).toBe(201);
-    const { data } = (await res.json()) as { data: { id: string; version: number } };
+    const { data } = (await res.json()) as {
+      data: { id: string; version: number };
+    };
     expect(data.version).toBe(1);
 
     const row = await getArtifact(db, data.id);
@@ -90,7 +103,10 @@ describe("POST /artifacts", () => {
   test("rejects a body missing a required field", async () => {
     const db = await testDb();
     const app = host(db);
-    const res = await app.request("/artifacts", json({ title: "Brief", kind: "document" }));
+    const res = await app.request(
+      "/artifacts",
+      json({ title: "Brief", kind: "document" }),
+    );
     expect(res.status).toBe(400);
   });
 
@@ -107,11 +123,16 @@ describe("POST /artifacts", () => {
       }),
     );
     expect(res.status).toBe(201);
-    const { data } = (await res.json()) as { data: { id: string; version: number } };
+    const { data } = (await res.json()) as {
+      data: { id: string; version: number };
+    };
     expect(data.version).toBe(1);
 
     const row = await getArtifact(db, data.id);
-    expect(row?.metadata).toEqual({ project: "acme-onboarding", stage: "draft" });
+    expect(row?.metadata).toEqual({
+      project: "acme-onboarding",
+      stage: "draft",
+    });
   });
 
   test("rejects a metadata value that is not a JSON object", async () => {
@@ -157,7 +178,11 @@ describe("POST /artifacts", () => {
     });
     const res = await app.request(
       "/artifacts",
-      json({ title: "Brief", kind: "document", content: "way too long for the ceiling" }),
+      json({
+        title: "Brief",
+        kind: "document",
+        content: "way too long for the ceiling",
+      }),
     );
     expect(res.status).toBe(413);
   });
@@ -178,7 +203,9 @@ describe("GET /artifacts/recent", () => {
   test("clamps an out-of-range limit rather than erroring", async () => {
     const db = await testDb();
     const app = host(db);
-    const res = await app.request("/artifacts/recent?limit=9999", { headers: authed });
+    const res = await app.request("/artifacts/recent?limit=9999", {
+      headers: authed,
+    });
     expect(res.status).toBe(200);
   });
 });
@@ -186,10 +213,15 @@ describe("GET /artifacts/recent", () => {
 describe("GET /artifacts/:id", () => {
   test("reads back an artifact the run's own tenant owns", async () => {
     const db = await testDb();
-    const seeded = await seedArtifact(db, { tenantId: "acme", content: "body text" });
+    const seeded = await seedArtifact(db, {
+      tenantId: "acme",
+      content: "body text",
+    });
     const app = host(db);
 
-    const res = await app.request(`/artifacts/${seeded.id}`, { headers: authed });
+    const res = await app.request(`/artifacts/${seeded.id}`, {
+      headers: authed,
+    });
     expect(res.status).toBe(200);
     const { data } = (await res.json()) as { data: { content: string } };
     expect(data.content).toBe("body text");
@@ -224,7 +256,9 @@ describe("POST /artifacts/binary", () => {
 
     const row = await getArtifact(db, data.id);
     expect(row?.tenantId).toBe("acme");
-    expect((row?.source as { generatedBy?: string })?.generatedBy).toBe("run-1");
+    expect((row?.source as { generatedBy?: string })?.generatedBy).toBe(
+      "run-1",
+    );
   });
 
   test("stores an opaque metadata object on version 1", async () => {
@@ -286,7 +320,11 @@ describe("PATCH /artifacts/:id", () => {
   test("sets metadata and returns it in the response", async () => {
     const db = await testDb();
     const app = host(db);
-    const row = await seedArtifact(db, { tenantId: "acme", title: "Draft", content: "v1" });
+    const row = await seedArtifact(db, {
+      tenantId: "acme",
+      title: "Draft",
+      content: "v1",
+    });
 
     const res = await app.request(
       `/artifacts/${row.id}`,
@@ -303,8 +341,15 @@ describe("PATCH /artifacts/:id", () => {
   test("omitting metadata carries the prior version's metadata forward", async () => {
     const db = await testDb();
     const app = host(db);
-    const row = await seedArtifact(db, { tenantId: "acme", title: "Draft", content: "v1" });
-    await app.request(`/artifacts/${row.id}`, patchJson({ metadata: { stage: "draft" } }));
+    const row = await seedArtifact(db, {
+      tenantId: "acme",
+      title: "Draft",
+      content: "v1",
+    });
+    await app.request(
+      `/artifacts/${row.id}`,
+      patchJson({ metadata: { stage: "draft" } }),
+    );
 
     await app.request(`/artifacts/${row.id}`, patchJson({ content: "v3" }));
 
@@ -315,8 +360,15 @@ describe("PATCH /artifacts/:id", () => {
   test("an explicit null metadata clears it", async () => {
     const db = await testDb();
     const app = host(db);
-    const row = await seedArtifact(db, { tenantId: "acme", title: "Draft", content: "v1" });
-    await app.request(`/artifacts/${row.id}`, patchJson({ metadata: { stage: "draft" } }));
+    const row = await seedArtifact(db, {
+      tenantId: "acme",
+      title: "Draft",
+      content: "v1",
+    });
+    await app.request(
+      `/artifacts/${row.id}`,
+      patchJson({ metadata: { stage: "draft" } }),
+    );
 
     await app.request(`/artifacts/${row.id}`, patchJson({ metadata: null }));
 
@@ -329,7 +381,10 @@ describe("PATCH /artifacts/:id", () => {
     const app = host(db);
     const row = await seedArtifact(db, { tenantId: "acme" });
 
-    const res = await app.request(`/artifacts/${row.id}`, patchJson({ metadata: "nope" }));
+    const res = await app.request(
+      `/artifacts/${row.id}`,
+      patchJson({ metadata: "nope" }),
+    );
     expect(res.status).toBe(400);
   });
 

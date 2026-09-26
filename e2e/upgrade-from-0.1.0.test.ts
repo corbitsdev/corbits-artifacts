@@ -7,9 +7,16 @@ import { sql } from "drizzle-orm";
 import * as v010 from "@corbits/artifacts-0.1.0";
 import { runArtifactMigrations } from "../src/index.js";
 import { grant, seedActor, type Actor } from "./fixtures.js";
-import { artifactApp, connectionString, createTestDb, type TestDb } from "./helpers.js";
+import {
+  artifactApp,
+  connectionString,
+  createTestDb,
+  type TestDb,
+} from "./helpers.js";
 
-const PDF = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37, 0x00, 0xff]);
+const PDF = new Uint8Array([
+  0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37, 0x00, 0xff,
+]);
 
 let testDb: TestDb;
 let actor: Actor;
@@ -44,14 +51,23 @@ beforeAll(async () => {
       }),
     );
     fileId = file.id;
-    await v010.writeArtifactVersion(legacy.db, { scope, artifactId: file.id, title: "deck v2.pdf" });
+    await v010.writeArtifactVersion(legacy.db, {
+      scope,
+      artifactId: file.id,
+      title: "deck v2.pdf",
+    });
     await v010.saveMailAttachmentRefs(legacy.db, {
       scope,
       instanceId: "inst-1",
       body: {
         mailId: "mail-1",
         attachments: [
-          { artifactId: file.id, name: "deck.pdf", type: "application/pdf", size: PDF.length },
+          {
+            artifactId: file.id,
+            name: "deck.pdf",
+            type: "application/pdf",
+            size: PDF.length,
+          },
         ],
       },
     });
@@ -81,7 +97,11 @@ const createDoc = (as: Actor) =>
   artifactApp(testDb.db, as).request("/api/artifacts", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ mode: "text", title: "After upgrade", content: "hi" }),
+    body: JSON.stringify({
+      mode: "text",
+      title: "After upgrade",
+      content: "hi",
+    }),
   });
 
 describe("upgrading a 0.1.0 database", () => {
@@ -119,7 +139,9 @@ describe("upgrading a 0.1.0 database", () => {
   test("every version of a 0.1.0 upload downloads its bytes", async () => {
     const app = artifactApp(testDb.db, actor);
     for (const query of ["?version=1", "?version=2", ""]) {
-      const res = await app.request(`/api/artifacts/${fileId}/download${query}`);
+      const res = await app.request(
+        `/api/artifacts/${fileId}/download${query}`,
+      );
       expect(res.status).toBe(200);
       expect(new Uint8Array(await res.arrayBuffer())).toEqual(PDF);
     }
@@ -129,7 +151,10 @@ describe("upgrading a 0.1.0 database", () => {
     const app = artifactApp(testDb.db, actor);
     const revised = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x32]);
     const form = new FormData();
-    form.append("file", new File([revised], "deck.pdf", { type: "application/pdf" }));
+    form.append(
+      "file",
+      new File([revised], "deck.pdf", { type: "application/pdf" }),
+    );
     const res = await app.request(`/api/artifacts/${fileId}/versions`, {
       method: "POST",
       body: form,
@@ -139,7 +164,9 @@ describe("upgrading a 0.1.0 database", () => {
 
     const bytesOf = async (query: string) =>
       new Uint8Array(
-        await (await app.request(`/api/artifacts/${fileId}/download${query}`)).arrayBuffer(),
+        await (
+          await app.request(`/api/artifacts/${fileId}/download${query}`)
+        ).arrayBuffer(),
       );
     expect(await bytesOf("?version=1")).toEqual(PDF);
     expect(await bytesOf("?version=3")).toEqual(revised);

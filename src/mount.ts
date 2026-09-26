@@ -157,7 +157,8 @@ const GeneratedByField = type("unknown")
 // A JSON-body positive integer, distinct from `VersionRef` below (a path/query
 // string). Omitted entirely preserves today's unconditional-write behavior.
 const ExpectedVersion = type("number").narrow(
-  (n, ctx) => (Number.isInteger(n) && n >= 1) || ctx.mustBe("a positive integer"),
+  (n, ctx) =>
+    (Number.isInteger(n) && n >= 1) || ctx.mustBe("a positive integer"),
 );
 
 const ReviseArtifactRequest = type({
@@ -355,8 +356,7 @@ export function createArtifactRoutes({
   async function loadScoped(
     c: Ctx,
   ): Promise<
-    | { row: ArtifactRow; scope: ResolvedPrincipal }
-    | { response: Response }
+    { row: ArtifactRow; scope: ResolvedPrincipal } | { response: Response }
   > {
     const scope = await scopeFor(c);
     if (!scope) return { response: c.json({ error: "Forbidden" }, 403) };
@@ -376,9 +376,24 @@ export function createArtifactRoutes({
       description:
         "Newest-updated first by default. Supports query/kind/owner/date filters, an `updatedAt__id` keyset cursor, and an archived-only toggle. List is discovery only: each item omits `content` (fetch the body via GET /artifacts/:id, download, or tools).",
       parameters: [
-        { name: "query", in: "query", required: false, schema: { type: "string" } },
-        { name: "sort", in: "query", required: false, schema: { type: "string" } },
-        { name: "kind", in: "query", required: false, schema: { type: "string" } },
+        {
+          name: "query",
+          in: "query",
+          required: false,
+          schema: { type: "string" },
+        },
+        {
+          name: "sort",
+          in: "query",
+          required: false,
+          schema: { type: "string" },
+        },
+        {
+          name: "kind",
+          in: "query",
+          required: false,
+          schema: { type: "string" },
+        },
         {
           name: "ownerPrincipalId",
           in: "query",
@@ -397,8 +412,18 @@ export function createArtifactRoutes({
           required: false,
           schema: { type: "string" },
         },
-        { name: "cursor", in: "query", required: false, schema: { type: "string" } },
-        { name: "limit", in: "query", required: false, schema: { type: "integer" } },
+        {
+          name: "cursor",
+          in: "query",
+          required: false,
+          schema: { type: "string" },
+        },
+        {
+          name: "limit",
+          in: "query",
+          required: false,
+          schema: { type: "integer" },
+        },
         {
           name: "archived",
           in: "query",
@@ -435,14 +460,17 @@ export function createArtifactRoutes({
     "/artifacts",
     describeRoute({
       tags: ["Artifacts"],
-      summary: "Import an artifact from an external source (link a URL or paste text)",
+      summary:
+        "Import an artifact from an external source (link a URL or paste text)",
       description:
         "`mode: url` links an external page (content is the URL, origin `imported`); `mode: text` stores a pasted body (origin `manual`). The artifact and its version 1 are written in one transaction. An optional `metadata` object is stored opaquely and returned as-is on every read.",
       responses: {
         201: { description: "Artifact created" },
         400: { description: "Invalid request body" },
         403: { description: "No resolvable principal, or not permitted" },
-        413: { description: "Declared Content-Length over the content ceiling" },
+        413: {
+          description: "Declared Content-Length over the content ceiling",
+        },
       },
     }),
     // Principal and grant before body: an unauthenticated or unpermitted
@@ -465,7 +493,8 @@ export function createArtifactRoutes({
       const raw = await readJson(c);
       if (raw === null) return c.json({ error: "Invalid JSON body" }, 400);
       const body = CreateArtifactRequest(raw);
-      if (body instanceof type.errors) return c.json({ error: body.summary }, 400);
+      if (body instanceof type.errors)
+        return c.json({ error: body.summary }, 400);
 
       const isUrl = body.mode === "url";
       try {
@@ -507,7 +536,9 @@ export function createArtifactRoutes({
         201: { description: "Artifacts created" },
         400: { description: "No files supplied" },
         403: { description: "No resolvable principal, or not permitted" },
-        413: { description: "Too many files, or a file/aggregate over the limit" },
+        413: {
+          description: "Too many files, or a file/aggregate over the limit",
+        },
         415: { description: "A file has an unsupported type" },
       },
     }),
@@ -529,7 +560,10 @@ export function createArtifactRoutes({
       // is ignored, so a client cannot smuggle a label in by accident.
       const generatedBy = GeneratedByField(parsed["generatedBy"]);
       if (generatedBy instanceof type.errors) {
-        return c.json({ error: "generatedBy must be 200 characters or fewer" }, 400);
+        return c.json(
+          { error: "generatedBy must be 200 characters or fewer" },
+          400,
+        );
       }
 
       if (files.length === 0) {
@@ -551,7 +585,9 @@ export function createArtifactRoutes({
       for (const file of files) {
         if (file.size > MAX_UPLOAD_BYTES) {
           return c.json(
-            { error: `File "${file.name}" exceeds the ${MAX_UPLOAD_BYTES} byte limit` },
+            {
+              error: `File "${file.name}" exceeds the ${MAX_UPLOAD_BYTES} byte limit`,
+            },
             413,
           );
         }
@@ -609,14 +645,21 @@ export function createArtifactRoutes({
       responses: {
         200: { description: "`{ all, ...perSegmentCounts }`" },
         403: { description: "Tenant not accessible" },
-        503: { description: "The walk could not finish honestly (capped out, or the cursor stalled)" },
+        503: {
+          description:
+            "The walk could not finish honestly (capped out, or the cursor stalled)",
+        },
       },
     }),
     async (c) => {
       const scope = await scopeFor(c);
       if (!scope) return c.json({ error: "Tenant not accessible" }, 403);
       try {
-        const counts = await countArtifactsBySegments(db, scope.tenantId, countSegments);
+        const counts = await countArtifactsBySegments(
+          db,
+          scope.tenantId,
+          countSegments,
+        );
         return c.json(counts);
       } catch (err) {
         if (err instanceof ArtifactCountsIncompleteError) {
@@ -720,7 +763,12 @@ export function createArtifactRoutes({
         "Same read authorization and response shape as GET /artifacts/:id, pinned to a specific version via getArtifactVersion.",
       parameters: [
         idParam,
-        { name: "version", in: "path", required: true, schema: { type: "integer" } },
+        {
+          name: "version",
+          in: "path",
+          required: true,
+          schema: { type: "integer" },
+        },
       ],
       responses: {
         200: { description: "The version, including content" },
@@ -764,8 +812,13 @@ export function createArtifactRoutes({
         400: { description: "Invalid request body or content" },
         403: { description: "No resolvable principal, or not permitted" },
         404: { description: "Artifact not found" },
-        409: { description: "expectedVersion did not match the current version" },
-        413: { description: "Declared Content-Length over the content ceiling, or a file over the upload limit" },
+        409: {
+          description: "expectedVersion did not match the current version",
+        },
+        413: {
+          description:
+            "Declared Content-Length over the content ceiling, or a file over the upload limit",
+        },
         415: { description: "The file has an unsupported type" },
       },
     }),
@@ -791,7 +844,8 @@ export function createArtifactRoutes({
       const raw = await readJson(c);
       if (raw === null) return c.json({ error: "Invalid JSON body" }, 400);
       const body = ReviseArtifactRequest(raw);
-      if (body instanceof type.errors) return c.json({ error: body.summary }, 400);
+      if (body instanceof type.errors)
+        return c.json({ error: body.summary }, 400);
       try {
         return c.json(
           await writeArtifactVersion(db, {
@@ -823,9 +877,16 @@ export function createArtifactRoutes({
     },
   );
 
-  async function reviseWithFile(c: Ctx, row: ArtifactRow, scope: ResolvedPrincipal) {
+  async function reviseWithFile(
+    c: Ctx,
+    row: ArtifactRow,
+    scope: ResolvedPrincipal,
+  ) {
     if (uploadRefFromSource(row.source) === null) {
-      return c.json({ error: "Only an uploaded file can be revised with a file" }, 400);
+      return c.json(
+        { error: "Only an uploaded file can be revised with a file" },
+        400,
+      );
     }
     const parsed = await c.req.parseBody({ all: true });
     const file = parsed["file"];
@@ -834,20 +895,29 @@ export function createArtifactRoutes({
     }
     if (file.size > MAX_UPLOAD_BYTES) {
       return c.json(
-        { error: `File "${file.name}" exceeds the ${MAX_UPLOAD_BYTES} byte limit` },
+        {
+          error: `File "${file.name}" exceeds the ${MAX_UPLOAD_BYTES} byte limit`,
+        },
         413,
       );
     }
     const rawExpected = parsed["expectedVersion"];
     const expectedVersion =
-      rawExpected === undefined ? undefined : ExpectedVersion(Number(rawExpected));
+      rawExpected === undefined
+        ? undefined
+        : ExpectedVersion(Number(rawExpected));
     if (expectedVersion instanceof type.errors) {
-      return c.json({ error: `expectedVersion ${expectedVersion.summary}` }, 400);
+      return c.json(
+        { error: `expectedVersion ${expectedVersion.summary}` },
+        400,
+      );
     }
     const mimeType = effectiveUploadMime(file, uploadPolicy);
     if (mimeType.length > 0 && uploadArtifactKind(mimeType) !== row.kind) {
       return c.json(
-        { error: `File "${file.name}" would change the artifact's kind from ${row.kind}` },
+        {
+          error: `File "${file.name}" would change the artifact's kind from ${row.kind}`,
+        },
         400,
       );
     }
@@ -922,7 +992,8 @@ export function createArtifactRoutes({
     describeRoute({
       tags: ["Artifacts"],
       summary: "Unarchive an artifact",
-      description: "Clears archived_at so the artifact reappears in listings. Idempotent.",
+      description:
+        "Clears archived_at so the artifact reappears in listings. Idempotent.",
       parameters: [idParam],
       responses: {
         200: { description: "Artifact unarchived" },
@@ -945,8 +1016,18 @@ export function createArtifactRoutes({
         "One path over three storage conventions, in precedence order: out-of-band ContentStore blob, inline data: URL (file/image kinds), then downloadable text (csv-export). Served as an attachment except a PDF with ?inline=1; X-Content-Type-Options: nosniff always. An optional ?version=N serves that version's exact content, including an upload's bytes as of that version; without it, the latest.",
       parameters: [
         idParam,
-        { name: "inline", in: "query", required: false, schema: { type: "string" } },
-        { name: "version", in: "query", required: false, schema: { type: "integer" } },
+        {
+          name: "inline",
+          in: "query",
+          required: false,
+          schema: { type: "string" },
+        },
+        {
+          name: "version",
+          in: "query",
+          required: false,
+          schema: { type: "integer" },
+        },
       ],
       responses: {
         200: { description: "The file body" },
@@ -955,7 +1036,10 @@ export function createArtifactRoutes({
             "Artifact kind is not downloadable, or version is not a positive integer",
         },
         403: { description: "No resolvable principal" },
-        404: { description: "Artifact not found — also the answer for an unknown version" },
+        404: {
+          description:
+            "Artifact not found — also the answer for an unknown version",
+        },
       },
     }),
     async (c) => {
@@ -980,7 +1064,8 @@ export function createArtifactRoutes({
         row,
         c.req.query("inline") === "1",
       );
-      if ("status" in result) return c.json({ error: result.error }, result.status);
+      if ("status" in result)
+        return c.json({ error: result.error }, result.status);
 
       c.header("Content-Type", result.mimeType);
       c.header("X-Content-Type-Options", "nosniff");
@@ -993,7 +1078,9 @@ export function createArtifactRoutes({
       // whole underlying ArrayBuffer, and a ContentStore returning a pooled
       // Buffer (nonzero byteOffset) would leak adjacent, unrelated memory.
       const { buffer, byteOffset, byteLength } = result.body;
-      return c.body(buffer.slice(byteOffset, byteOffset + byteLength) as ArrayBuffer);
+      return c.body(
+        buffer.slice(byteOffset, byteOffset + byteLength) as ArrayBuffer,
+      );
     },
   );
 

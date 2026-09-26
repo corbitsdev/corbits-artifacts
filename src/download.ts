@@ -19,7 +19,10 @@ export type Download = {
 export type DownloadFailure = { status: 404 | 400; error: string };
 
 function csvFilename(title: string): string {
-  const cleaned = title.replace(/[\r\n"\\]/g, "").replace(/\.csv$/i, "").trim();
+  const cleaned = title
+    .replace(/[\r\n"\\]/g, "")
+    .replace(/\.csv$/i, "")
+    .trim();
   return `${cleaned.length > 0 ? cleaned : "export"}.csv`;
 }
 
@@ -31,7 +34,9 @@ function csvFilename(title: string): string {
  * declared type either way.
  */
 export function disposition(mimeType: string, wantsInline: boolean) {
-  return wantsInline && mimeType === "application/pdf" ? "inline" : "attachment";
+  return wantsInline && mimeType === "application/pdf"
+    ? "inline"
+    : "attachment";
 }
 
 /**

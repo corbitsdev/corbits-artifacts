@@ -132,7 +132,9 @@ describe("the artifacts sidecar bundle", () => {
       },
       signal,
     );
-    expect(JSON.parse(String(recorded[0]?.init?.body))).not.toHaveProperty("metadata");
+    expect(JSON.parse(String(recorded[0]?.init?.body))).not.toHaveProperty(
+      "metadata",
+    );
   });
 
   test("reads a pinned version through the read route", async () => {

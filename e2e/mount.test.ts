@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { sql } from "drizzle-orm";
 import { Hono } from "hono";
-import { createRequireGrant, type RequireGrant, type TenantEnv } from "@intx/hub-api";
+import {
+  createRequireGrant,
+  type RequireGrant,
+  type TenantEnv,
+} from "@intx/hub-api";
 import { createInMemoryGrantStore } from "@intx/authz";
 import type { GrantRule } from "@intx/types/authz";
 import { createArtifactRoutes } from "../src/mount.js";
@@ -26,7 +30,10 @@ import { testDb } from "./helpers.js";
 
 /** Places tenant/principal on the context the way a real host's session
  * middleware does, without pinning it to any one `requireGrant` wiring. */
-function withPrincipal(app: Hono<TenantEnv>, principal: ResolvedPrincipal | null) {
+function withPrincipal(
+  app: Hono<TenantEnv>,
+  principal: ResolvedPrincipal | null,
+) {
   app.use("*", async (c, next) => {
     if (principal !== null) {
       const now = new Date(0);
@@ -57,7 +64,10 @@ function withPrincipal(app: Hono<TenantEnv>, principal: ResolvedPrincipal | null
 
 /** A grant minted for exactly one resource/action/principal — deny is simply
  * not minting the matching one, which is how the real store discriminates. */
-function grantRule(over: Partial<GrantRule> & Pick<GrantRule, "resource" | "action" | "principalId">): GrantRule {
+function grantRule(
+  over: Partial<GrantRule> &
+    Pick<GrantRule, "resource" | "action" | "principalId">,
+): GrantRule {
   return {
     id: `grant-${over.resource}-${over.action}-${over.principalId}`,
     effect: "allow",
@@ -149,7 +159,11 @@ describe("POST /artifacts", () => {
 
     const res = await app.request(
       "/artifacts",
-      json({ mode: "url", title: "  Docs  ", content: "https://example.com/a" }),
+      json({
+        mode: "url",
+        title: "  Docs  ",
+        content: "https://example.com/a",
+      }),
     );
     expect(res.status).toBe(201);
     const body = (await res.json()) as { artifact: Record<string, any> };
@@ -168,7 +182,10 @@ describe("POST /artifacts", () => {
       json({ mode: "text", title: "Notes", content: "body" }),
     );
     const body = (await res.json()) as { artifact: Record<string, any> };
-    expect(body.artifact).toMatchObject({ kind: "document", source: { origin: "manual" } });
+    expect(body.artifact).toMatchObject({
+      kind: "document",
+      source: { origin: "manual" },
+    });
   });
 
   test("rejects a non-http URL, a non-URL, and an empty field", async () => {
@@ -194,7 +211,12 @@ describe("POST /artifacts", () => {
     const db = await testDb();
     const res = await host(db).request(
       "/artifacts",
-      json({ mode: "text", title: "Notes", content: "body", metadata: { kind: "run", stage: "draft" } }),
+      json({
+        mode: "text",
+        title: "Notes",
+        content: "body",
+        metadata: { kind: "run", stage: "draft" },
+      }),
     );
     expect(res.status).toBe(201);
     const body = (await res.json()) as { artifact: Record<string, any> };
@@ -353,7 +375,10 @@ describe("GET /artifacts", () => {
       title: "From a run",
       source: { origin: "workflow", runId: "run-1" },
     });
-    await seedArtifact(db, { title: "Hand written", source: { origin: "manual" } });
+    await seedArtifact(db, {
+      title: "Hand written",
+      source: { origin: "manual" },
+    });
 
     // A realistic host decorator: it joins on an id it finds in `source`, and
     // has nothing to say about a row that carries none.
@@ -363,7 +388,8 @@ describe("GET /artifacts", () => {
         for (const row of rows) {
           const runId = row.source.runId;
           const name = typeof runId === "string" ? runs.get(runId) : undefined;
-          if (name !== undefined) (row as Record<string, unknown>).sessionName = name;
+          if (name !== undefined)
+            (row as Record<string, unknown>).sessionName = name;
         }
       },
     });
@@ -382,7 +408,9 @@ describe("GET /artifacts", () => {
     const db = await testDb();
     const app = host(db);
     expect((await app.request("/artifacts?cursor=garbage")).status).toBe(400);
-    expect((await app.request("/artifacts?createdAfter=nonsense")).status).toBe(400);
+    expect((await app.request("/artifacts?createdAfter=nonsense")).status).toBe(
+      400,
+    );
   });
 
   test("a caller-supplied tenant cannot widen the resolved scope", async () => {
@@ -403,7 +431,9 @@ describe("GET /artifacts/:id", () => {
 
     const res = await host(db).request(`/artifacts/${row.id}`);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { artifact: { archivedAt: string | null } };
+    const body = (await res.json()) as {
+      artifact: { archivedAt: string | null };
+    };
     expect(body.artifact.archivedAt).not.toBeNull();
   });
 
@@ -416,7 +446,8 @@ describe("GET /artifacts/:id", () => {
     const db = await testDb();
     const app = host(db);
     expect(
-      (await app.request("/artifacts/00000000-0000-0000-0000-000000000000")).status,
+      (await app.request("/artifacts/00000000-0000-0000-0000-000000000000"))
+        .status,
     ).toBe(404);
 
     const foreign = await seedArtifact(db, { tenantId: "other" });
@@ -489,8 +520,11 @@ describe("every way of not getting an artifact is indistinguishable", () => {
     const db = await testDb();
     const foreign = await seedArtifact(db, { tenantId: "other" });
     expect(
-      (await host(db).request(`/artifacts/${foreign.id}/archive`, { method: "POST" }))
-        .status,
+      (
+        await host(db).request(`/artifacts/${foreign.id}/archive`, {
+          method: "POST",
+        })
+      ).status,
     ).toBe(404);
     const rows = await db.execute<{ archived_at: Date | null }>(
       sql`SELECT "archived_at" FROM "artifacts"."artifact" WHERE "id" = ${foreign.id}`,
@@ -505,10 +539,18 @@ describe("every way of not getting an artifact is indistinguishable", () => {
     const db = await testDb();
     const real = await seedArtifact(db);
     const app = host(db, { principal: null });
-    for (const id of [real.id, "00000000-0000-4000-8000-000000000000", "not-a-uuid"]) {
+    for (const id of [
+      real.id,
+      "00000000-0000-4000-8000-000000000000",
+      "not-a-uuid",
+    ]) {
       for (const [path, init] of detailRoutes(id)) {
         const res = await app.request(path, init);
-        expect({ id, path: path.replace(id, ":id"), status: res.status }).toEqual({
+        expect({
+          id,
+          path: path.replace(id, ":id"),
+          status: res.status,
+        }).toEqual({
           id,
           path: path.replace(id, ":id"),
           status: 403,
@@ -557,7 +599,10 @@ describe("versions", () => {
     const app = host(db);
     const row = await seedArtifact(db, { title: "Draft", content: "v1" });
 
-    const res = await app.request(`/artifacts/${row.id}/versions`, json({ content: "v2" }));
+    const res = await app.request(
+      `/artifacts/${row.id}/versions`,
+      json({ content: "v2" }),
+    );
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ version: 2, title: "Draft" });
 
@@ -582,7 +627,9 @@ describe("versions", () => {
     expect(page1.nextCursor).toBe("2");
 
     const page2 = (await (
-      await app.request(`/artifacts/${row.id}/versions?limit=2&cursor=${page1.nextCursor}`)
+      await app.request(
+        `/artifacts/${row.id}/versions?limit=2&cursor=${page1.nextCursor}`,
+      )
     ).json()) as { versions: { version: number }[]; nextCursor: string | null };
     expect(page2.versions.map((v) => v.version)).toEqual([1]);
     expect(page2.nextCursor).toBeNull();
@@ -595,7 +642,10 @@ describe("versions", () => {
 
     const res = await app.request(
       `/artifacts/${row.id}/versions`,
-      json({ content: "v2", metadata: { kind: "run", supersededByNodeId: null } }),
+      json({
+        content: "v2",
+        metadata: { kind: "run", supersededByNodeId: null },
+      }),
     );
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({
@@ -608,19 +658,34 @@ describe("versions", () => {
     const db = await testDb();
     const app = host(db);
     const row = await seedArtifact(db, { title: "Draft", content: "v1" });
-    await app.request(`/artifacts/${row.id}/versions`, json({ metadata: { kind: "run" } }));
+    await app.request(
+      `/artifacts/${row.id}/versions`,
+      json({ metadata: { kind: "run" } }),
+    );
 
-    const res = await app.request(`/artifacts/${row.id}/versions`, json({ content: "v3" }));
-    expect(await res.json()).toMatchObject({ version: 3, metadata: { kind: "run" } });
+    const res = await app.request(
+      `/artifacts/${row.id}/versions`,
+      json({ content: "v3" }),
+    );
+    expect(await res.json()).toMatchObject({
+      version: 3,
+      metadata: { kind: "run" },
+    });
   });
 
   test("revise with an explicit null metadata clears it", async () => {
     const db = await testDb();
     const app = host(db);
     const row = await seedArtifact(db, { title: "Draft", content: "v1" });
-    await app.request(`/artifacts/${row.id}/versions`, json({ metadata: { kind: "run" } }));
+    await app.request(
+      `/artifacts/${row.id}/versions`,
+      json({ metadata: { kind: "run" } }),
+    );
 
-    const res = await app.request(`/artifacts/${row.id}/versions`, json({ metadata: null }));
+    const res = await app.request(
+      `/artifacts/${row.id}/versions`,
+      json({ metadata: null }),
+    );
     expect(await res.json()).toMatchObject({ version: 3, metadata: null });
   });
 
@@ -629,9 +694,15 @@ describe("versions", () => {
     const app = host(db);
     const row = await seedArtifact(db, { title: "Draft", content: "v1" });
 
-    const res = await app.request(`/artifacts/${row.id}/versions`, json({ metadata: { stage: "final" } }));
+    const res = await app.request(
+      `/artifacts/${row.id}/versions`,
+      json({ metadata: { stage: "final" } }),
+    );
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ version: 2, metadata: { stage: "final" } });
+    expect(await res.json()).toMatchObject({
+      version: 2,
+      metadata: { stage: "final" },
+    });
   });
 
   test("revise rejects a metadata value that is not a JSON object", async () => {
@@ -660,7 +731,10 @@ describe("versions", () => {
   test("a body with neither title nor content is 400", async () => {
     const db = await testDb();
     const row = await seedArtifact(db);
-    const res = await host(db).request(`/artifacts/${row.id}/versions`, json({}));
+    const res = await host(db).request(
+      `/artifacts/${row.id}/versions`,
+      json({}),
+    );
     expect(res.status).toBe(400);
   });
 
@@ -687,7 +761,10 @@ describe("versions", () => {
       json({ content: "v2", expectedVersion: 5 }),
     );
     expect(res.status).toBe(409);
-    expect(await res.json()).toEqual({ error: "Version conflict", currentVersion: 1 });
+    expect(await res.json()).toEqual({
+      error: "Version conflict",
+      currentVersion: 1,
+    });
 
     const history = (await (
       await app.request(`/artifacts/${row.id}/versions`)
@@ -700,7 +777,10 @@ describe("versions", () => {
     const app = host(db);
     const row = await seedArtifact(db, { title: "Draft", content: "v1" });
 
-    const res = await app.request(`/artifacts/${row.id}/versions`, json({ content: "v2" }));
+    const res = await app.request(
+      `/artifacts/${row.id}/versions`,
+      json({ content: "v2" }),
+    );
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ version: 2 });
   });
@@ -721,7 +801,10 @@ describe("versions", () => {
     const db = await testDb();
     const row = await seedArtifact(db);
     await setArtifactArchived(db, row, true);
-    const res = await host(db).request(`/artifacts/${row.id}/versions`, json({ content: "x" }));
+    const res = await host(db).request(
+      `/artifacts/${row.id}/versions`,
+      json({ content: "x" }),
+    );
     expect(res.status).toBe(404);
   });
 });
@@ -731,21 +814,42 @@ describe("GET /artifacts/:id/versions/:version", () => {
     const db = await testDb();
     const app = host(db);
     const row = await seedArtifact(db, { title: "Draft", content: "v1" });
-    await app.request(`/artifacts/${row.id}/versions`, json({ title: "Final", content: "v2" }));
+    await app.request(
+      `/artifacts/${row.id}/versions`,
+      json({ title: "Final", content: "v2" }),
+    );
 
     const res = await app.request(`/artifacts/${row.id}/versions/1`);
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
-      artifact: { version: number; title: string; content: string; contentSha256: string | null };
+      artifact: {
+        version: number;
+        title: string;
+        content: string;
+        contentSha256: string | null;
+      };
     };
-    expect(body.artifact).toMatchObject({ version: 1, title: "Draft", content: "v1" });
+    expect(body.artifact).toMatchObject({
+      version: 1,
+      title: "Draft",
+      content: "v1",
+    });
     expect(body.artifact.contentSha256).toBe(sha256Hex("v1"));
 
     const current = await app.request(`/artifacts/${row.id}/versions/2`);
     const currentBody = (await current.json()) as {
-      artifact: { version: number; title: string; content: string; contentSha256: string | null };
+      artifact: {
+        version: number;
+        title: string;
+        content: string;
+        contentSha256: string | null;
+      };
     };
-    expect(currentBody.artifact).toMatchObject({ version: 2, title: "Final", content: "v2" });
+    expect(currentBody.artifact).toMatchObject({
+      version: 2,
+      title: "Final",
+      content: "v2",
+    });
     expect(currentBody.artifact.contentSha256).toBe(sha256Hex("v2"));
   });
 
@@ -777,7 +881,9 @@ describe("GET /artifacts/:id/versions/:version", () => {
   test("is 403 for an unauthenticated caller", async () => {
     const db = await testDb();
     const row = await seedArtifact(db);
-    const res = await host(db, { principal: null }).request(`/artifacts/${row.id}/versions/1`);
+    const res = await host(db, { principal: null }).request(
+      `/artifacts/${row.id}/versions/1`,
+    );
     expect(res.status).toBe(403);
   });
 });
@@ -850,7 +956,10 @@ describe("archive authorization", () => {
  */
 describe("authorization through the real platform grant evaluator", () => {
   const OWNER: ResolvedPrincipal = SCOPE;
-  const NON_OWNER: ResolvedPrincipal = { tenantId: SCOPE.tenantId, principalId: "someone-else" };
+  const NON_OWNER: ResolvedPrincipal = {
+    tenantId: SCOPE.tenantId,
+    principalId: "someone-else",
+  };
 
   function hostWithGrants(
     db: ArtifactDb,
@@ -875,7 +984,11 @@ describe("authorization through the real platform grant evaluator", () => {
     const db = await testDb();
     const row = await seedArtifact(db, { content: "v1" });
     const grants = [
-      grantRule({ resource: `artifact:${row.id}`, action: "write", principalId: OWNER.principalId }),
+      grantRule({
+        resource: `artifact:${row.id}`,
+        action: "write",
+        principalId: OWNER.principalId,
+      }),
     ];
 
     const ownerRes = await hostWithGrants(db, OWNER, grants).request(
@@ -901,7 +1014,11 @@ describe("authorization through the real platform grant evaluator", () => {
   test("creating needs a create grant on artifact:*; without one, nothing is written", async () => {
     const db = await testDb();
     const grants = [
-      grantRule({ resource: "artifact:*", action: "create", principalId: OWNER.principalId }),
+      grantRule({
+        resource: "artifact:*",
+        action: "create",
+        principalId: OWNER.principalId,
+      }),
     ];
     const body = { mode: "text", title: "Gated", content: "body" };
     const form = () => {
@@ -914,9 +1031,15 @@ describe("authorization through the real platform grant evaluator", () => {
     const ungranted = hostWithGrants(db, NON_OWNER, grants);
 
     expect((await granted.request("/artifacts", json(body))).status).toBe(201);
-    expect((await granted.request("/artifacts/upload", form())).status).toBe(201);
-    expect((await ungranted.request("/artifacts", json(body))).status).toBe(403);
-    expect((await ungranted.request("/artifacts/upload", form())).status).toBe(403);
+    expect((await granted.request("/artifacts/upload", form())).status).toBe(
+      201,
+    );
+    expect((await ungranted.request("/artifacts", json(body))).status).toBe(
+      403,
+    );
+    expect((await ungranted.request("/artifacts/upload", form())).status).toBe(
+      403,
+    );
 
     const rows = await listArtifacts(db, SCOPE.tenantId, {});
     expect(rows.rows.length).toBe(2);
@@ -927,12 +1050,17 @@ describe("authorization through the real platform grant evaluator", () => {
     const row = await seedArtifact(db);
     // The owner can write, but was never granted archive.
     const grants = [
-      grantRule({ resource: `artifact:${row.id}`, action: "write", principalId: OWNER.principalId }),
+      grantRule({
+        resource: `artifact:${row.id}`,
+        action: "write",
+        principalId: OWNER.principalId,
+      }),
     ];
     const app = hostWithGrants(db, OWNER, grants);
 
     expect(
-      (await app.request(`/artifacts/${row.id}/archive`, { method: "POST" })).status,
+      (await app.request(`/artifacts/${row.id}/archive`, { method: "POST" }))
+        .status,
     ).toBe(403);
     const [current] = await db.execute<{ archived_at: Date | null }>(
       sql`SELECT "archived_at" FROM "artifacts"."artifact" WHERE "id" = ${row.id}`,
@@ -945,7 +1073,8 @@ describe("authorization through the real platform grant evaluator", () => {
     const row = await seedArtifact(db);
     const app = hostWithGrants(db, OWNER, []);
     expect(
-      (await app.request(`/artifacts/${row.id}/archive`, { method: "POST" })).status,
+      (await app.request(`/artifacts/${row.id}/archive`, { method: "POST" }))
+        .status,
     ).toBe(403);
   });
 
@@ -967,7 +1096,10 @@ describe("authorization through the real platform grant evaluator", () => {
       ["ghost id", "00000000-0000-4000-8000-000000000000"],
       ["cross-tenant", foreign.id],
     ] as [string, string][]) {
-      const res = await app.request(`/artifacts/${id}/versions`, json({ content: "x" }));
+      const res = await app.request(
+        `/artifacts/${id}/versions`,
+        json({ content: "x" }),
+      );
       expect({ cause, status: res.status, body: await res.json() }).toEqual({
         cause,
         status: 404,
@@ -1027,7 +1159,10 @@ describe("onArtifactCreated: the host's grant-provisioning seam", () => {
       }),
     );
 
-    await app.request("/artifacts", json({ mode: "text", title: "Orphan?", content: "body" }));
+    await app.request(
+      "/artifacts",
+      json({ mode: "text", title: "Orphan?", content: "body" }),
+    );
     const rows = await listArtifacts(db, SCOPE.tenantId, {});
     expect(rows.rows.length).toBe(0);
   });
@@ -1050,7 +1185,10 @@ describe("onArtifactCreated: the host's grant-provisioning seam", () => {
     const form = new FormData();
     form.append("files", new File(["a"], "a.txt", { type: "text/plain" }));
     form.append("files", new File(["b"], "b.txt", { type: "text/plain" }));
-    const res = await app.request("/artifacts/upload", { method: "POST", body: form });
+    const res = await app.request("/artifacts/upload", {
+      method: "POST",
+      body: form,
+    });
     const body = (await res.json()) as { artifacts: { id: string }[] };
     expect(ids.sort()).toEqual(body.artifacts.map((a) => a.id).sort());
   });
@@ -1067,21 +1205,32 @@ describe("POST /artifacts/upload", () => {
   test("mints one artifact per file and serves the bytes back", async () => {
     const db = await testDb();
     const app = host(db);
-    const png = new File([new Uint8Array([1, 2, 3])], "logo.png", { type: "image/png" });
+    const png = new File([new Uint8Array([1, 2, 3])], "logo.png", {
+      type: "image/png",
+    });
     const txt = new File(["hello"], "notes.txt", { type: "text/plain" });
 
-    const res = await app.request("/artifacts/upload", form([png, txt], "Import"));
+    const res = await app.request(
+      "/artifacts/upload",
+      form([png, txt], "Import"),
+    );
     expect(res.status).toBe(201);
-    const body = (await res.json()) as { artifacts: { id: string; kind: string }[] };
+    const body = (await res.json()) as {
+      artifacts: { id: string; kind: string }[];
+    };
     expect(body.artifacts.map((a) => a.kind)).toEqual(["image", "file"]);
 
-    const download = await app.request(`/artifacts/${body.artifacts[0]!.id}/download`);
+    const download = await app.request(
+      `/artifacts/${body.artifacts[0]!.id}/download`,
+    );
     expect(download.headers.get("content-type")).toBe("image/png");
     expect(download.headers.get("x-content-type-options")).toBe("nosniff");
     expect(download.headers.get("content-disposition")).toBe(
       'attachment; filename="logo.png"',
     );
-    expect(new Uint8Array(await download.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
+    expect(new Uint8Array(await download.arrayBuffer())).toEqual(
+      new Uint8Array([1, 2, 3]),
+    );
   });
 
   test("rejects an empty body, an unsupported type, and too many files", async () => {
@@ -1102,7 +1251,9 @@ describe("POST /artifacts/upload", () => {
       { length: MAX_UPLOAD_FILE_COUNT + 1 },
       (_v, i) => new File(["a"], `f${i}.txt`, { type: "text/plain" }),
     );
-    expect((await app.request("/artifacts/upload", form(many))).status).toBe(413);
+    expect((await app.request("/artifacts/upload", form(many))).status).toBe(
+      413,
+    );
   });
 
   test("one rejected file aborts the whole batch — no partial import", async () => {
@@ -1111,8 +1262,12 @@ describe("POST /artifacts/upload", () => {
     const ok = new File(["a"], "good.txt", { type: "text/plain" });
     const bad = new File(["b"], "bad.svg", { type: "image/svg+xml" });
 
-    expect((await app.request("/artifacts/upload", form([ok, bad]))).status).toBe(415);
-    const list = (await (await app.request("/artifacts")).json()) as { artifacts: unknown[] };
+    expect(
+      (await app.request("/artifacts/upload", form([ok, bad]))).status,
+    ).toBe(415);
+    const list = (await (await app.request("/artifacts")).json()) as {
+      artifacts: unknown[];
+    };
     expect(list.artifacts.length).toBe(0);
   });
 
@@ -1129,13 +1284,21 @@ describe("POST /artifacts/upload", () => {
     const db = await testDb();
     const app = host(db);
 
-    const over = new File([bulk(MAX_UPLOAD_BYTES + 1)], "huge.txt", { type: "text/plain" });
+    const over = new File([bulk(MAX_UPLOAD_BYTES + 1)], "huge.txt", {
+      type: "text/plain",
+    });
     const rejected = await app.request("/artifacts/upload", form([over]));
     expect(rejected.status).toBe(413);
-    expect(((await rejected.json()) as { error: string }).error).toContain("huge.txt");
+    expect(((await rejected.json()) as { error: string }).error).toContain(
+      "huge.txt",
+    );
 
-    const atLimit = new File([bulk(MAX_UPLOAD_BYTES)], "exact.txt", { type: "text/plain" });
-    expect((await app.request("/artifacts/upload", form([atLimit]))).status).toBe(201);
+    const atLimit = new File([bulk(MAX_UPLOAD_BYTES)], "exact.txt", {
+      type: "text/plain",
+    });
+    expect(
+      (await app.request("/artifacts/upload", form([atLimit]))).status,
+    ).toBe(201);
   });
 
   test("a batch over the 100MB aggregate is 413 even though every file is legal", async () => {
@@ -1154,9 +1317,13 @@ describe("POST /artifacts/upload", () => {
 
     const res = await app.request("/artifacts/upload", form(files));
     expect(res.status).toBe(413);
-    expect(((await res.json()) as { error: string }).error).toContain("aggregate");
+    expect(((await res.json()) as { error: string }).error).toContain(
+      "aggregate",
+    );
 
-    const list = (await (await app.request("/artifacts")).json()) as { artifacts: unknown[] };
+    const list = (await (await app.request("/artifacts")).json()) as {
+      artifacts: unknown[];
+    };
     expect(list.artifacts.length).toBe(0);
   });
 
@@ -1170,7 +1337,9 @@ describe("POST /artifacts/upload", () => {
     );
     const res = await app.request("/artifacts/upload", form(files));
     expect(res.status).toBe(201);
-    expect(((await res.json()) as { artifacts: unknown[] }).artifacts.length).toBe(files.length);
+    expect(
+      ((await res.json()) as { artifacts: unknown[] }).artifacts.length,
+    ).toBe(files.length);
   }, 60_000);
 });
 
@@ -1204,7 +1373,9 @@ describe("download over HTTP", () => {
     const id = created.artifacts[0]!.id;
 
     expect(
-      (await app.request(`/artifacts/${id}/download`)).headers.get("content-disposition"),
+      (await app.request(`/artifacts/${id}/download`)).headers.get(
+        "content-disposition",
+      ),
     ).toStartWith("attachment;");
     expect(
       (await app.request(`/artifacts/${id}/download?inline=1`)).headers.get(
@@ -1216,15 +1387,24 @@ describe("download over HTTP", () => {
   test("a non-downloadable kind is 400", async () => {
     const db = await testDb();
     const row = await seedArtifact(db, { kind: "document" });
-    expect((await host(db).request(`/artifacts/${row.id}/download`)).status).toBe(400);
+    expect(
+      (await host(db).request(`/artifacts/${row.id}/download`)).status,
+    ).toBe(400);
   });
 
   test("?version=N downloads that version's content; omitted downloads current", async () => {
     const db = await testDb();
     const app = host(db);
-    const row = await seedArtifact(db, { kind: "csv-export", title: "Keywords", content: "a,b" });
+    const row = await seedArtifact(db, {
+      kind: "csv-export",
+      title: "Keywords",
+      content: "a,b",
+    });
     // The revise route trims content (TrimmedNonEmpty), same as create.
-    await app.request(`/artifacts/${row.id}/versions`, json({ content: "c,d" }));
+    await app.request(
+      `/artifacts/${row.id}/versions`,
+      json({ content: "c,d" }),
+    );
 
     const v1 = await app.request(`/artifacts/${row.id}/download?version=1`);
     expect(await v1.text()).toBe("a,b");
@@ -1236,14 +1416,18 @@ describe("download over HTTP", () => {
   test("download with an unknown ?version is 404", async () => {
     const db = await testDb();
     const row = await seedArtifact(db, { kind: "csv-export" });
-    const res = await host(db).request(`/artifacts/${row.id}/download?version=99`);
+    const res = await host(db).request(
+      `/artifacts/${row.id}/download?version=99`,
+    );
     expect(res.status).toBe(404);
   });
 
   test("download with a non-integer ?version is 400", async () => {
     const db = await testDb();
     const row = await seedArtifact(db, { kind: "csv-export" });
-    const res = await host(db).request(`/artifacts/${row.id}/download?version=0`);
+    const res = await host(db).request(
+      `/artifacts/${row.id}/download?version=0`,
+    );
     expect(res.status).toBe(400);
   });
 
@@ -1259,16 +1443,26 @@ describe("download over HTTP", () => {
     ).json()) as { artifacts: { id: string }[] };
     const id = created.artifacts[0]!.id;
     const revise = new FormData();
-    revise.append("file", new File([second], "chart-v2.png", { type: "image/png" }));
+    revise.append(
+      "file",
+      new File([second], "chart-v2.png", { type: "image/png" }),
+    );
     const revised = await app.request(`/artifacts/${id}/versions`, {
       method: "POST",
       body: revise,
     });
     expect(revised.status).toBe(200);
-    expect(await revised.json()).toMatchObject({ version: 2, title: "chart.png" });
+    expect(await revised.json()).toMatchObject({
+      version: 2,
+      title: "chart.png",
+    });
 
     const bytesOf = async (query: string) =>
-      new Uint8Array(await (await app.request(`/artifacts/${id}/download${query}`)).arrayBuffer());
+      new Uint8Array(
+        await (
+          await app.request(`/artifacts/${id}/download${query}`)
+        ).arrayBuffer(),
+      );
     expect(await bytesOf("?version=1")).toEqual(first);
     expect(await bytesOf("?version=2")).toEqual(second);
     expect(await bytesOf("")).toEqual(second);
@@ -1280,8 +1474,12 @@ describe("download over HTTP", () => {
     const reviseWith = (id: string, file: File, expectedVersion?: string) => {
       const form = new FormData();
       form.append("file", file);
-      if (expectedVersion !== undefined) form.append("expectedVersion", expectedVersion);
-      return app.request(`/artifacts/${id}/versions`, { method: "POST", body: form });
+      if (expectedVersion !== undefined)
+        form.append("expectedVersion", expectedVersion);
+      return app.request(`/artifacts/${id}/versions`, {
+        method: "POST",
+        body: form,
+      });
     };
     const png = new File([new Uint8Array([1])], "a.png", { type: "image/png" });
 
@@ -1294,7 +1492,9 @@ describe("download over HTTP", () => {
       await app.request("/artifacts/upload", { method: "POST", body: data })
     ).json()) as { artifacts: { id: string }[] };
     const id = created.artifacts[0]!.id;
-    const pdf = new File([new Uint8Array([2])], "a.pdf", { type: "application/pdf" });
+    const pdf = new File([new Uint8Array([2])], "a.pdf", {
+      type: "application/pdf",
+    });
     expect((await reviseWith(id, pdf)).status).toBe(400);
     expect((await reviseWith(id, png, "7")).status).toBe(409);
     expect((await reviseWith(id, png, "zero")).status).toBe(400);
@@ -1315,7 +1515,9 @@ describe("download over HTTP", () => {
     ).json()) as { artifacts: { id: string; version: number }[] };
     const { id, version } = created.artifacts[0]!;
 
-    const res = await app.request(`/artifacts/${id}/download?version=${version}`);
+    const res = await app.request(
+      `/artifacts/${id}/download?version=${version}`,
+    );
     expect(res.status).toBe(200);
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(bytes);
   });
@@ -1362,11 +1564,15 @@ describe("post-commit side effects never turn a committed write into a 500", () 
     const row = await seedArtifact(db, { title: "Put away" });
     const app = host(db, exploding);
 
-    const archived = await app.request(`/artifacts/${row.id}/archive`, { method: "POST" });
+    const archived = await app.request(`/artifacts/${row.id}/archive`, {
+      method: "POST",
+    });
     expect(archived.status).toBe(200);
     expect(((await archived.json()) as any).artifact.archivedAt).not.toBeNull();
 
-    const restored = await app.request(`/artifacts/${row.id}/unarchive`, { method: "POST" });
+    const restored = await app.request(`/artifacts/${row.id}/unarchive`, {
+      method: "POST",
+    });
     expect(restored.status).toBe(200);
     expect(((await restored.json()) as any).artifact.archivedAt).toBeNull();
   });
@@ -1411,24 +1617,36 @@ describe("no-principal response: every route matches the cross-core rule", () =>
     const app = host(db, { principal: null });
 
     expect(
-      (await app.request("/artifacts", json({ mode: "text", title: "t", content: "b" })))
-        .status,
+      (
+        await app.request(
+          "/artifacts",
+          json({ mode: "text", title: "t", content: "b" }),
+        )
+      ).status,
     ).toBe(403);
 
     const form = new FormData();
     form.append("file", new File(["hi"], "a.txt", { type: "text/plain" }));
     expect(
-      (await app.request("/artifacts/upload", { method: "POST", body: form })).status,
+      (await app.request("/artifacts/upload", { method: "POST", body: form }))
+        .status,
     ).toBe(403);
 
     expect(
-      (await app.request(`/artifacts/${row.id}/versions`, json({ content: "x" }))).status,
+      (
+        await app.request(
+          `/artifacts/${row.id}/versions`,
+          json({ content: "x" }),
+        )
+      ).status,
     ).toBe(403);
     expect(
-      (await app.request(`/artifacts/${row.id}/archive`, { method: "POST" })).status,
+      (await app.request(`/artifacts/${row.id}/archive`, { method: "POST" }))
+        .status,
     ).toBe(403);
     expect(
-      (await app.request(`/artifacts/${row.id}/unarchive`, { method: "POST" })).status,
+      (await app.request(`/artifacts/${row.id}/unarchive`, { method: "POST" }))
+        .status,
     ).toBe(403);
   });
 
@@ -1438,7 +1656,10 @@ describe("no-principal response: every route matches the cross-core rule", () =>
     const db = await testDb();
     const before = await listArtifacts(db, SCOPE.tenantId, {});
     const app = host(db, { principal: null });
-    await app.request("/artifacts", json({ mode: "text", title: "ghost", content: "b" }));
+    await app.request(
+      "/artifacts",
+      json({ mode: "text", title: "ghost", content: "b" }),
+    );
     const after = await listArtifacts(db, SCOPE.tenantId, {});
     expect(after.rows.length).toBe(before.rows.length);
   });
@@ -1451,7 +1672,9 @@ describe("hardening regressions", () => {
     const revise = (app: Hono<TenantEnv>) =>
       app.request(`/artifacts/${row.id}/versions`, json({ content: "hijack" }));
 
-    expect((await revise(host(db, { authorize: () => false }))).status).toBe(403);
+    expect((await revise(host(db, { authorize: () => false }))).status).toBe(
+      403,
+    );
 
     const checks: { resource: string; action: string }[] = [];
     const allowed = host(db, {
@@ -1461,7 +1684,9 @@ describe("hardening regressions", () => {
       },
     });
     expect((await revise(allowed)).status).toBe(200);
-    expect(checks).toEqual([{ resource: `artifact:${row.id}`, action: "write" }]);
+    expect(checks).toEqual([
+      { resource: `artifact:${row.id}`, action: "write" },
+    ]);
   });
 
   test("kind must agree with mode on import", async () => {
@@ -1474,7 +1699,12 @@ describe("hardening regressions", () => {
     expect(linkAsText.status).toBe(400);
     const docAsUrl = await app.request(
       "/artifacts",
-      json({ mode: "url", title: "t", content: "https://x.example", kind: "document" }),
+      json({
+        mode: "url",
+        title: "t",
+        content: "https://x.example",
+        kind: "document",
+      }),
     );
     expect(docAsUrl.status).toBe(400);
   });
@@ -1485,7 +1715,10 @@ describe("hardening regressions", () => {
     const form = new FormData();
     form.append("file", new File(["x"], "a.txt", { type: "text/plain" }));
     form.append("comment", "stray text field");
-    const res = await app.request("/artifacts/upload", { method: "POST", body: form });
+    const res = await app.request("/artifacts/upload", {
+      method: "POST",
+      body: form,
+    });
     expect(res.status).toBe(201);
     const { artifacts } = (await res.json()) as any;
     expect(artifacts[0].source.generatedBy).toBeUndefined();
@@ -1494,7 +1727,8 @@ describe("hardening regressions", () => {
     over.append("file", new File(["x"], "a.txt", { type: "text/plain" }));
     over.append("generatedBy", "x".repeat(201));
     expect(
-      (await app.request("/artifacts/upload", { method: "POST", body: over })).status,
+      (await app.request("/artifacts/upload", { method: "POST", body: over }))
+        .status,
     ).toBe(400);
   });
 
@@ -1502,8 +1736,14 @@ describe("hardening regressions", () => {
     const db = await testDb();
     const app = host(db);
     const form = new FormData();
-    form.append("file", new File(["pdf bytes"], "résumé—final.pdf", { type: "application/pdf" }));
-    const up = await app.request("/artifacts/upload", { method: "POST", body: form });
+    form.append(
+      "file",
+      new File(["pdf bytes"], "résumé—final.pdf", { type: "application/pdf" }),
+    );
+    const up = await app.request("/artifacts/upload", {
+      method: "POST",
+      body: form,
+    });
     expect(up.status).toBe(201);
     const { artifacts } = (await up.json()) as any;
 
@@ -1529,10 +1769,20 @@ describe("hardening regressions", () => {
     const app = host(db, { contentStore: store });
     const row = await seedArtifact(db, {
       kind: "file",
-      source: { origin: "imported", upload: { id: "u-1", filename: "view.bin", mimeType: "application/octet-stream", size: 3 } },
+      source: {
+        origin: "imported",
+        upload: {
+          id: "u-1",
+          filename: "view.bin",
+          mimeType: "application/octet-stream",
+          size: 3,
+        },
+      },
     });
     const res = await app.request(`/artifacts/${row.id}/download`);
-    expect(new Uint8Array(await res.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(
+      new Uint8Array([1, 2, 3]),
+    );
   });
 });
 
@@ -1573,7 +1823,9 @@ describe("GET /artifacts/counts", () => {
     );
     await seedArtifact(db, { tenantId: "other" });
     await setArtifactArchived(db, await seedArtifact(db), true);
-    const app = host(db, { countSegments: { document: (row) => row.kind === "document" } });
+    const app = host(db, {
+      countSegments: { document: (row) => row.kind === "document" },
+    });
 
     const res = await app.request("/artifacts/counts");
     expect(await res.json()).toEqual({ all: 120, document: 120 });
@@ -1604,15 +1856,23 @@ describe("GET /artifacts/:id/preview", () => {
     const db = await testDb();
     const app = host(db);
     const form = new FormData();
-    form.append("file", new File(["<h1>hi</h1>"], "page.html", { type: "text/html" }));
-    const up = await app.request("/artifacts/upload", { method: "POST", body: form });
+    form.append(
+      "file",
+      new File(["<h1>hi</h1>"], "page.html", { type: "text/html" }),
+    );
+    const up = await app.request("/artifacts/upload", {
+      method: "POST",
+      body: form,
+    });
     const { artifacts } = (await up.json()) as { artifacts: { id: string }[] };
 
     const res = await app.request(`/artifacts/${artifacts[0]!.id}/preview`);
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("<h1>hi</h1>");
     expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
-    expect(res.headers.get("content-security-policy")).toContain("sandbox allow-scripts");
+    expect(res.headers.get("content-security-policy")).toContain(
+      "sandbox allow-scripts",
+    );
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     expect(res.headers.get("x-frame-options")).toBeNull();
   });
@@ -1620,7 +1880,10 @@ describe("GET /artifacts/:id/preview", () => {
   test("415s a non-HTML artifact instead of serving it", async () => {
     const db = await testDb();
     const app = host(db);
-    const row = await seedArtifact(db, { kind: "document", content: "plain text" });
+    const row = await seedArtifact(db, {
+      kind: "document",
+      content: "plain text",
+    });
 
     const res = await app.request(`/artifacts/${row.id}/preview`);
     expect(res.status).toBe(415);
@@ -1636,7 +1899,10 @@ describe("GET /artifacts/:id/preview", () => {
   test("404s another tenant's artifact", async () => {
     const db = await testDb();
     const app = host(db);
-    const foreign = await seedArtifact(db, { tenantId: "other", kind: "document" });
+    const foreign = await seedArtifact(db, {
+      tenantId: "other",
+      kind: "document",
+    });
     const res = await app.request(`/artifacts/${foreign.id}/preview`);
     expect(res.status).toBe(404);
   });
