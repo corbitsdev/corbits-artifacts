@@ -1,7 +1,5 @@
 # @corbits/artifacts
 
-[![npm](https://img.shields.io/npm/v/@corbits/artifacts.svg)](https://www.npmjs.com/package/@corbits/artifacts) [![License: LGPL-2.1](https://img.shields.io/badge/license-LGPL--2.1-green.svg)](https://github.com/corbitsdev/corbits-artifacts/blob/main/LICENSE)
-
 Versioned documents and files for Interchange agents and their users: a Corbits hub module that mounts grant-gated Hono routes on `@intx/hub-api`, keeps versions in Postgres and bytes in a pluggable `ContentStore`, and ships agent tools for the sidecar.
 
 ## Why @corbits/artifacts?
@@ -177,8 +175,6 @@ export function buildAssistant(sources: readonly InferencePreference[]) {
 - That boot drops the 0.1.0 migration ledger. You cannot roll back to 0.1.0, and 0.1.0 and 0.2.0 replicas must not share a database.
 - The drizzle tables, the `web_site` helpers, `SKILL_DRAFT_KIND`, `windowContent` and the mail-attachment routes and helpers are removed. The `mail_attachment_ref` table is dropped.
 - Node 24 or newer is required.
-
-See the [changelog](https://github.com/corbitsdev/corbits-artifacts/blob/main/CHANGELOG.md) for the full list.
 
 ## License
 
