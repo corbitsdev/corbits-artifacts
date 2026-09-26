@@ -91,7 +91,7 @@ Change one, change the other, in the same commit.
 ## Pull requests
 
 - Keep commits focused, and keep the diff to the change you are describing.
-- Explain *why* in the commit message; the code already says what.
+- Explain _why_ in the commit message; the code already says what.
 - CI must be green: typecheck, unit + integration, build, reference-host
   acceptance, and a Node consumer smoke test that installs the packed tarball.
 - Contributions are accepted under the repository's LGPL-2.1-only licence.
@@ -103,7 +103,7 @@ How the package is put together and why. Mount options and snippets are in the
 
 ### Where the routes are served
 
-The core registers root-relative paths (`/artifacts*`) and takes no base path, so the *mount point*
+The core registers root-relative paths (`/artifacts*`) and takes no base path, so the _mount point_
 is the host's decision. The convention every `@corbits/*-core` package
 documents, and every example here demonstrates, is **`/api`** — the same prefix
 Interchange serves its own routes under (`app.route("/api/me", …)`,
@@ -130,7 +130,7 @@ composes beneath Interchange auth + tenant middleware. The host places full
 and never invents a second principal resolution path.
 
 Three options have no sensible default — `db`, `contentStore`, `requireGrant` —
-and the rest degrade a *feature*, never safety, when omitted. The README's option
+and the rest degrade a _feature_, never safety, when omitted. The README's option
 tables are the reference; what matters architecturally is
 that optional seams **fail closed**: no `decorate` means no decoration.
 
@@ -175,8 +175,8 @@ only handing it the row and the scope that made it.
 ### Row decoration
 
 `decorate`'s display-only status is a contract, not a convention: it may add
-fields to rows on their way out and must never affect *what* is returned or
-*who* may see it. Joining a host's workflow tables inside this package would
+fields to rows on their way out and must never affect _what_ is returned or
+_who_ may see it. Joining a host's workflow tables inside this package would
 couple it to a schema it must not know, so the host supplies the decorator.
 Clients that need an owner display name resolve `ownerPrincipalId` themselves;
 this package never ships directory names on the wire.
@@ -225,16 +225,16 @@ which store is installed.
 
 ### Modules
 
-| File | Role |
-| --- | --- |
-| `mount.ts` | HTTP surface: parsing, validation, status codes; reads `TenantEnv` principal; wires host `requireGrant`. |
-| `artifacts.ts` | The core domain — create, revise, find-or-version, list, get, archive, serialize. |
-| `uploads.ts` | `createFileArtifact`, the MIME policies, and the size caps. |
-| `download.ts` | One download path over the three storage conventions. |
-| `content-store.ts` | The two shipped `ContentStore` implementations. |
-| `tools.ts` | Agent-facing tool definitions and windowed artifact reads (caller tenant only). |
-| `ports.ts` | The `ContentStore` type and the shared `ResolvedPrincipal` shape. |
-| `schema.ts` / `migrations.ts` | The three tables, and the DDL that creates them. |
+| File                          | Role                                                                                                     |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `mount.ts`                    | HTTP surface: parsing, validation, status codes; reads `TenantEnv` principal; wires host `requireGrant`. |
+| `artifacts.ts`                | The core domain — create, revise, find-or-version, list, get, archive, serialize.                        |
+| `uploads.ts`                  | `createFileArtifact`, the MIME policies, and the size caps.                                              |
+| `download.ts`                 | One download path over the three storage conventions.                                                    |
+| `content-store.ts`            | The two shipped `ContentStore` implementations.                                                          |
+| `tools.ts`                    | Agent-facing tool definitions and windowed artifact reads (caller tenant only).                          |
+| `ports.ts`                    | The `ContentStore` type and the shared `ResolvedPrincipal` shape.                                        |
+| `schema.ts` / `migrations.ts` | The three tables, and the DDL that creates them.                                                         |
 
 ### Data model
 
@@ -265,7 +265,7 @@ never plants a cross-tenant principal. Operators cleaning legacy rows before the
 the migration fails with an explicit message if null `tenant_id` rows remain.
 
 **`kind` is free-form text, not a pg enum,** validated at the application edge.
-New kinds cost no migration. What is *not* free-form is the import allowlist:
+New kinds cost no migration. What is _not_ free-form is the import allowlist:
 `POST /api/artifacts` may only mint `link` or `document`, so an untrusted caller
 cannot stamp a file-shaped, downloadable kind onto a row whose content is a URL
 or a pasted body.
@@ -297,8 +297,8 @@ every one of those paths — a coworker uploading `report.pdf` twice, or two
 agents each linking a file named `notes.md`, are not bugs. A hard
 `UNIQUE(tenant_id, title, kind)` constraint would reject those ordinary
 inserts outright, not just gate on a one-time backfill of legacy
-duplicates. Uniqueness on that triple is a property of the *find-or-version
-pattern specifically*, not an invariant of the table, so it does not belong
+duplicates. Uniqueness on that triple is a property of the _find-or-version
+pattern specifically_, not an invariant of the table, so it does not belong
 in the schema — it belongs exactly where it now lives, inside the one code
 path that promises it.
 
@@ -320,7 +320,7 @@ callers for a different tenant, kind, or title never contend with each
 other. This guarantee holds only for callers that go through
 `findOrVersionArtifact`; a caller that instead calls `createArtifact`
 directly is unconstrained by design, as above, and a caller that hand-rolls
-its own find-then-create against a *different* lock is not serialized
+its own find-then-create against a _different_ lock is not serialized
 against this one — the primitive closes the race for its own call path, not
 for every possible way to write an artifact.
 
@@ -329,7 +329,7 @@ upload eagerly mints its artifact, and the row is reachable only through
 `source.upload.id`.
 
 The list index is `(tenant_id, updated_at, id)`. The `id` is the list's
-tie-break and must be *in* the index, or the keyset cursor's row-value
+tie-break and must be _in_ the index, or the keyset cursor's row-value
 comparison falls out of the index condition into a filter and drags a sort
 behind it.
 
@@ -381,7 +381,7 @@ authenticated `tenant`/`principal` on the request context; the host's
 
 - **No file parsing, ever.** No PDF parser, no spreadsheet parser, no text
   extractor, and none is planned. An extractor is a heavyweight, fast-moving
-  native dependency, and what the extracted text is *for* is the host's product.
+  native dependency, and what the extracted text is _for_ is the host's product.
   The contract the package offers a parsing host instead is **parse before you
   store**: `createFileArtifact` is the only way a file becomes an artifact, so a
   host that parses first and fails leaves nothing orphaned.

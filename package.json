@@ -1,38 +1,38 @@
 {
   "name": "@corbits/artifacts",
   "version": "0.2.0",
-  "type": "module",
-  "license": "LGPL-2.1-only",
   "description": "Artifacts, versions and uploads with a pluggable ContentStore, mountable onto any Interchange host. Requires @intx 0.4.0 or newer.",
   "keywords": [
+    "artifacts",
+    "content-store",
     "corbits",
+    "drizzle",
+    "hono",
     "interchange",
     "intx",
-    "artifacts",
-    "uploads",
-    "content-store",
-    "hono",
-    "drizzle",
-    "postgres"
+    "postgres",
+    "uploads"
   ],
-  "author": "Sawyer Cutler <sawyer@dirtroad.dev>",
   "homepage": "https://github.com/corbitsdev/corbits-artifacts#readme",
+  "bugs": {
+    "url": "https://github.com/corbitsdev/corbits-artifacts/issues"
+  },
+  "license": "LGPL-2.1-only",
+  "author": "Sawyer Cutler <sawyer@dirtroad.dev>",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/corbitsdev/corbits-artifacts.git"
   },
-  "bugs": {
-    "url": "https://github.com/corbitsdev/corbits-artifacts/issues"
-  },
-  "publishConfig": {
-    "access": "public"
-  },
-  "corbits": {
-    "minimumIntxVersion": "0.4.0"
-  },
+  "files": [
+    "dist",
+    "migrations",
+    "LICENSE",
+    "README.md"
+  ],
+  "type": "module",
+  "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -43,14 +43,8 @@
       "default": "./dist/sidecar-bundle.js"
     }
   },
-  "files": [
-    "dist",
-    "migrations",
-    "LICENSE",
-    "README.md"
-  ],
-  "engines": {
-    "node": ">=24"
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -58,45 +52,56 @@
     "prepack": "bun run build",
     "test": "bun test src",
     "test:e2e": "bun test e2e",
-    "test:coverage": "bun test --coverage src e2e"
+    "test:coverage": "bun test --coverage src e2e",
+    "lint": "oxlint",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check"
   },
   "dependencies": {
     "@hono/standard-validator": "^0.2.3",
     "arktype": "^2.2.3"
   },
-  "peerDependencies": {
-    "@intx/types": "^0.4.0",
-    "drizzle-orm": "^0.45.2",
-    "hono": "^4.12.32",
-    "hono-openapi": "^1.2.0",
-    "postgres": "^3.4.9",
-    "@intx/hub-api": "^0.4.0",
-    "@intx/agent": "^0.4.0",
-    "@intx/db": "^0.4.0"
-  },
-  "peerDependenciesMeta": {
-    "@intx/agent": {
-      "optional": true
-    }
-  },
   "devDependencies": {
     "@corbits/artifacts-0.1.0": "npm:@corbits/artifacts@0.1.0",
+    "@intx/agent": "0.4.0",
+    "@intx/authz": "0.4.0",
+    "@intx/db": "0.4.0",
+    "@intx/hub-api": "0.4.0",
+    "@intx/hub-common": "0.4.0",
+    "@intx/hub-sessions": "0.4.0",
     "@intx/types": "0.4.0",
     "@types/bun": "1.1.14",
     "@types/node": "22.10.5",
     "drizzle-orm": "0.45.2",
     "hono": "4.12.32",
     "hono-openapi": "1.2.0",
+    "oxfmt": "0.70.0",
+    "oxlint": "1.85.0",
     "postgres": "3.4.9",
-    "typescript": "5.7.2",
-    "@intx/hub-api": "0.4.0",
-    "@intx/authz": "0.4.0",
-    "@intx/agent": "0.4.0",
-    "@intx/db": "0.4.0",
-    "@intx/hub-common": "0.4.0",
-    "@intx/hub-sessions": "0.4.0"
+    "typescript": "5.7.2"
+  },
+  "peerDependencies": {
+    "@intx/agent": "^0.4.0",
+    "@intx/db": "^0.4.0",
+    "@intx/hub-api": "^0.4.0",
+    "@intx/types": "^0.4.0",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.12.32",
+    "hono-openapi": "^1.2.0",
+    "postgres": "^3.4.9"
+  },
+  "peerDependenciesMeta": {
+    "@intx/agent": {
+      "optional": true
+    }
   },
   "overrides": {
     "drizzle-orm": "0.45.2"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "corbits": {
+    "minimumIntxVersion": "0.4.0"
   }
 }

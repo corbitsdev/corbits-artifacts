@@ -45,7 +45,10 @@ export function assertArtifactFieldSizes(fields: {
   title?: string;
   content?: string;
 }): void {
-  if (fields.title !== undefined && fields.title.length > MAX_ARTIFACT_TITLE_LENGTH) {
+  if (
+    fields.title !== undefined &&
+    fields.title.length > MAX_ARTIFACT_TITLE_LENGTH
+  ) {
     throw new ArtifactSizeError(
       `Artifact title exceeds the ${MAX_ARTIFACT_TITLE_LENGTH} character limit`,
     );
@@ -68,7 +71,9 @@ export const ARTIFACT_ORIGINS = [
   "imported",
   "unknown",
 ] as const;
-const KnownOriginSource = type({ origin: type.enumerated(...ARTIFACT_ORIGINS) });
+const KnownOriginSource = type({
+  origin: type.enumerated(...ARTIFACT_ORIGINS),
+});
 // A jsonb value that is an object — not null, not an array, not a scalar.
 const JsonObject = type("object").narrow(
   (value): value is Record<string, unknown> => !Array.isArray(value),
@@ -99,7 +104,10 @@ export function assertVersionMetadataShape(fields: {
       throw new ArtifactValidationError(`Invalid metadata: ${result.summary}`);
     }
   }
-  if (fields.parentVersionIds !== undefined && fields.parentVersionIds !== null) {
+  if (
+    fields.parentVersionIds !== undefined &&
+    fields.parentVersionIds !== null
+  ) {
     const result = ParentVersionIdsShape(fields.parentVersionIds);
     if (result instanceof type.errors) {
       throw new ArtifactValidationError(
@@ -405,7 +413,15 @@ export async function reviseArtifactVersion(
 
   const [updated] = await tx
     .update(artifact)
-    .set({ title, content, source, version, metadata, contentSha256, updatedAt: now })
+    .set({
+      title,
+      content,
+      source,
+      version,
+      metadata,
+      contentSha256,
+      updatedAt: now,
+    })
     .where(eq(artifact.id, args.artifactId))
     .returning();
   if (!updated) throw new ArtifactNotFoundError(args.artifactId);
@@ -456,7 +472,9 @@ export async function writeArtifactVersion(
     args.content === undefined &&
     args.metadata === undefined
   ) {
-    throw new Error("Provide content, title, and/or metadata to revise the artifact");
+    throw new Error(
+      "Provide content, title, and/or metadata to revise the artifact",
+    );
   }
   if (args.title !== undefined) {
     assertArtifactFieldSizes({ title: args.title });
@@ -690,9 +708,10 @@ export const ListArtifactsQuery = type({
   "cursor?": ListCursor,
   limit: ListLimit.default(String(DEFAULT_LIST_LIMIT)),
   "archived?": "string",
-}).pipe(
-  (q): ListArtifactsFilters => ({ ...q, archived: q.archived === "true" }),
-);
+}).pipe((q): ListArtifactsFilters => ({
+  ...q,
+  archived: q.archived === "true",
+}));
 
 /** GET /artifacts/:id/versions query — cursor is the last version seen (newest-first). */
 export const ListArtifactVersionsQuery = type({
@@ -704,12 +723,10 @@ export const ListArtifactVersionsQuery = type({
     return n;
   }),
   limit: ListLimit.default(String(DEFAULT_LIST_LIMIT)),
-}).pipe(
-  (q): ListArtifactVersionsFilters => ({
-    ...(q.cursor !== undefined ? { cursor: q.cursor } : {}),
-    limit: q.limit,
-  }),
-);
+}).pipe((q): ListArtifactVersionsFilters => ({
+  ...(q.cursor !== undefined ? { cursor: q.cursor } : {}),
+  limit: q.limit,
+}));
 
 /**
  * Postgres `timestamptz` holds microseconds while a JS `Date` holds milliseconds,
@@ -746,16 +763,23 @@ export async function listArtifacts(
 
   const conditions: SQL[] = [
     eq(artifact.tenantId, tenantId),
-    filters.archived ? isNotNull(artifact.archivedAt) : isNull(artifact.archivedAt),
+    filters.archived
+      ? isNotNull(artifact.archivedAt)
+      : isNull(artifact.archivedAt),
   ];
 
   // ILIKE metacharacters in user input are escaped so a `%` searches for a
   // literal percent instead of matching everything.
-  const query = (filters.query?.trim() ?? "").slice(0, 200).replace(/[%_\\]/g, "\\$&");
+  const query = (filters.query?.trim() ?? "")
+    .slice(0, 200)
+    .replace(/[%_\\]/g, "\\$&");
   if (query) {
     // Filter may match on content, but list never SELECTs the body column.
     conditions.push(
-      or(ilike(artifact.title, `%${query}%`), ilike(artifact.content, `%${query}%`))!,
+      or(
+        ilike(artifact.title, `%${query}%`),
+        ilike(artifact.content, `%${query}%`),
+      )!,
     );
   }
   if (filters.kind) conditions.push(eq(artifact.kind, filters.kind));
@@ -787,7 +811,9 @@ export async function listArtifacts(
     .limit(limit + 1);
 
   const page = fetched.slice(0, limit);
-  const rows: ArtifactListRow[] = page.map(({ cursorAt: _cursorAt, ...row }) => row);
+  const rows: ArtifactListRow[] = page.map(
+    ({ cursorAt: _cursorAt, ...row }) => row,
+  );
   if (fetched.length <= limit) return { rows, nextCursor: null };
   const last = page[page.length - 1]!;
   return { rows, nextCursor: `${last.cursorAt}__${last.id}` };
@@ -952,7 +978,10 @@ export async function findOrVersionArtifact(
  * returned or who may see it.
  */
 export async function enrich(
-  decorate: (tenantId: string, rows: readonly SerializedArtifactBase[]) => Promise<void>,
+  decorate: (
+    tenantId: string,
+    rows: readonly SerializedArtifactBase[],
+  ) => Promise<void>,
   tenantId: string,
   rows: SerializedArtifactBase[],
 ): Promise<void> {

@@ -57,7 +57,8 @@ for (const [name, store] of BACKENDS) {
       expect(normalizeSource(row.source).origin).toBe("imported");
 
       const result = await resolveDownload(db, store, row, false);
-      if ("status" in result) throw new Error(`unexpected failure: ${result.error}`);
+      if ("status" in result)
+        throw new Error(`unexpected failure: ${result.error}`);
       expect(result.mimeType).toBe("image/png");
       expect(result.filename).toBe("logo.png");
       expect(result.disposition).toBe("attachment");
@@ -66,11 +67,18 @@ for (const [name, store] of BACKENDS) {
 
     test("a PDF is an attachment by default and inline only when asked", async () => {
       const db = await testDb();
-      const row = await storeFile(db, store, "deck.pdf", "application/pdf", PDF);
+      const row = await storeFile(
+        db,
+        store,
+        "deck.pdf",
+        "application/pdf",
+        PDF,
+      );
 
       const attached = await resolveDownload(db, store, row, false);
       const inlined = await resolveDownload(db, store, row, true);
-      if ("status" in attached || "status" in inlined) throw new Error("unexpected failure");
+      if ("status" in attached || "status" in inlined)
+        throw new Error("unexpected failure");
       expect(attached.disposition).toBe("attachment");
       expect(inlined.disposition).toBe("inline");
     });
@@ -85,7 +93,13 @@ for (const [name, store] of BACKENDS) {
 
     test("a filename that would break Content-Disposition is sanitized", async () => {
       const db = await testDb();
-      const row = await storeFile(db, store, 'ev"il\nname.png', "image/png", PNG);
+      const row = await storeFile(
+        db,
+        store,
+        'ev"il\nname.png',
+        "image/png",
+        PNG,
+      );
       const result = await resolveDownload(db, store, row, false);
       if ("status" in result) throw new Error("unexpected failure");
       expect(result.filename).not.toContain('"');
@@ -94,7 +108,13 @@ for (const [name, store] of BACKENDS) {
 
     test("version 1 is written for a file artifact too", async () => {
       const db = await testDb();
-      const row = await storeFile(db, store, "a.txt", "text/plain", new Uint8Array([1]));
+      const row = await storeFile(
+        db,
+        store,
+        "a.txt",
+        "text/plain",
+        new Uint8Array([1]),
+      );
       expect(row.version).toBe(1);
     });
   });
@@ -103,7 +123,13 @@ for (const [name, store] of BACKENDS) {
 describe("InlineContentStore specifics", () => {
   test("keeps the artifact's text content empty and points at an upload row", async () => {
     const db = await testDb();
-    const row = await storeFile(db, InlineContentStore, "a.png", "image/png", PNG);
+    const row = await storeFile(
+      db,
+      InlineContentStore,
+      "a.png",
+      "image/png",
+      PNG,
+    );
 
     expect(row.content).toBe("");
     const ref = uploadRefFromSource(row.source);
@@ -117,17 +143,34 @@ describe("InlineContentStore specifics", () => {
 
   test("refuses to resolve an upload owned by another tenant", async () => {
     const db = await testDb();
-    const row = await storeFile(db, InlineContentStore, "a.png", "image/png", PNG);
+    const row = await storeFile(
+      db,
+      InlineContentStore,
+      "a.png",
+      "image/png",
+      PNG,
+    );
 
     const foreign = { ...row, tenantId: "other" };
     expect(await InlineContentStore.get(db, foreign)).toBeNull();
-    const result = await resolveDownload(db, InlineContentStore, foreign, false);
+    const result = await resolveDownload(
+      db,
+      InlineContentStore,
+      foreign,
+      false,
+    );
     expect(result).toEqual({ status: 404, error: "Upload not found" });
   });
 
   test("a dangling upload reference is a 404, never a fall-through", async () => {
     const db = await testDb();
-    const row = await storeFile(db, InlineContentStore, "a.png", "image/png", PNG);
+    const row = await storeFile(
+      db,
+      InlineContentStore,
+      "a.png",
+      "image/png",
+      PNG,
+    );
     await db.delete(upload);
 
     expect(await resolveDownload(db, InlineContentStore, row, false)).toEqual({
@@ -140,7 +183,13 @@ describe("InlineContentStore specifics", () => {
 describe("DataUrlContentStore specifics", () => {
   test("carries the bytes inline with no side-table row", async () => {
     const db = await testDb();
-    const row = await storeFile(db, DataUrlContentStore, "a.png", "image/png", PNG);
+    const row = await storeFile(
+      db,
+      DataUrlContentStore,
+      "a.png",
+      "image/png",
+      PNG,
+    );
 
     expect(row.content.startsWith("data:image/png;base64,")).toBe(true);
     expect((await db.select().from(upload)).length).toBe(0);
@@ -196,7 +245,11 @@ describe("download convention precedence", () => {
 
   test("an untitled csv-export still gets a usable filename", async () => {
     const db = await testDb();
-    const row = await seedArtifact(db, { kind: "csv-export", title: ".csv", content: "x" });
+    const row = await seedArtifact(db, {
+      kind: "csv-export",
+      title: ".csv",
+      content: "x",
+    });
     const result = await resolveDownload(db, InlineContentStore, row, false);
     if ("status" in result) throw new Error("unexpected failure");
     expect(result.filename).toBe("export.csv");
@@ -233,7 +286,9 @@ describe("helpers", () => {
   test("decodeDataUrl rejects anything that is not a base64 data URL", () => {
     expect(decodeDataUrl("hello")).toBeNull();
     expect(decodeDataUrl("data:text/plain,hello")).toBeNull();
-    expect(decodeDataUrl("data:text/plain;base64,aGk=")?.mimeType).toBe("text/plain");
+    expect(decodeDataUrl("data:text/plain;base64,aGk=")?.mimeType).toBe(
+      "text/plain",
+    );
   });
 
   test("uploadRefFromSource rejects a malformed or absent reference", () => {
@@ -242,7 +297,8 @@ describe("helpers", () => {
     expect(uploadRefFromSource({ upload: "nope" })).toBeNull();
     expect(uploadRefFromSource({ upload: { id: "u1" } })).toBeNull();
     expect(
-      uploadRefFromSource({ upload: { filename: "a", mimeType: "text/plain" } })?.size,
+      uploadRefFromSource({ upload: { filename: "a", mimeType: "text/plain" } })
+        ?.size,
     ).toBe(0);
   });
 });
