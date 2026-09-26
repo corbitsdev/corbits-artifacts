@@ -17,7 +17,8 @@ It ships no UI and no object store: the host renders artifacts and brings its ow
 
 ```bash
 bun add @corbits/artifacts \
-  @intx/db @intx/hub-api @intx/types drizzle-orm hono hono-openapi postgres
+  @intx/agent @intx/authz @intx/db @intx/hub-api @intx/types \
+  drizzle-orm hono hono-openapi postgres
 ```
 
 Add `@intx/agent` only if an agent uses the sidecar tools. Runs on Node >= 24.
@@ -27,7 +28,11 @@ Add `@intx/agent` only if an agent uses the sidecar tools. Runs on Node >= 24.
 With `DATABASE_URL` pointing at a hub database that has run `runArtifactMigrations` (see [Using with Interchange](#using-with-interchange)):
 
 ```ts
-import { createArtifact, createArtifactDb, getArtifact } from "@corbits/artifacts";
+import {
+  createArtifact,
+  createArtifactDb,
+  getArtifact,
+} from "@corbits/artifacts";
 
 const { db, close } = createArtifactDb(process.env.DATABASE_URL!);
 
@@ -112,36 +117,42 @@ Takes the same `DBConfig` and `schema` as Interchange's `runMigrations`. `schema
 Run the migrations after Interchange's, mount both route sets, grant `create` on `artifact:*` to principals that create artifacts, and give agents the tool pack.
 
 ```ts
-import { runMigrations, type DBConfig } from "@intx/db";
-import type { RequireGrant, TenantEnv } from "@intx/hub-api";
-import type { Hono } from "hono";
+import { timeWindowEvaluator } from "@intx/authz";
+import { createDB, createGrantStore, runMigrations } from "@intx/db";
+import { createRequireGrant } from "@intx/hub-api";
 import {
   createArtifactRoutes,
-  createWorkflowArtifactRoutes,
   InlineContentStore,
   runArtifactMigrations,
-  type ArtifactDb,
-  type WorkflowRunResolver,
 } from "@corbits/artifacts";
 
-declare const app: Hono<TenantEnv>;
-declare const dbConfig: DBConfig;
-declare const db: ArtifactDb;
-declare const requireGrant: RequireGrant;
-declare const resolveRunScope: WorkflowRunResolver;
+const dbConfig = {
+  host: "localhost",
+  port: 5432,
+  user: "postgres",
+  password: "postgres",
+  database: "interchange",
+};
 
 await runMigrations(dbConfig, { schema: "public" });
 await runArtifactMigrations(dbConfig, { schema: "public" });
 
-const contentStore = InlineContentStore;
-app.route("/api", createArtifactRoutes({ db, contentStore, requireGrant }));
-app.route(
-  "/api/workflow-artifacts",
-  createWorkflowArtifactRoutes({ db, contentStore, resolveRunScope }),
-);
+const { db } = createDB(dbConfig);
+const requireGrant = createRequireGrant({
+  grantStore: createGrantStore(db),
+  conditionRegistry: { time_window: timeWindowEvaluator },
+});
+
+export const artifactRoutes = createArtifactRoutes({
+  db,
+  contentStore: InlineContentStore,
+  requireGrant,
+});
 ```
 
-The sidecar tools call `/api/workflow-artifacts`. Add them to an agent and bind its `hub` credential to the agent's hub token when you deploy it:
+Mount `artifactRoutes` on the hub app at `/api`, behind the hub's auth and tenant middleware.
+
+For agents, mount `createWorkflowArtifactRoutes({ db, contentStore: InlineContentStore, resolveRunScope })` at `/api/workflow-artifacts`. `resolveRunScope` is the host's `(bearerToken, runAddress)` lookup that returns the run's tenant and principal from the hub's workflow runs, or `null`. The sidecar tools call `/api/workflow-artifacts`. Add them to an agent and bind its `hub` credential to the agent's hub token when you deploy it:
 
 ```ts
 import { defineAgent, type InferencePreference } from "@intx/agent";
