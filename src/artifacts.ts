@@ -281,6 +281,7 @@ export async function createArtifact(
     version: 1,
     title: args.title,
     content: args.content,
+    source: args.source,
     authorId: args.scope.principalId,
     metadata,
     parentVersionIds,
@@ -326,7 +327,7 @@ export class VersionConflictError extends Error {
  * Archived artifacts present as NOT FOUND — an agent holding a
  * stale id must not silently revise something the user put away.
  */
-async function reviseArtifactVersion(
+export async function reviseArtifactVersion(
   tx: ArtifactTx,
   args: {
     scope: ResolvedPrincipal;
@@ -337,6 +338,16 @@ async function reviseArtifactVersion(
     metadata?: Record<string, unknown> | null;
     /** Explicit lineage for this version — never inferred, never carried forward. */
     parentVersionIds?: string[] | null;
+    /**
+     * Stores new file content once the row is locked and `expectedVersion`
+     * holds, so a refused revise never writes bytes. Omitted carries the
+     * prior `source` and digest forward.
+     */
+    storeFile?: (locked: ArtifactRow) => Promise<{
+      content: string;
+      source: Record<string, unknown>;
+      contentSha256: string;
+    }>;
     /**
      * Precondition checked under the `FOR UPDATE` lock below: when set and it
      * does not match the current version, {@link VersionConflictError} is
@@ -373,9 +384,10 @@ async function reviseArtifactVersion(
     throw new VersionConflictError(args.artifactId, existing.version);
   }
 
+  const file = args.storeFile ? await args.storeFile(existing) : undefined;
   const version = existing.version + 1;
   const title = args.title ?? existing.title;
-  const content = args.content ?? existing.content;
+  const content = file?.content ?? args.content ?? existing.content;
   if (args.content !== undefined) {
     assertArtifactFieldSizes({ content });
   }
@@ -384,14 +396,16 @@ async function reviseArtifactVersion(
       ? (existing.metadata as Record<string, unknown> | null)
       : args.metadata;
   const parentVersionIds = args.parentVersionIds ?? null;
+  const source = file?.source ?? existing.source;
   // Content omitted: the previous content carries forward, so its digest
   // carries forward unchanged rather than being recomputed.
   const contentSha256 =
-    args.content === undefined ? existing.contentSha256 : sha256Hex(content);
+    file?.contentSha256 ??
+    (args.content === undefined ? existing.contentSha256 : sha256Hex(content));
 
   const [updated] = await tx
     .update(artifact)
-    .set({ title, content, version, metadata, contentSha256, updatedAt: now })
+    .set({ title, content, source, version, metadata, contentSha256, updatedAt: now })
     .where(eq(artifact.id, args.artifactId))
     .returning();
   if (!updated) throw new ArtifactNotFoundError(args.artifactId);
@@ -401,6 +415,7 @@ async function reviseArtifactVersion(
     version,
     title,
     content,
+    source,
     authorId: args.scope.principalId,
     metadata,
     parentVersionIds,
@@ -484,11 +499,13 @@ export async function getArtifactVersion(
   metadata: Record<string, unknown> | null;
   parentVersionIds: string[] | null;
   contentSha256: string | null;
+  source: unknown;
 } | null> {
   const [row] = await db
     .select({
       title: artifactVersion.title,
       content: artifactVersion.content,
+      source: artifactVersion.source,
       version: artifactVersion.version,
       metadata: artifactVersion.metadata,
       parentVersionIds: artifactVersion.parentVersionIds,

@@ -174,11 +174,6 @@ describe.each<[string, ContentStore]>([
   });
 });
 
-// Only DataUrlContentStore keeps its bytes IN `content`, so it is the store
-// where ?version=N really changes what downloads. InlineContentStore's blob
-// lives out-of-band, referenced from the artifact row's own `source` (never
-// versioned) — see the next describe block for how that case is refused
-// rather than silently serving the current blob under an older version's name.
 describe("download an older version's content over HTTP (DataUrlContentStore)", () => {
   let app: { request: (path: string, init?: RequestInit) => Promise<Response> };
   let id: string;
@@ -213,35 +208,36 @@ describe("download an older version's content over HTTP (DataUrlContentStore)", 
   });
 });
 
-describe("?version on a blob-backed upload (InlineContentStore) is refused unless current", () => {
+describe("?version on a blob-backed upload (InlineContentStore) serves that version's bytes", () => {
   let app: { request: (path: string, init?: RequestInit) => Promise<Response> };
   let id: string;
-  let currentVersion: number;
-  const BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 3, 3, 3]);
+  const ORIGINAL = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 3, 3, 3]);
+  const REVISED = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 4, 4, 4, 4]);
 
   beforeAll(async () => {
     app = host.buildApp(InlineContentStore);
     const form = new FormData();
-    form.append("files", new File([BYTES], "chart.png", { type: "image/png" }));
-    const uploaded = await json<{ artifacts: { id: string; version: number }[] }>(
+    form.append("files", new File([ORIGINAL], "chart.png", { type: "image/png" }));
+    const uploaded = await json<{ artifacts: { id: string }[] }>(
       await app.request("/api/artifacts/upload", { method: "POST", body: form }),
     );
-    ({ id, version: currentVersion } = uploaded.artifacts[0]!);
-    // Bumps the artifact's version without touching the out-of-band blob —
-    // `source` (and so the ContentStore reference) is never revised.
-    await app.request(`/api/artifacts/${id}/versions`, postJson({ title: "Renamed" }));
+    id = uploaded.artifacts[0]!.id;
+    const revise = new FormData();
+    revise.append("file", new File([REVISED], "chart.png", { type: "image/png" }));
+    await app.request(`/api/artifacts/${id}/versions`, { method: "POST", body: revise });
   });
 
-  test("a non-current ?version is 400, not a silent lie about which bytes came back", async () => {
-    const res = await app.request(`/api/artifacts/${id}/download?version=${currentVersion}`);
-    expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ error: "Uploaded file content is not versioned" });
-  });
-
-  test("?version naming the CURRENT version still downloads the blob", async () => {
-    const res = await app.request(`/api/artifacts/${id}/download?version=${currentVersion + 1}`);
+  test("?version=1 downloads the original bytes", async () => {
+    const res = await app.request(`/api/artifacts/${id}/download?version=1`);
     expect(res.status).toBe(200);
-    expect(new Uint8Array(await res.arrayBuffer())).toEqual(BYTES);
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(ORIGINAL);
+  });
+
+  test("?version=2 and no version download the revised bytes", async () => {
+    for (const query of ["?version=2", ""]) {
+      const res = await app.request(`/api/artifacts/${id}/download${query}`);
+      expect(new Uint8Array(await res.arrayBuffer())).toEqual(REVISED);
+    }
   });
 });
 

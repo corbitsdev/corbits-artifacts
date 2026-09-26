@@ -13,11 +13,12 @@ import {
   UnsupportedUploadTypeError,
   uploadArtifactKind,
   type UploadPolicy,
-} from "./uploads.js";
-import { InlineContentStore } from "./content-store.js";
-import { disposition } from "./download.js";
-import { artifact, upload } from "./schema.js";
-import { SCOPE, testDb } from "./test-helpers.js";
+} from "../src/uploads.js";
+import { InlineContentStore } from "../src/content-store.js";
+import { disposition } from "../src/download.js";
+import { artifact, upload } from "../src/schema.js";
+import { SCOPE } from "./fixtures.js";
+import { testDb } from "./helpers.js";
 
 const XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 

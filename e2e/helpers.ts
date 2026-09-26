@@ -1,9 +1,28 @@
+// Real-Postgres harness for the e2e suites: the shared artifact database, a
+// fresh database per suite with Interchange's control plane and this package's
+// migrations applied, a mounted artifact app, and an on-disk ContentStore.
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import {
+  createDB,
+  createGrantStore,
+  runMigrations,
+  type DBConfig,
+} from "@intx/db";
+import { createRequireGrant, type TenantEnv } from "@intx/hub-api";
 import { sql } from "drizzle-orm";
-import type { DBConfig } from "@intx/db";
+import { Hono } from "hono";
+import postgres from "postgres";
+import { uploadRefFromSource } from "../src/content-store.js";
 import { createArtifactDb, type ArtifactDb } from "../src/db.js";
-import { runArtifactMigrations } from "../src/migrations.js";
-import { createArtifact } from "../src/artifacts.js";
-import type { ArtifactRow } from "../src/schema.js";
+import {
+  createArtifactRoutes,
+  InlineContentStore,
+  runArtifactMigrations,
+  type ContentStore,
+} from "../src/index.js";
+import type { Actor } from "./fixtures.js";
 
 export const DATABASE_URL =
   process.env.ARTIFACT_DATABASE_URL ??
@@ -25,7 +44,7 @@ export function databaseConfig(connectionString: string): DBConfig {
  * Explicit opt-in required before the harness runs TRUNCATE or DROP SCHEMA.
  * Must be the string `"1"` — any other value (including `"true"`) is refused.
  */
-export const ALLOW_DESTRUCTIVE_ARTIFACT_TESTS = "ALLOW_DESTRUCTIVE_ARTIFACT_TESTS";
+const ALLOW_DESTRUCTIVE_ARTIFACT_TESTS = "ALLOW_DESTRUCTIVE_ARTIFACT_TESTS";
 
 type EnvMap = { readonly [key: string]: string | undefined };
 
@@ -33,7 +52,7 @@ type EnvMap = { readonly [key: string]: string | undefined };
  * Database name segment of a Postgres connection string.
  * Pure URL parsing so the refuse path is unit-testable without a live server.
  */
-export function databaseNameFromConnectionString(connectionString: string): string {
+function databaseNameFromConnectionString(connectionString: string): string {
   let parsed: URL;
   try {
     parsed = new URL(connectionString);
@@ -42,7 +61,9 @@ export function databaseNameFromConnectionString(connectionString: string): stri
       `Invalid ARTIFACT_DATABASE_URL (not a URL): ${JSON.stringify(connectionString)}`,
     );
   }
-  const name = decodeURIComponent(parsed.pathname.replace(/^\//, "").split("/")[0] ?? "");
+  const name = decodeURIComponent(
+    parsed.pathname.replace(/^\//, "").split("/")[0] ?? "",
+  );
   if (!name) {
     throw new Error(
       `ARTIFACT_DATABASE_URL has no database name (path is empty): ${JSON.stringify(connectionString)}`,
@@ -58,7 +79,7 @@ export function databaseNameFromConnectionString(connectionString: string): stri
  *
  * Everything else — production-looking names included — is refused.
  */
-export function isAllowlistedArtifactTestDatabase(name: string): boolean {
+function isAllowlistedArtifactTestDatabase(name: string): boolean {
   if (name === "artifact_core") return true;
   if (name.endsWith("_test")) return true;
   return false;
@@ -69,7 +90,7 @@ export function isAllowlistedArtifactTestDatabase(name: string): boolean {
  * and an allowlisted database name. Pure (URL + env only) so CI without PG
  * can still prove the refuse path.
  */
-export function assertDestructiveArtifactTestsAllowed(
+function assertDestructiveArtifactTestsAllowed(
   connectionString: string,
   env: EnvMap = process.env,
 ): void {
@@ -117,7 +138,7 @@ let shared: ArtifactDb | undefined;
  * stand-ins (a real host brings the full Interchange tables) and seeds every
  * tenant and principal id the tests mint rows for.
  */
-export async function ensureControlPlane(db: ArtifactDb): Promise<void> {
+async function ensureControlPlane(db: ArtifactDb): Promise<void> {
   await db.execute(
     sql`CREATE TABLE IF NOT EXISTS "public"."tenant" ("id" text PRIMARY KEY)`,
   );
@@ -158,44 +179,140 @@ export async function ensureControlPlane(db: ArtifactDb): Promise<void> {
 export async function testDb(): Promise<ArtifactDb> {
   // Gate before any pool open or TRUNCATE — a mispointed URL must never wipe.
   assertDestructiveArtifactTestsAllowed(DATABASE_URL);
-  let db = shared;
-  if (!db) {
-    db = createArtifactDb(DATABASE_URL).db;
-    shared = db;
-    await ensureControlPlane(db);
-    await runArtifactMigrations(databaseConfig(DATABASE_URL), { schema: "public" });
-  }
+  const fresh = !shared;
+  const db = shared ?? createArtifactDb(DATABASE_URL).db;
+  shared = db;
+  // Re-seeded per call: the reference-host suite truncates the control plane on boot.
+  await ensureControlPlane(db);
+  if (fresh)
+    await runArtifactMigrations(databaseConfig(DATABASE_URL), {
+      schema: "public",
+    });
   await db.execute(
     sql`TRUNCATE TABLE "artifacts"."artifact", "artifacts"."artifact_version", "artifacts"."upload" CASCADE`,
   );
   return db;
 }
 
-export const SCOPE = { tenantId: "acme", principalId: "user-1" };
+export type HostDb = ReturnType<typeof createDB>["db"];
 
-export async function seedArtifact(
-  db: ArtifactDb,
-  overrides: Partial<{
-    kind: string;
-    title: string;
-    content: string;
-    source: Record<string, unknown>;
-    ownerPrincipalId: string | null;
-    tenantId: string;
-  }> = {},
-): Promise<ArtifactRow> {
-  const scope = { ...SCOPE, ...(overrides.tenantId ? { tenantId: overrides.tenantId } : {}) };
-  return await db.transaction((tx) =>
-    createArtifact(tx, {
-      scope,
-      ownerPrincipalId:
-        overrides.ownerPrincipalId === undefined
-          ? scope.principalId
-          : overrides.ownerPrincipalId,
-      kind: overrides.kind ?? "document",
-      title: overrides.title ?? "Untitled",
-      content: overrides.content ?? "body",
-      source: overrides.source ?? { origin: "manual" },
+export type TestDb = {
+  db: HostDb;
+  config: DBConfig;
+  close: () => Promise<void>;
+};
+
+export function connectionString(config: DBConfig): string {
+  const user = encodeURIComponent(config.user);
+  const password = encodeURIComponent(config.password ?? "");
+  return `postgres://${user}:${password}@${config.host}:${config.port}/${config.database}`;
+}
+
+async function admin<T>(run: (sql: postgres.Sql) => Promise<T>): Promise<T> {
+  const sql = postgres(DATABASE_URL, { max: 1, onnotice: () => undefined });
+  try {
+    return await run(sql);
+  } finally {
+    await sql.end();
+  }
+}
+
+/**
+ * Creates `artifact_<random>_test`, applies Interchange's migrations and then
+ * `migrateArtifacts` (this package's by default), and drops it on `close`.
+ */
+export async function createTestDb(
+  migrateArtifacts: (config: DBConfig) => Promise<void> = (config) =>
+    runArtifactMigrations(config, { schema: "public" }),
+): Promise<TestDb> {
+  assertDestructiveArtifactTestsAllowed(DATABASE_URL);
+  const name = `artifact_${randomUUID().replaceAll("-", "").slice(0, 12)}_test`;
+  await admin((sql) => sql.unsafe(`CREATE DATABASE "${name}"`));
+  const server = databaseConfig(DATABASE_URL);
+  const config: DBConfig = {
+    host: server.host,
+    port: server.port,
+    user: server.user,
+    password: server.password,
+    database: name,
+  };
+  await runMigrations(config, { schema: "public" });
+  await migrateArtifacts(config);
+  const handle = createDB(config);
+  return {
+    db: handle.db,
+    config,
+    close: async () => {
+      await handle.close();
+      await admin((sql) =>
+        sql.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`),
+      );
+    },
+  };
+}
+
+/**
+ * `createArtifactRoutes` mounted at `/api` for `actor`, authorized by the
+ * platform's real `createRequireGrant` over the database's `grant` table.
+ */
+export function artifactApp(
+  db: HostDb,
+  actor: Actor,
+  contentStore: ContentStore = InlineContentStore,
+): Hono<TenantEnv> {
+  const app = new Hono<TenantEnv>();
+  app.use("*", async (c, next) => {
+    c.set("tenant", actor.tenant);
+    c.set("principal", actor.principal);
+    await next();
+  });
+  return app.route(
+    "/api",
+    createArtifactRoutes({
+      db,
+      contentStore,
+      requireGrant: createRequireGrant({
+        grantStore: createGrantStore(db),
+        conditionRegistry: {},
+      }),
     }),
   );
+}
+
+// A ContentStore that keeps file bytes on disk, one file per upload, referenced
+// from the artifact's `source.upload.id` the way InlineContentStore references
+// its bytea row.
+export function createFsContentStore(dir: string): ContentStore {
+  const pathFor = (tenantId: string, id: string) => join(dir, tenantId, id);
+  return {
+    async put(_tx, scope, blob) {
+      const id = randomUUID();
+      await mkdir(join(dir, scope.tenantId), { recursive: true });
+      await writeFile(pathFor(scope.tenantId, id), blob.bytes);
+      return {
+        content: "",
+        source: {
+          upload: {
+            id,
+            filename: blob.filename,
+            mimeType: blob.mimeType,
+            size: blob.bytes.byteLength,
+          },
+        },
+      };
+    },
+    async get(_db, artifact) {
+      const ref = uploadRefFromSource(artifact.source);
+      if (ref?.id === undefined || artifact.tenantId === null) return null;
+      const bytes = await readFile(pathFor(artifact.tenantId, ref.id)).catch(
+        () => null,
+      );
+      if (bytes === null) return null;
+      return {
+        filename: ref.filename,
+        mimeType: ref.mimeType,
+        bytes: new Uint8Array(bytes),
+      };
+    },
+  };
 }

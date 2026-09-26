@@ -16,9 +16,10 @@ import {
   setArtifactArchived,
   sha256Hex,
   writeArtifactVersion,
-} from "./artifacts.js";
-import { artifact, artifactVersion } from "./schema.js";
-import { seedArtifact, SCOPE, testDb } from "./test-helpers.js";
+} from "../src/artifacts.js";
+import { artifact, artifactVersion } from "../src/schema.js";
+import { seedArtifact, SCOPE } from "./fixtures.js";
+import { testDb } from "./helpers.js";
 
 describe("create", () => {
   test("writes version 1 eagerly, so a pinned read of v1 resolves immediately", async () => {
@@ -34,6 +35,7 @@ describe("create", () => {
       metadata: null,
       parentVersionIds: null,
       contentSha256: sha256Hex("first"),
+      source: { origin: "manual" },
     });
   });
 
@@ -172,6 +174,9 @@ describe("find by title", () => {
     const db = await testDb();
     const older = await seedArtifact(db, { title: "Report" });
     await seedArtifact(db, { title: "Report" });
+    // Both seeds land within the same millisecond as the touch below often
+    // enough to tie; move them into the past so the touch is strictly newer.
+    await db.update(artifact).set({ updatedAt: new Date(Date.now() - 60_000) });
     await writeArtifactVersion(db, {
       scope: SCOPE,
       artifactId: older.id,

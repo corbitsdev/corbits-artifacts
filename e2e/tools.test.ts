@@ -4,7 +4,7 @@ import {
   ArtifactNotFoundError,
   listArtifactVersions,
   writeArtifactVersion,
-} from "./artifacts.js";
+} from "../src/artifacts.js";
 import {
   ARTIFACT_TOOL_DEFINITIONS,
   DEFAULT_READ_LIMIT,
@@ -12,8 +12,9 @@ import {
   readArtifact,
   readArtifactChunk,
   SAFE_ENCODED_BUDGET,
-} from "./tools.js";
-import { seedArtifact, SCOPE, testDb } from "./test-helpers.js";
+} from "../src/tools.js";
+import { seedArtifact, SCOPE } from "./fixtures.js";
+import { testDb } from "./helpers.js";
 
 async function read(content: string, offset?: number, limit?: number) {
   const db = await testDb();

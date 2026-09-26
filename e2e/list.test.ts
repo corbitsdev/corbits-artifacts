@@ -8,9 +8,10 @@ import {
   MAX_LIST_LIMIT,
   serializeArtifactListItem,
   setArtifactArchived,
-} from "./artifacts.js";
-import { seedArtifact, testDb } from "./test-helpers.js";
-import type { ArtifactDb } from "./db.js";
+} from "../src/artifacts.js";
+import { seedArtifact } from "./fixtures.js";
+import { testDb } from "./helpers.js";
+import type { ArtifactDb } from "../src/db.js";
 
 /** Parse a raw query string the way the route does, failing the test on error. */
 function parseQuery(query: Record<string, string>) {

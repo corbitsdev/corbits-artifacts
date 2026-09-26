@@ -46,7 +46,9 @@ import {
   MAX_UPLOAD_BYTES,
   MAX_UPLOAD_FILE_COUNT,
   MAX_UPLOAD_TOTAL_BYTES,
+  reviseFileArtifact,
   UnsupportedUploadTypeError,
+  uploadArtifactKind,
   type UploadPolicy,
 } from "./uploads.js";
 
@@ -191,6 +193,29 @@ const VersionRef = type("string").pipe((raw, ctx) => {
   }
   return n;
 });
+
+// The artifact as it stood at one version, for the version detail and download routes.
+function rowAtVersion(
+  row: ArtifactRow,
+  at: NonNullable<Awaited<ReturnType<typeof getArtifactVersion>>>,
+): ArtifactRow {
+  return {
+    id: row.id,
+    tenantId: row.tenantId,
+    principalId: row.principalId,
+    ownerPrincipalId: row.ownerPrincipalId,
+    kind: row.kind,
+    title: at.title,
+    content: at.content,
+    source: at.source,
+    version: at.version,
+    metadata: at.metadata,
+    contentSha256: at.contentSha256,
+    archivedAt: row.archivedAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
 
 /**
  * Build the artifact routes as a sub-app the host mounts with `app.route`.
@@ -720,14 +745,7 @@ export function createArtifactRoutes({
       if (!versionRow) return c.json({ error: "Artifact not found" }, 404);
 
       const [artifactJson] = await serialize(loaded.scope, [
-        {
-          ...loaded.row,
-          title: versionRow.title,
-          content: versionRow.content,
-          version: versionRow.version,
-          metadata: versionRow.metadata,
-          contentSha256: versionRow.contentSha256,
-        },
+        rowAtVersion(loaded.row, versionRow),
       ]);
       return c.json({ artifact: artifactJson });
     },
@@ -739,7 +757,7 @@ export function createArtifactRoutes({
       tags: ["Artifacts"],
       summary: "Revise an artifact, creating a new version",
       description:
-        "Locks the row FOR UPDATE and bumps version by one; a unique (artifactId, version) index backstops a racing writer. Archived artifacts present as not found. `metadata` is optional and opaque; when omitted, the prior version's metadata carries forward, and an explicit `null` clears it. An optional `expectedVersion` is checked under the same lock: a mismatch answers 409 and writes nothing.",
+        "Locks the row FOR UPDATE and bumps version by one; a unique (artifactId, version) index backstops a racing writer. Archived artifacts present as not found. `metadata` is optional and opaque; when omitted, the prior version's metadata carries forward, and an explicit `null` clears it. An optional `expectedVersion` is checked under the same lock: a mismatch answers 409 and writes nothing. An uploaded file is revised with new bytes by sending multipart/form-data with one `file` field (and optionally `expectedVersion`); the new version keeps its own bytes, and every earlier version still downloads its own.",
       parameters: [idParam],
       responses: {
         200: { description: "New version created" },
@@ -747,7 +765,8 @@ export function createArtifactRoutes({
         403: { description: "No resolvable principal, or not permitted" },
         404: { description: "Artifact not found" },
         409: { description: "expectedVersion did not match the current version" },
-        413: { description: "Declared Content-Length over the content ceiling" },
+        413: { description: "Declared Content-Length over the content ceiling, or a file over the upload limit" },
+        415: { description: "The file has an unsupported type" },
       },
     }),
     principalRequired,
@@ -757,6 +776,9 @@ export function createArtifactRoutes({
       // loadScoped resolves the principal before any body parse.
       const loaded = await loadScoped(c);
       if ("response" in loaded) return loaded.response;
+      if (c.req.header("content-type")?.startsWith("multipart/form-data")) {
+        return await reviseWithFile(c, loaded.row, loaded.scope);
+      }
       if (contentLengthOverCeiling(c)) {
         return c.json(
           {
@@ -800,6 +822,70 @@ export function createArtifactRoutes({
       }
     },
   );
+
+  async function reviseWithFile(c: Ctx, row: ArtifactRow, scope: ResolvedPrincipal) {
+    if (uploadRefFromSource(row.source) === null) {
+      return c.json({ error: "Only an uploaded file can be revised with a file" }, 400);
+    }
+    const parsed = await c.req.parseBody({ all: true });
+    const file = parsed["file"];
+    if (!(file instanceof File)) {
+      return c.json({ error: "Expected one file field named file" }, 400);
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      return c.json(
+        { error: `File "${file.name}" exceeds the ${MAX_UPLOAD_BYTES} byte limit` },
+        413,
+      );
+    }
+    const rawExpected = parsed["expectedVersion"];
+    const expectedVersion =
+      rawExpected === undefined ? undefined : ExpectedVersion(Number(rawExpected));
+    if (expectedVersion instanceof type.errors) {
+      return c.json({ error: `expectedVersion ${expectedVersion.summary}` }, 400);
+    }
+    const mimeType = effectiveUploadMime(file, uploadPolicy);
+    if (mimeType.length > 0 && uploadArtifactKind(mimeType) !== row.kind) {
+      return c.json(
+        { error: `File "${file.name}" would change the artifact's kind from ${row.kind}` },
+        400,
+      );
+    }
+    try {
+      const revised = await db.transaction(async (tx) =>
+        reviseFileArtifact(tx, contentStore, {
+          scope,
+          artifact: row,
+          filename: file.name,
+          mimeType,
+          bytes: new Uint8Array(await file.arrayBuffer()),
+          policy: uploadPolicy,
+          ...(expectedVersion !== undefined ? { expectedVersion } : {}),
+        }),
+      );
+      return c.json({
+        artifactId: revised.id,
+        version: revised.version,
+        title: revised.title,
+        metadata: (revised.metadata as Record<string, unknown> | null) ?? null,
+        contentSha256: revised.contentSha256,
+      });
+    } catch (error) {
+      if (error instanceof UnsupportedUploadTypeError) {
+        return c.json({ error: error.message }, 415);
+      }
+      if (error instanceof ArtifactNotFoundError) {
+        return c.json({ error: "Artifact not found" }, 404);
+      }
+      if (error instanceof VersionConflictError) {
+        return c.json(
+          { error: "Version conflict", currentVersion: error.currentVersion },
+          409,
+        );
+      }
+      throw error;
+    }
+  }
 
   async function setArchived(c: Ctx, archive: boolean) {
     const loaded = await loadScoped(c);
@@ -856,7 +942,7 @@ export function createArtifactRoutes({
       tags: ["Artifacts"],
       summary: "Download an artifact's content",
       description:
-        "One path over three storage conventions, in precedence order: out-of-band ContentStore blob, inline data: URL (file/image kinds), then downloadable text (csv-export). Served as an attachment except a PDF with ?inline=1; X-Content-Type-Options: nosniff always. An optional ?version=N pins the download to that version's content (getArtifactVersion) for the data-URL and downloadable-text conventions, where content really is per-version. A blob-backed upload has no per-version bytes — source.upload.id lives on the artifact row only — so ?version=N for one is 400 unless it names the artifact's current version.",
+        "One path over three storage conventions, in precedence order: out-of-band ContentStore blob, inline data: URL (file/image kinds), then downloadable text (csv-export). Served as an attachment except a PDF with ?inline=1; X-Content-Type-Options: nosniff always. An optional ?version=N serves that version's exact content, including an upload's bytes as of that version; without it, the latest.",
       parameters: [
         idParam,
         { name: "inline", in: "query", required: false, schema: { type: "string" } },
@@ -866,7 +952,7 @@ export function createArtifactRoutes({
         200: { description: "The file body" },
         400: {
           description:
-            "Artifact kind is not downloadable, version is not a positive integer, or version names a non-current version of a blob-backed upload",
+            "Artifact kind is not downloadable, or version is not a positive integer",
         },
         403: { description: "No resolvable principal" },
         404: { description: "Artifact not found — also the answer for an unknown version" },
@@ -885,26 +971,7 @@ export function createArtifactRoutes({
         }
         const versionRow = await getArtifactVersion(db, loaded.row.id, version);
         if (!versionRow) return c.json({ error: "Artifact not found" }, 404);
-        // A blob's bytes live in the ContentStore, referenced from the
-        // artifact row's own `source` — never from `artifact_version`, so
-        // there is no per-version blob to serve. Silently falling through to
-        // today's blob would answer version N's request with the current
-        // bytes, misrepresenting them as pinned.
-        if (
-          version !== loaded.row.version &&
-          uploadRefFromSource(loaded.row.source)?.id !== undefined
-        ) {
-          return c.json(
-            { error: "Uploaded file content is not versioned" },
-            400,
-          );
-        }
-        row = {
-          ...loaded.row,
-          title: versionRow.title,
-          content: versionRow.content,
-          version: versionRow.version,
-        };
+        row = rowAtVersion(loaded.row, versionRow);
       }
 
       const result = await resolveDownload(

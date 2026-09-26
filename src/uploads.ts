@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { isAllowedMimeType } from "@intx/types";
 import type { ArtifactTx } from "./db.js";
-import { createArtifact } from "./artifacts.js";
+import { createArtifact, reviseArtifactVersion } from "./artifacts.js";
 import type { ArtifactRow } from "./schema.js";
 import type { ResolvedPrincipal, ContentStore } from "./ports.js";
 
@@ -194,6 +194,10 @@ export function contentDispositionHeader(
   return `${disposition}; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }
 
+function bytesSha256(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
 /**
  * The ONE way a file becomes an artifact. Every entry point — the
  * multipart import route, a chat attachment divert, a workflow's generated
@@ -237,7 +241,7 @@ export async function createFileArtifact(
   // Digest the uploaded bytes, not `stored.content` — for a blob-backed store
   // that column is a pointer (empty, or a data: URL), not the bytes
   // themselves, and this is version 1's authoritative digest either way.
-  const contentSha256 = createHash("sha256").update(args.bytes).digest("hex");
+  const contentSha256 = bytesSha256(args.bytes);
   return await createArtifact(tx, {
     scope: args.scope,
     ownerPrincipalId: args.ownerPrincipalId,
@@ -252,4 +256,50 @@ export async function createFileArtifact(
     },
     ...(args.metadata !== undefined ? { metadata: args.metadata } : {}),
   });
+}
+
+/**
+ * Revise a file artifact with new bytes. The bytes go to the ContentStore and
+ * the new version records its own content reference, size and digest, so every
+ * earlier version keeps serving its own bytes. The artifact's other `source`
+ * fields (origin, provenance) and its title carry forward; the new filename
+ * is what the version downloads as.
+ */
+export async function reviseFileArtifact(
+  tx: ArtifactTx,
+  contentStore: ContentStore,
+  args: {
+    scope: ResolvedPrincipal;
+    artifact: ArtifactRow;
+    filename: string;
+    mimeType: string;
+    bytes: Uint8Array;
+    policy: UploadPolicy;
+    expectedVersion?: number;
+  },
+): Promise<ArtifactRow> {
+  if (!args.policy.accepts(args.mimeType)) {
+    throw new UnsupportedUploadTypeError(args.filename, args.mimeType);
+  }
+  return await reviseArtifactVersion(
+    tx,
+    {
+      scope: args.scope,
+      artifactId: args.artifact.id,
+      storeFile: async (locked) => {
+        const stored = await contentStore.put(tx, args.scope, {
+          filename: args.filename,
+          mimeType: args.mimeType,
+          bytes: args.bytes,
+        });
+        return {
+          content: stored.content,
+          source: { ...(locked.source as Record<string, unknown>), ...stored.source },
+          contentSha256: bytesSha256(args.bytes),
+        };
+      },
+      ...(args.expectedVersion !== undefined ? { expectedVersion: args.expectedVersion } : {}),
+    },
+    new Date(),
+  );
 }
