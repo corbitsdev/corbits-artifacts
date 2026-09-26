@@ -1,21 +1,26 @@
 # @corbits/artifacts
 
-Artifacts, versions, and file uploads as a mountable module for any Interchange host. Backend only — this package ships no UI. `mountArtifacts` and `mountWorkflowArtifacts` add routes to a Hono app you already have; the host owns the app, the database pool, the session, and the grant store.
-
-## Runtime support
-
-Node >= 24 consumes built `dist/`. Bun loads TypeScript source via the `bun` export condition. Peer stack: `hono`, `hono-openapi`, `drizzle-orm`, `postgres`, `arktype`, `@intx/types`, `@intx/hub-api`, `@intx/agent` (minimum `@intx/*` **0.4.0**).
+An artifact is a versioned document or file, stored in Postgres and served over HTTP to a tenant's users and to its workflow runs. This package adds those routes to an Interchange host's Hono app; the host owns the app, the database pool, the session, and the grant store. Backend only — it ships no UI.
 
 ## Quickstart
 
 ```bash
 npm add @corbits/artifacts
-pnpm add @corbits/artifacts
-yarn add @corbits/artifacts
-bun add @corbits/artifacts
 ```
 
-There are three surfaces a host wires up, in the order a hub typically mounts them.
+Requires Node 24 or newer and `@intx/*` 0.4.0 or newer.
+
+Open a database handle and apply this package's migrations at boot, before mounting any routes. A host that already has a drizzle handle passes that instead of calling `createArtifactDb`.
+
+```ts
+import { createArtifactDb, runArtifactMigrations } from "@corbits/artifacts";
+
+const { db, close } = createArtifactDb(process.env.DATABASE_URL!);
+await runArtifactMigrations(db);
+
+// on shutdown
+await close();
+```
 
 ### 1. Hub-side, tenant-scoped: `mountArtifacts`
 
@@ -27,7 +32,9 @@ Mounted under the hub's tenant prefix, alongside a host's other session-authenti
 | `contentStore` | `ContentStore` | Blob storage for file bytes. `InlineContentStore` (exported by this package) fits a minimal host; bring your own store for object storage. |
 | `requireGrant` | `RequireGrant` | The host's grant middleware factory. This package implements no ownership or membership policy of its own — every mutating single-artifact route is gated through it. |
 | `countSegments` | `ArtifactCountSegments` (optional) | Named predicates over `ArtifactListRow` for `GET /artifacts/counts` (e.g. bucket by `kind`). The taxonomy is entirely host-owned; omitted, the route still answers with the tenant-wide `all` total. |
-| `onArtifactCreated`, `decorate`, `uploadPolicy` | — (optional) | See [ARCHITECTURE.md](./ARCHITECTURE.md) for the grant-provisioning hook, the display-only row decorator, and the upload policy. |
+| `onArtifactCreated` | `(tx, row, scope) => Promise<void>` (optional) | Runs inside the transaction that creates each artifact. This is where the host mints grants for the new row, e.g. `write` and `archive` on `artifact:<id>` for its creator. The package mints none itself. |
+| `decorate` | `(tenantId, rows) => Promise<void>` (optional) | Adds display-only fields to serialized rows on the way out (provenance labels, host joins). It must never change which rows are returned or who may see them. |
+| `uploadPolicy` | `UploadPolicy` (optional) | Which MIME types `POST /artifacts/upload` accepts. Defaults to `ARTIFACT_UPLOAD_POLICY`. |
 
 ```ts
 import type { Hono } from "hono";
@@ -64,14 +71,16 @@ export function mountArtifactRoutes(
 
 ### 2. Hub-side, run-scoped: `mountWorkflowArtifacts`
 
-A parallel mount for a workflow run, which has no browser session — only a bearer token and an `x-workflow-run-address` header. Mount it at its own path (`/api/workflow-artifacts` by convention; see the sidecar bundle below) rather than under the tenant prefix. `resolveRunScope` is the host's existing sidecar-token → run lookup; `agentToken` is a second, optional auth path so a deployed agent can present the bearer the hub minted for its own definition instead of the sidecar's token.
+A parallel mount for a workflow run, which has no browser session — only a bearer token and an `x-workflow-run-address` header. Mount it at `/api/workflow-artifacts`, the path the sidecar bundle below calls, rather than under the tenant prefix. `resolveRunScope` is the host's existing sidecar-token → run lookup; `agentToken` is a second, optional auth path so a deployed agent can present the bearer the hub minted for its own definition instead of the sidecar's token.
 
 | `opts` | Type | What the host provides |
 | --- | --- | --- |
 | `db`, `contentStore` | `ArtifactDb`, `ContentStore` | Same as above. |
 | `resolveRunScope` | `WorkflowRunResolver` | `(bearerToken, runAddress) => ResolvedWorkflowRunScope \| null`. Returning `null` answers 401 — this package makes no assumption about how a host issues or verifies its sidecar tokens. |
 | `agentToken` | `AgentTokenAuth` (optional) | `{ verify(ctx), resolveRun(runAddress) }`. `verify` returns `undefined` for "not an agent token" (the sidecar path is tried instead) and refuses a bearer whose tenant doesn't match the resolved run's. |
-| `uploadPolicy`, `maxBinaryBytes`, `maxContentChars` | — (optional) | Per-run ceilings; see [ARCHITECTURE.md](./ARCHITECTURE.md). |
+| `uploadPolicy` | `UploadPolicy` (optional) | Which MIME types `POST /artifacts/binary` accepts. Defaults to `ARTIFACT_UPLOAD_POLICY`. |
+| `maxBinaryBytes` | `number` (optional) | Byte ceiling for `POST /artifacts/binary`. Defaults to `MAX_UPLOAD_BYTES`. |
+| `maxContentChars` | `number` (optional) | Character ceiling for `content` on `POST /artifacts`. Defaults to 64,000. |
 
 ```ts
 import type { Hono } from "hono";
@@ -101,8 +110,6 @@ export function mountWorkflowArtifactRoutes(
 }
 ```
 
-A host with no `ArtifactDb` yet opens one with `createArtifactDb(DATABASE_URL)` and applies this package's migrations at boot with `runArtifactMigrations(db)`, before either mount runs.
-
 ### 3. Agent/tool side: `@corbits/artifacts/sidecar-bundle`
 
 A deployed agent doesn't write its own artifact client — it imports the tool factory this package ships and adds it to its tool list. The factory resolves a `hub` credential from the runtime capabilities the host injects and calls the run-scoped routes above through it; it holds no database handle and no secret of its own.
@@ -122,31 +129,11 @@ export function buildAssistant(sources: readonly InferencePreference[]) {
 }
 ```
 
-The host binds the agent's `hub` credential handle when it deploys the definition; wiring that binding is a deploy-time concern outside this package.
+When the host deploys this agent definition, it must bind the agent's `hub` credential to the agent's hub token. The tools send every request through that credential, so without the binding they cannot reach the hub.
 
-## How it works
+## Contributing
 
-`mountArtifacts` registers tenant-session routes (list, import, upload, versions, download, archive) and authorizes through the host's `requireGrant`. `mountWorkflowArtifacts` is the parallel mount for run-scoped callers: a bearer plus run address, no browser session. `@corbits/artifacts/sidecar-bundle` is the agent-side tool factory that calls the run-scoped routes over a mediated, credential-scoped fetch. All three persist rows in Postgres and blobs through a pluggable `ContentStore` (`InlineContentStore` for a minimal host). App creation, pooling, and auth stay with the host.
-
-See [ARCHITECTURE.md](./ARCHITECTURE.md) for the data model and mount options.
-
-## Development
-
-```sh
-git clone https://github.com/corbitsdev/corbits-artifacts.git
-cd corbits-artifacts
-bun install
-docker run -d --name corbits-artifact-pg -p 5457:5432 \
-  -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=artifact_core postgres:16
-export ALLOW_DESTRUCTIVE_ARTIFACT_TESTS=1
-
-bun run typecheck
-bun run test             # pretest dependency check, then unit + integration
-bun run build            # dist/ (JS + .d.ts)
-bun run test:acceptance  # builds, then examples/reference-host
-```
-
-Tests expect `postgres://postgres:postgres@localhost:5457/artifact_core` (override with `ARTIFACT_DATABASE_URL`). Destructive tests require `ALLOW_DESTRUCTIVE_ARTIFACT_TESTS=1` and an allowlisted database name (`artifact_core`, or any name ending in `_test`). See [CONTRIBUTING.md](./CONTRIBUTING.md).
+See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## License
 
