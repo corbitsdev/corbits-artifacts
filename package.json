@@ -58,7 +58,10 @@
     "prepack": "bun run build",
     "test": "bun test src",
     "test:e2e": "bun test e2e",
-    "test:coverage": "bun test --coverage src e2e"
+    "test:coverage": "bun test --coverage src e2e",
+    "lint": "oxlint",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check"
   },
   "dependencies": {
     "@hono/standard-validator": "^0.2.3",
@@ -81,20 +84,22 @@
   },
   "devDependencies": {
     "@corbits/artifacts-0.1.0": "npm:@corbits/artifacts@0.1.0",
+    "@intx/agent": "0.4.0",
+    "@intx/authz": "0.4.0",
+    "@intx/db": "0.4.0",
+    "@intx/hub-api": "0.4.0",
+    "@intx/hub-common": "0.4.0",
+    "@intx/hub-sessions": "0.4.0",
     "@intx/types": "0.4.0",
     "@types/bun": "1.1.14",
     "@types/node": "22.10.5",
     "drizzle-orm": "0.45.2",
     "hono": "4.12.32",
     "hono-openapi": "1.2.0",
+    "oxfmt": "0.70.0",
+    "oxlint": "1.85.0",
     "postgres": "3.4.9",
-    "typescript": "5.7.2",
-    "@intx/hub-api": "0.4.0",
-    "@intx/authz": "0.4.0",
-    "@intx/agent": "0.4.0",
-    "@intx/db": "0.4.0",
-    "@intx/hub-common": "0.4.0",
-    "@intx/hub-sessions": "0.4.0"
+    "typescript": "5.7.2"
   },
   "overrides": {
     "drizzle-orm": "0.45.2"

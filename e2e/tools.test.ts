@@ -59,7 +59,7 @@ describe("read windowing", () => {
   test("walking the continuation offsets reads the whole content exactly once", async () => {
     const content = "abcdefghij".repeat(2000);
     const db = await testDb();
-    const row = await seedArtifact(db, { content });
+    await seedArtifact(db, { content });
     let offset = 0;
     let assembled = "";
     for (let guard = 0; guard < 100; guard += 1) {

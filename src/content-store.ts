@@ -1,7 +1,7 @@
 import "./arktype.js";
 import { type } from "arktype";
 import { and, eq } from "drizzle-orm";
-import type { ArtifactDb, ArtifactTx } from "./db.js";
+import type { ArtifactTx } from "./db.js";
 import { upload } from "./schema.js";
 import type {
   ResolvedPrincipal,
