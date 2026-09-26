@@ -22,7 +22,13 @@ import {
   type RequireGrant,
   type TenantEnv,
 } from "@intx/hub-api";
-import { createDB, createGrantStore, runMigrations, schema as intxSchema } from "@intx/db";
+import {
+  createDB,
+  createGrantStore,
+  runMigrations,
+  schema as intxSchema,
+  type DBConfig,
+} from "@intx/db";
 // Interchange owns its id scheme; the host mints its OWN control-plane rows
 // with it rather than inventing a second one.
 import { generateId } from "@intx/hub-common";
@@ -50,7 +56,7 @@ export const DATABASE_URL =
 
 const EPOCH = new Date(0);
 
-function parsePostgresUrl(raw: string) {
+function parsePostgresUrl(raw: string): DBConfig {
   const url = new URL(raw);
   return {
     host: url.hostname,
@@ -103,6 +109,8 @@ export type Session = { userId: string } | null;
 
 export type ReferenceHost = {
   db: ArtifactDb;
+  /** The `DBConfig` the host migrates with. */
+  config: DBConfig;
   /** Interchange tenant id every artifact in this host is scoped to. */
   tenantId: string;
   /** Principal id of the agent Alice owns. */
@@ -130,13 +138,14 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
   // ONE pool. The artifact module mounts on the handle the host already has
   // from `createDB` — the seam takes any drizzle postgres-js instance, so there
   // is no second connection to the same database.
-  const hub = createDB(parsePostgresUrl(DATABASE_URL));
+  const config = parsePostgresUrl(DATABASE_URL);
+  const hub = createDB(config);
   const db: ArtifactDb = hub.db;
 
   // This host resets and truncates its database on boot — refuse to run
   // against anything that doesn't look like a throwaway database unless
   // explicitly opted in.
-  const { database } = parsePostgresUrl(DATABASE_URL);
+  const { database } = config;
   if (
     !database.startsWith("artifact_") &&
     process.env.ARTIFACT_REFERENCE_ALLOW_RESET !== "1"
@@ -156,8 +165,8 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
   // principal stand-ins as FK targets; on a shared dev database those look
   // present by name but lack Interchange's columns, so detect by shape
   // (`tenant.slug`), drop the stand-ins, and migrate for real.
-  // `runArtifactMigrations` needs no such guard — carrying its own ledger is
-  // precisely why it can be called unconditionally on every boot.
+  // `runArtifactMigrations` needs no such guard: every statement is idempotent,
+  // so it runs unconditionally on every boot.
   const [hostSchema] = await db.execute<{ present: boolean }>(sql`
     SELECT EXISTS (
       SELECT 1 FROM information_schema.columns
@@ -168,9 +177,9 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
     await db.execute(sql`DROP TABLE IF EXISTS "public"."principal" CASCADE`);
     await db.execute(sql`DROP TABLE IF EXISTS "public"."tenant" CASCADE`);
     await db.execute(sql`DROP SCHEMA IF EXISTS "artifacts" CASCADE`);
-    await runMigrations(parsePostgresUrl(DATABASE_URL), { schema: "public" });
+    await runMigrations(config, { schema: "public" });
   }
-  await runArtifactMigrations(db);
+  await runArtifactMigrations(config, { schema: "public" });
   await db.execute(
     sql`TRUNCATE TABLE "artifacts"."artifact", "artifacts"."artifact_version", "artifacts"."upload", "artifacts"."mail_attachment_ref" CASCADE`,
   );
@@ -362,6 +371,7 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
 
   return {
     db,
+    config,
     tenantId: tenant.id,
     agentPrincipal,
     scope: () => ({
