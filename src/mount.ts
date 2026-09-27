@@ -628,6 +628,9 @@ export function createArtifactRoutes({
         if (err instanceof UnsupportedUploadTypeError) {
           return c.json({ error: err.message }, 415);
         }
+        if (err instanceof ArtifactSizeError) {
+          return c.json({ error: err.message }, 400);
+        }
         throw err;
       }
 

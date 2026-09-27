@@ -20,6 +20,7 @@ import { type } from "arktype";
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import {
   ArtifactNotFoundError,
+  ArtifactSizeError,
   createArtifact,
   findArtifactByTitle,
   getArtifact,
@@ -191,6 +192,16 @@ function readFailure(c: Context<WorkflowArtifactEnv>, err: unknown): Response {
   throw err;
 }
 
+/** An archived or missing artifact reads as 404, an oversized field as 400. */
+function writeFailure(c: Context<WorkflowArtifactEnv>, err: unknown): Response {
+  if (err instanceof ArtifactNotFoundError) {
+    return c.json({ error: "Artifact not found" }, 404);
+  }
+  if (err instanceof ArtifactSizeError)
+    return c.json({ error: err.message }, 400);
+  throw err;
+}
+
 function parseRecentLimit(raw: string | undefined): number {
   if (raw === undefined || raw === "") return DEFAULT_RECENT_LIMIT;
   const n = Number.parseInt(raw, 10);
@@ -282,20 +293,27 @@ export function createWorkflowArtifactRoutes({
     }
 
     const scope = c.get("workflowRunScope");
-    const row = await db.transaction((tx) =>
-      createArtifact(tx, {
-        scope: { tenantId: scope.tenantId, principalId: scope.principalId },
-        // Workflow-authored artifacts have no human owner-member by default;
-        // a human only enters the picture as the approver who let the
-        // finalize tool call through, not as an owner.
-        ownerPrincipalId: null,
-        kind: parsed.kind,
-        title: parsed.title,
-        content: parsed.content,
-        source: { origin: "workflow", runId: scope.runId },
-        ...(parsed.metadata !== undefined ? { metadata: parsed.metadata } : {}),
-      }),
-    );
+    let row: Awaited<ReturnType<typeof createArtifact>>;
+    try {
+      row = await db.transaction((tx) =>
+        createArtifact(tx, {
+          scope: { tenantId: scope.tenantId, principalId: scope.principalId },
+          // Workflow-authored artifacts have no human owner-member by default;
+          // a human only enters the picture as the approver who let the
+          // finalize tool call through, not as an owner.
+          ownerPrincipalId: null,
+          kind: parsed.kind,
+          title: parsed.title,
+          content: parsed.content,
+          source: { origin: "workflow", runId: scope.runId },
+          ...(parsed.metadata !== undefined
+            ? { metadata: parsed.metadata }
+            : {}),
+        }),
+      );
+    } catch (err) {
+      return writeFailure(c, err);
+    }
     const created: CreatedWorkflowArtifact = {
       id: row.id,
       version: row.version,
@@ -462,13 +480,18 @@ export function createWorkflowArtifactRoutes({
     if (existing === null || existing.tenantId !== scope.tenantId) {
       return c.json({ error: "Artifact not found" }, 404);
     }
-    const written = await writeArtifactVersion(db, {
-      scope: { tenantId: scope.tenantId, principalId: scope.principalId },
-      artifactId,
-      ...(parsed.title !== undefined ? { title: parsed.title } : {}),
-      ...(parsed.content !== undefined ? { content: parsed.content } : {}),
-      ...(parsed.metadata !== undefined ? { metadata: parsed.metadata } : {}),
-    });
+    let written: Awaited<ReturnType<typeof writeArtifactVersion>>;
+    try {
+      written = await writeArtifactVersion(db, {
+        scope: { tenantId: scope.tenantId, principalId: scope.principalId },
+        artifactId,
+        ...(parsed.title !== undefined ? { title: parsed.title } : {}),
+        ...(parsed.content !== undefined ? { content: parsed.content } : {}),
+        ...(parsed.metadata !== undefined ? { metadata: parsed.metadata } : {}),
+      });
+    } catch (err) {
+      return writeFailure(c, err);
+    }
     const revised: CreatedWorkflowArtifact = {
       id: written.artifactId,
       version: written.version,

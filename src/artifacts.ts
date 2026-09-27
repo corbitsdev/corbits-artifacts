@@ -678,11 +678,24 @@ const dateBound = (endOfDay: boolean) =>
     return parsed;
   });
 
+// Only the shape CURSOR_TIMESTAMP_SQL emits; the round trip rejects dates
+// Date.parse rolls over (Feb 30) that Postgres would refuse.
+const CURSOR_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
+
+function isCursorTimestamp(at: string): boolean {
+  if (!CURSOR_TIMESTAMP.test(at)) return false;
+  const parsed = new Date(at);
+  return (
+    !Number.isNaN(parsed.getTime()) &&
+    parsed.toISOString().slice(0, 23) === at.slice(0, 23)
+  );
+}
+
 const ListCursor = type("string").pipe((raw, ctx) => {
   const separatorIndex = raw.lastIndexOf("__");
   const at = raw.slice(0, separatorIndex);
   const id = raw.slice(separatorIndex + 2);
-  if (separatorIndex === -1 || Number.isNaN(Date.parse(at)) || id === "") {
+  if (separatorIndex === -1 || !isCursorTimestamp(at) || id === "") {
     return ctx.error("a valid updatedAt__id cursor");
   }
   return { at, id };
