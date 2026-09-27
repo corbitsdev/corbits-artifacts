@@ -1,15 +1,21 @@
 {
   "compilerOptions": {
-    "strict": true,
-    "exactOptionalPropertyTypes": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
     "target": "ESNext",
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "isolatedModules": true,
     "verbatimModuleSyntax": true,
-    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "exactOptionalPropertyTypes": true,
     "noEmit": true,
-    "types": ["node", "@types/bun"],
-    "paths": { "@corbits/artifacts": ["./src/index.ts"] }
+    "lib": ["ESNext"],
+    "types": ["bun"]
   },
   "include": ["src", "e2e"]
 }

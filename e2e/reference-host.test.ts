@@ -16,7 +16,7 @@ import {
   runArtifactMigrations,
   UnsupportedUploadTypeError,
   type ContentStore,
-} from "@corbits/artifacts";
+} from "../src/index.js";
 import {
   createReferenceHost,
   type ReferenceHost,

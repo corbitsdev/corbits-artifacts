@@ -48,7 +48,7 @@ import {
   type ResolvedPrincipal,
   type ContentStore,
   type SerializedArtifactBase,
-} from "@corbits/artifacts";
+} from "../../../src/index.js";
 import { databaseConfig, DATABASE_URL } from "../../../e2e/helpers.js";
 
 const EPOCH = new Date(0);
