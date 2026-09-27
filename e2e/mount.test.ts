@@ -430,6 +430,60 @@ describe("GET /artifacts", () => {
     );
   });
 
+  test("rejects dates outside years 1 to 9999 and versions past int4 with 400", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const row = await seedArtifact(db);
+    for (const path of [
+      "/artifacts?createdAfter=10000-01-01",
+      "/artifacts?createdBefore=-000001-01-01",
+      `/artifacts/${row.id}/versions/2147483648`,
+      `/artifacts/${row.id}/versions?cursor=2147483648`,
+      `/artifacts/${row.id}/download?version=2147483648`,
+    ]) {
+      expect((await app.request(path)).status).toBe(400);
+    }
+    expect(
+      (
+        await app.request(
+          `/artifacts/${row.id}/versions`,
+          json({ content: "v2", expectedVersion: 2147483648 }),
+        )
+      ).status,
+    ).toBe(400);
+  });
+
+  test("a multipart body with a bad or missing boundary is 400", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const form = new FormData();
+    form.append("file", new File(["hello"], "a.txt", { type: "text/plain" }));
+    const uploaded = await app.request("/artifacts/upload", {
+      method: "POST",
+      body: form,
+    });
+    expect(uploaded.status).toBe(201);
+    const { artifacts } = (await uploaded.json()) as {
+      artifacts: { id: string }[];
+    };
+    for (const path of [
+      "/artifacts/upload",
+      `/artifacts/${artifacts[0]!.id}/versions`,
+    ]) {
+      for (const contentType of [
+        "multipart/form-data",
+        "multipart/form-data; boundary=nope",
+      ]) {
+        const res = await app.request(path, {
+          method: "POST",
+          headers: { "content-type": contentType },
+          body: "not multipart",
+        });
+        expect(res.status).toBe(400);
+      }
+    }
+  });
+
   test("a caller-supplied tenant cannot widen the resolved scope", async () => {
     const db = await testDb();
     await seedArtifact(db, { title: "Theirs", tenantId: "other" });
