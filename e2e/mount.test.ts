@@ -408,6 +408,23 @@ describe("GET /artifacts", () => {
     const db = await testDb();
     const app = host(db);
     expect((await app.request("/artifacts?cursor=garbage")).status).toBe(400);
+    for (const at of [
+      "2026-02-30T00:00:00.000000Z",
+      "2026-01-01",
+      "+002026-01-01T00:00:00.000000Z",
+    ]) {
+      expect(
+        (
+          await app.request(
+            `/artifacts?cursor=${encodeURIComponent(`${at}__x`)}`,
+          )
+        ).status,
+      ).toBe(400);
+    }
+    expect(
+      (await app.request("/artifacts?cursor=2026-01-01T00:00:00.000000Z__x"))
+        .status,
+    ).toBe(200);
     expect((await app.request("/artifacts?createdAfter=nonsense")).status).toBe(
       400,
     );
@@ -1195,6 +1212,20 @@ describe("onArtifactCreated: the host's grant-provisioning seam", () => {
 });
 
 describe("POST /artifacts/upload", () => {
+  test("an upload whose filename is over the title limit is 400", async () => {
+    const db = await testDb();
+    const form = new FormData();
+    form.append(
+      "files",
+      new File(["a"], `${"a".repeat(600)}.txt`, { type: "text/plain" }),
+    );
+    const res = await host(db).request("/artifacts/upload", {
+      method: "POST",
+      body: form,
+    });
+    expect(res.status).toBe(400);
+  });
+
   const form = (files: File[], generatedBy?: string) => {
     const data = new FormData();
     for (const file of files) data.append("files", file);

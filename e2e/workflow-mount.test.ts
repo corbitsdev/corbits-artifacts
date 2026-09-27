@@ -4,7 +4,7 @@ import {
   type ResolvedWorkflowRunScope,
 } from "../src/workflow-mount.js";
 import { InlineContentStore } from "../src/content-store.js";
-import { getArtifact } from "../src/artifacts.js";
+import { getArtifact, setArtifactArchived } from "../src/artifacts.js";
 import { seedArtifact } from "./fixtures.js";
 import { testDb } from "./helpers.js";
 import type { ArtifactDb } from "../src/db.js";
@@ -80,6 +80,14 @@ describe("auth", () => {
 });
 
 describe("POST /artifacts", () => {
+  test("an oversized title is 400", async () => {
+    const res = await host(await testDb()).request(
+      "/artifacts",
+      json({ title: "t".repeat(600), kind: "document", content: "hello" }),
+    );
+    expect(res.status).toBe(400);
+  });
+
   test("creates a workflow-origin artifact scoped to the run's tenant", async () => {
     const db = await testDb();
     const app = host(db);
@@ -317,6 +325,23 @@ describe("POST /artifacts/binary", () => {
 });
 
 describe("PATCH /artifacts/:id", () => {
+  test("revising an archived artifact is 404 and an oversized title is 400", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const row = await seedArtifact(db, {
+      tenantId: "acme",
+      title: "Draft",
+      content: "v1",
+    });
+    const long = patchJson({ title: "t".repeat(600) });
+    expect((await app.request(`/artifacts/${row.id}`, long)).status).toBe(400);
+    await setArtifactArchived(db, row, true);
+    expect(
+      (await app.request(`/artifacts/${row.id}`, patchJson({ content: "v2" })))
+        .status,
+    ).toBe(404);
+  });
+
   test("sets metadata and returns it in the response", async () => {
     const db = await testDb();
     const app = host(db);
