@@ -13,7 +13,7 @@ always called out under their own heading.
 
 - Run-scoped `POST /artifacts`, `POST /artifacts/binary`, and
   `PATCH /artifacts/:id` (`mountWorkflowArtifacts`) accept an optional
-  `metadata` field, matching `mountArtifacts`' semantics exactly: omitted on
+  `metadata` field, matching the tenant routes' semantics exactly: omitted on
   a revise carries the prior version's metadata forward, an explicit `null`
   clears it, and any other value must be a JSON object or the request is
   `400`. `artifact_create` and `artifact_write` in `ARTIFACT_TOOL_DEFINITIONS`
@@ -102,9 +102,10 @@ always called out under their own heading.
   `bun add github:corbitsdev/corbits-artifacts` installs cleanly. Bun consumers
   resolve TypeScript sources via the `bun` export condition; Node consumers
   continue to use the built `dist/` from `npm pack` / a published release.
-- `mountArtifacts` takes an optional `onArtifactCreated(tx, row, scope)` hook,
-  run inside the same transaction as artifact creation (once per row, so once
-  on `POST /artifacts` and once per file on `POST /artifacts/upload`). This is
+- `createArtifactRoutes` takes an optional
+  `onArtifactCreated(tx, row, scope)` hook, run inside the same transaction
+  as artifact creation (once per row, so once on `POST /artifacts` and once
+  per file on `POST /artifacts/upload`). This is
   the seam a host uses to provision grants for the row it just made — for
   example, a `creator`-origin grant on `artifact:<id>` for `write` and
   `archive`. Defaults to a no-op, so existing hosts are unaffected.
@@ -124,6 +125,16 @@ always called out under their own heading.
 
 ### Breaking
 
+- `mountArtifacts(app, opts)` is replaced by `createArtifactRoutes(deps)`,
+  which returns a `Hono<TenantEnv>` sub-app the host mounts with
+  `app.route(...)` instead of mutating the host app. `MountArtifactsOpts` is
+  renamed `CreateArtifactRoutesDeps`; the options are unchanged.
+- `POST /artifacts` and `POST /artifacts/upload` now require
+  `requireGrant("artifact:*", "create")`, as hub-api's `createGrantRoutes`
+  requires `create` on `grant:*`. A host must grant its principals `create`
+  on `artifact:*` for them to keep creating artifacts. An unauthenticated
+  caller of these two routes now gets `{ "error": "Forbidden" }` instead of
+  `{ "error": "Tenant not accessible" }`.
 - `runArtifactMigrations(config, { schema })` takes the same arguments as
   Interchange's `runMigrations`: a `DBConfig` and the host schema holding
   `tenant` and `principal`. It applies the SQL files shipped under
@@ -135,8 +146,8 @@ always called out under their own heading.
   `mailAttachmentRef`) are no longer exported from the package entry. Hosts
   reach artifacts through the routes and functions; `ARTIFACTS_SCHEMA` and the
   `*Row` types stay public.
-- `mountArtifacts` takes `Hono<TenantEnv>`, reads the host-provided tenant and
-  principal context natively, and requires the host's Interchange `RequireGrant`
+- The tenant routes take `Hono<TenantEnv>`, read the host-provided tenant and
+  principal context natively, and require the host's Interchange `RequireGrant`
   middleware. The `resolvePrincipal`, `isAdmin`, and `identity` options and the
   `Identity` / `anonymousIdentity` exports are not part of the package surface.
 - Serialized artifact rows expose `ownerPrincipalId` without an `ownerName`.

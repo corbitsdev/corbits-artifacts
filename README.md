@@ -26,51 +26,34 @@ const { db, close } = createArtifactDb(process.env.DATABASE_URL!);
 await close();
 ```
 
-### 1. Hub-side, tenant-scoped: `mountArtifacts`
+### 1. Hub-side, tenant-scoped: `createArtifactRoutes`
 
-Mounted under the hub's tenant prefix, alongside a host's other session-authenticated routes. It reads `principal`/`tenant` off the Hono context (placed there by the host's own auth + tenant middleware) and authorizes mutations through the host's `requireGrant` — built from Interchange's `createRequireGrant` over the host's own `GrantStore` and `ConditionRegistry`.
+Returns a `Hono<TenantEnv>` sub-app the host mounts with `app.route`, alongside its other session-authenticated routes. It reads `principal`/`tenant` off the Hono context (placed there by the host's own auth + tenant middleware) and authorizes mutations through the host's `requireGrant` — built from Interchange's `createRequireGrant` over the host's own `GrantStore` and `ConditionRegistry`.
 
-| `opts` | Type | What the host provides |
+| `deps` | Type | What the host provides |
 | --- | --- | --- |
 | `db` | `ArtifactDb` | Artifacts are stored there. `createArtifactDb` opens a handle for a host with none; a hub that already has one passes it through. |
 | `contentStore` | `ContentStore` | Blob storage for file bytes. `InlineContentStore` (exported by this package) fits a minimal host; bring your own store for object storage. |
-| `requireGrant` | `RequireGrant` | The host's grant middleware factory. This package implements no ownership or membership policy of its own — every mutating single-artifact route is gated through it. |
+| `requireGrant` | `RequireGrant` | The host's grant middleware factory. This package implements no ownership or membership policy of its own. Creating an artifact requires `create` on `artifact:*`; revising or archiving one requires `write` or `archive` on `artifact:<id>`. Recording mail-attachment references needs only a principal. |
 | `countSegments` | `ArtifactCountSegments` (optional) | Named predicates over `ArtifactListRow` for `GET /artifacts/counts` (e.g. bucket by `kind`). The taxonomy is entirely host-owned; omitted, the route still answers with the tenant-wide `all` total. |
 | `onArtifactCreated` | `(tx, row, scope) => Promise<void>` (optional) | Runs inside the transaction that creates each artifact. This is where the host mints grants for the new row, e.g. `write` and `archive` on `artifact:<id>` for its creator. The package mints none itself. |
 | `decorate` | `(tenantId, rows) => Promise<void>` (optional) | Adds display-only fields to serialized rows on the way out (provenance labels, host joins). It must never change which rows are returned or who may see them. |
 | `uploadPolicy` | `UploadPolicy` (optional) | Which MIME types `POST /artifacts/upload` accepts. Defaults to `ARTIFACT_UPLOAD_POLICY`. |
 
 ```ts
-import type { Hono } from "hono";
-import type { TenantEnv } from "@intx/hub-api";
 import { createRequireGrant } from "@intx/hub-api";
-import type { ConditionRegistry, GrantStore } from "@intx/types/authz";
-import {
-  InlineContentStore,
-  mountArtifacts,
-  type ArtifactDb,
-  type ArtifactCountSegments,
-} from "@corbits/artifacts";
+import { createArtifactRoutes, InlineContentStore } from "@corbits/artifacts";
 
-export function mountArtifactRoutes(
-  app: Hono<TenantEnv>,
-  deps: {
-    db: ArtifactDb;
-    grantStore: GrantStore;
-    conditionRegistry: ConditionRegistry;
-    countSegments?: ArtifactCountSegments;
-  },
-): void {
-  mountArtifacts(app, {
-    db: deps.db,
+// `app` is the host's Hono<TenantEnv>; its auth + tenant middleware has
+// already placed `tenant` and `principal` on the context.
+app.route(
+  "/api",
+  createArtifactRoutes({
+    db,
     contentStore: InlineContentStore,
-    requireGrant: createRequireGrant({
-      grantStore: deps.grantStore,
-      conditionRegistry: deps.conditionRegistry,
-    }),
-    ...(deps.countSegments !== undefined ? { countSegments: deps.countSegments } : {}),
-  });
-}
+    requireGrant: createRequireGrant({ grantStore, conditionRegistry }),
+  }),
+);
 ```
 
 ### 2. Hub-side, run-scoped: `mountWorkflowArtifacts`

@@ -1,11 +1,11 @@
 /**
- * Run-scoped variant of `mountArtifacts` for a host whose workflow-run
- * callers have no browser session and thus no `TenantEnv`/`principal` on the
- * context — a sidecar bearer token + run address instead. `mountArtifacts`
- * itself has no bearer-token auth surface at all and never will: mixing two
- * unrelated auth conventions into one mount would make each harder to reason
- * about, so this is a second, parallel mount a host wires up only when it
- * actually runs workflows.
+ * Run-scoped counterpart to the tenant routes in `createArtifactRoutes`, for a
+ * host whose workflow-run callers have no browser session and thus no
+ * `TenantEnv`/`principal` on the context — a sidecar bearer token + run address
+ * instead. The tenant routes themselves have no bearer-token auth surface at
+ * all and never will: mixing two unrelated auth conventions into one mount
+ * would make each harder to reason about, so this is a second, parallel mount
+ * a host wires up only when it actually runs workflows.
  *
  * The host supplies `resolveRunScope`, a function from `(bearerToken,
  * runAddress)` to a resolved run scope or `null` — exactly how it already
@@ -107,7 +107,7 @@ export type MountWorkflowArtifactsOpts = {
   /** Optional second authentication path, tried before the sidecar token. */
   agentToken?: AgentTokenAuth;
   /** Which files `POST /artifacts/binary` accepts. Defaults to the same
-   * policy `mountArtifacts`' `POST /artifacts/upload` uses. */
+   * policy `createArtifactRoutes`' `POST /artifacts/upload` uses. */
   uploadPolicy?: UploadPolicy;
   /** Byte ceiling for `POST /artifacts/binary`. Defaults to `MAX_UPLOAD_BYTES`
    * — the same per-file ceiling the tenant upload route enforces, so there is
@@ -195,7 +195,7 @@ function parseRecentLimit(raw: string | undefined): number {
 
 /**
  * Mount the run-scoped artifact routes onto a host Hono app. Unlike
- * `mountArtifacts`, every route here is behind its own bearer-token
+ * `createArtifactRoutes`, every route here is behind its own bearer-token
  * middleware — there is no unauthenticated collection-read case, since a
  * workflow run always presents credentials.
  */
@@ -484,8 +484,8 @@ export function mountWorkflowArtifacts(
     const scope = c.get("workflowRunScope");
     const artifactId = c.req.param("id");
     const row = await getArtifact(db, artifactId);
-    // Fetch-then-check, exactly mirroring `mountArtifacts`' own single-artifact
-    // routes: an id from another tenant, or a skill-draft, reads back
+    // Fetch-then-check, exactly mirroring the tenant routes' single-artifact
+    // handlers: an id from another tenant, or a skill-draft, reads back
     // identically to an id that never existed — never a distinguishable 403.
     if (row === null || row.tenantId !== scope.tenantId || row.kind === SKILL_DRAFT_KIND) {
       return c.json({ error: "Artifact not found" }, 404);

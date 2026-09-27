@@ -1,6 +1,6 @@
 import "./arktype.js";
 import { type } from "arktype";
-import type { Context, Hono } from "hono";
+import { Hono, type Context } from "hono";
 import type { MiddlewareHandler } from "hono";
 import { describeRoute } from "hono-openapi";
 import { idResource, type RequireGrant, type TenantEnv } from "@intx/hub-api";
@@ -58,13 +58,15 @@ import {
 } from "./uploads.js";
 import { WebSiteContentError } from "./web-site.js";
 
-export type MountArtifactsOpts = {
+export type CreateArtifactRoutesDeps = {
   db: ArtifactDb;
   contentStore: ContentStore;
   /**
    * The host's grant middleware factory (Interchange `createRequireGrant`).
    * Authorize is the host's responsibility: artifact-core implements no owner,
-   * agent-owner, membership, or admin policy. The mutating routes that act on
+   * agent-owner, membership, or admin policy. Creating an artifact
+   * (`POST /artifacts`, `POST /artifacts/upload`) requires
+   * `requireGrant("artifact:*", "create")`; the mutating routes that act on
    * one artifact are guarded with `requireGrant(idResource("artifact", "id"),
    * <action>)`.
    */
@@ -177,6 +179,10 @@ const ReviseArtifactRequest = type({
     ctx.mustBe("a body with content, title, and/or metadata"),
 );
 
+/** The resource creating an artifact is authorized against, as hub-api's
+ * `createGrantRoutes` authorizes creating a grant against `grant:*`. */
+const ARTIFACT_COLLECTION = "artifact:*";
+
 const idParam = {
   name: "id",
   in: "path",
@@ -195,31 +201,28 @@ const VersionRef = type("string").pipe((raw, ctx) => {
 });
 
 /**
- * Mount the artifact routes onto a host Hono app.
+ * Build the artifact routes as a sub-app the host mounts with `app.route`.
  *
- * Takes `Hono<TenantEnv>` so it composes with a host app mounted beneath
- * Interchange's auth + tenant middleware, which puts the resolved `tenant` and
- * `principal` on the context. The host owns principal resolution and grants;
- * this package reads the principal from context and authorizes the mutating
- * routes through the host's `requireGrant`.
+ * Typed `Hono<TenantEnv>` so it composes beneath Interchange's auth + tenant
+ * middleware, which puts the resolved `tenant` and `principal` on the context.
+ * The host owns principal resolution and grants; this package reads the
+ * principal from context and authorizes the mutating routes through the
+ * host's `requireGrant`.
  *
  * With no principal on the context, collection reads answer an empty 200 while
  * detail reads and mutations answer 403 — the same rule every `@corbits/*-core`
  * package follows. See "No principal on the context" in the README for why.
  */
-export function mountArtifacts(
-  app: Hono<TenantEnv>,
-  opts: MountArtifactsOpts,
-): Hono<TenantEnv> {
-  const {
-    db,
-    contentStore,
-    requireGrant,
-    decorate = async () => {},
-    onArtifactCreated = async () => {},
-    uploadPolicy = ARTIFACT_UPLOAD_POLICY,
-    countSegments = {},
-  } = opts;
+export function createArtifactRoutes({
+  db,
+  contentStore,
+  requireGrant,
+  decorate = async () => {},
+  onArtifactCreated = async () => {},
+  uploadPolicy = ARTIFACT_UPLOAD_POLICY,
+  countSegments = {},
+}: CreateArtifactRoutesDeps): Hono<TenantEnv> {
+  const app = new Hono<TenantEnv>();
 
   // The handler context is TenantEnv. `principal` (and `tenant`) is placed by
   // Interchange's middleware; nothing here resolves it.
@@ -421,15 +424,18 @@ export function mountArtifacts(
       responses: {
         201: { description: "Artifact created" },
         400: { description: "Invalid request body" },
-        403: { description: "Tenant not accessible" },
+        403: { description: "No resolvable principal, or not permitted" },
         413: { description: "Declared Content-Length over the content ceiling" },
       },
     }),
+    // Principal and grant before body: an unauthenticated or unpermitted
+    // caller gets 403 without learning whether the JSON was well-formed.
+    principalRequired,
+    requireGrant(ARTIFACT_COLLECTION, "create"),
     async (c) => {
-      // Principal before body: unauthenticated callers get 403 without learning
-      // whether the JSON was well-formed.
       const scope = await scopeFor(c);
-      if (!scope) return c.json({ error: "Tenant not accessible" }, 403);
+      // principalRequired already ran; a null scope here would mean it didn't.
+      if (!scope) return c.json({ error: "Forbidden" }, 403);
       if (contentLengthOverCeiling(c)) {
         return c.json(
           {
@@ -486,14 +492,17 @@ export function mountArtifacts(
       responses: {
         201: { description: "Artifacts created" },
         400: { description: "No files supplied" },
-        403: { description: "Tenant not accessible" },
+        403: { description: "No resolvable principal, or not permitted" },
         413: { description: "Too many files, or a file/aggregate over the limit" },
         415: { description: "A file has an unsupported type" },
       },
     }),
+    principalRequired,
+    requireGrant(ARTIFACT_COLLECTION, "create"),
     async (c) => {
       const scope = await scopeFor(c);
-      if (!scope) return c.json({ error: "Tenant not accessible" }, 403);
+      // principalRequired already ran; a null scope here would mean it didn't.
+      if (!scope) return c.json({ error: "Forbidden" }, 403);
 
       const parsed = await c.req.parseBody({ all: true });
       const files: File[] = [];

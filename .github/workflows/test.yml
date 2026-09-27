@@ -76,7 +76,7 @@ jobs:
           npm install "$TARBALL"
           node -e '
             import("@corbits/artifacts").then((m) => {
-              for (const name of ["mountArtifacts", "runArtifactMigrations"]) {
+              for (const name of ["createArtifactRoutes", "runArtifactMigrations"]) {
                 if (typeof m[name] !== "function") throw new Error(`missing export: ${name}`);
               }
               console.log("node consumer ok");
