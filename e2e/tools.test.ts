@@ -115,12 +115,12 @@ describe("artifact_read", () => {
     });
   });
 
-  test("a missing version is an error naming the version", async () => {
+  test("a missing version is not found", async () => {
     const db = await testDb();
     const row = await seedArtifact(db);
     await expect(
       readArtifact(db, { scope: SCOPE, artifactId: row.id, version: 7 }),
-    ).rejects.toThrow(/Version 7 not found/);
+    ).rejects.toBeInstanceOf(ArtifactNotFoundError);
   });
 
   test("an artifact in another tenant is not found", async () => {

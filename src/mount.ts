@@ -16,6 +16,7 @@ import {
   ListArtifactsQuery,
   listArtifactVersions,
   ListArtifactVersionsQuery,
+  MAX_VERSION,
   MAX_ARTIFACT_CONTENT_BYTES,
   MetadataShape,
   serializeArtifact,
@@ -158,7 +159,8 @@ const GeneratedByField = type("unknown")
 // string). Omitted entirely preserves today's unconditional-write behavior.
 const ExpectedVersion = type("number").narrow(
   (n, ctx) =>
-    (Number.isInteger(n) && n >= 1) || ctx.mustBe("a positive integer"),
+    (Number.isInteger(n) && n >= 1 && n <= MAX_VERSION) ||
+    ctx.mustBe("a positive integer"),
 );
 
 const ReviseArtifactRequest = type({
@@ -189,11 +191,20 @@ const idParam = {
 // else (non-numeric, fractional, zero, negative).
 const VersionRef = type("string").pipe((raw, ctx) => {
   const n = Number(raw);
-  if (!Number.isInteger(n) || n < 1) {
+  if (!Number.isInteger(n) || n < 1 || n > MAX_VERSION) {
     return ctx.error("a positive integer version");
   }
   return n;
 });
+
+// A malformed multipart body (bad or missing boundary) is the caller's error.
+async function parseMultipart(c: Context) {
+  try {
+    return await c.req.parseBody({ all: true });
+  } catch {
+    return null;
+  }
+}
 
 // The artifact as it stood at one version, for the version detail and download routes.
 function rowAtVersion(
@@ -549,7 +560,10 @@ export function createArtifactRoutes({
       // principalRequired already ran; a null scope here would mean it didn't.
       if (!scope) return c.json({ error: "Forbidden" }, 403);
 
-      const parsed = await c.req.parseBody({ all: true });
+      const parsed = await parseMultipart(c);
+      if (parsed === null) {
+        return c.json({ error: "Expected a multipart/form-data body" }, 400);
+      }
       const files: File[] = [];
       for (const value of Object.values(parsed)) {
         for (const entry of Array.isArray(value) ? value : [value]) {
@@ -896,7 +910,10 @@ export function createArtifactRoutes({
         400,
       );
     }
-    const parsed = await c.req.parseBody({ all: true });
+    const parsed = await parseMultipart(c);
+    if (parsed === null) {
+      return c.json({ error: "Expected a multipart/form-data body" }, 400);
+    }
     const file = parsed["file"];
     if (!(file instanceof File)) {
       return c.json({ error: "Expected one file field named file" }, 400);

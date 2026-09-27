@@ -25,6 +25,7 @@ import {
   findArtifactByTitle,
   getArtifact,
   listArtifacts,
+  MAX_VERSION,
   MetadataShape,
   serializeArtifact,
   serializeArtifactListItem,
@@ -178,8 +179,16 @@ function parseNumberQuery<K extends string>(
   return { [key]: n } as Record<K, number>;
 }
 
+/** Throws on a version no row can hold, which `readFailure` answers with a 400. */
 function parseVersionQuery(raw: string | undefined): { version?: number } {
-  return parseNumberQuery("version", raw);
+  const parsed = parseNumberQuery("version", raw);
+  if (
+    parsed.version !== undefined &&
+    (parsed.version < 1 || parsed.version > MAX_VERSION)
+  ) {
+    throw new Error(`version must be between 1 and ${MAX_VERSION}`);
+  }
+  return parsed;
 }
 
 /** A missing artifact or a missing pinned version both read as 404; anything
@@ -388,6 +397,9 @@ export function createWorkflowArtifactRoutes({
       if (err instanceof UnsupportedUploadTypeError) {
         return c.json({ error: err.message }, 415);
       }
+      if (err instanceof ArtifactSizeError) {
+        return c.json({ error: err.message }, 400);
+      }
       throw err;
     }
   });
@@ -433,15 +445,20 @@ export function createWorkflowArtifactRoutes({
       return c.json({ error: parsed.summary }, 400);
     }
     const scope = c.get("workflowRunScope");
-    const row = await linkFileArtifact(db, {
-      scope: { tenantId: scope.tenantId, principalId: scope.principalId },
-      ownerPrincipalId: null,
-      title: parsed.title,
-      kind: parsed.kind,
-      path: parsed.path,
-      ...(parsed.preview !== undefined ? { preview: parsed.preview } : {}),
-      sessionId: scope.runId,
-    });
+    let row;
+    try {
+      row = await linkFileArtifact(db, {
+        scope: { tenantId: scope.tenantId, principalId: scope.principalId },
+        ownerPrincipalId: null,
+        title: parsed.title,
+        kind: parsed.kind,
+        path: parsed.path,
+        ...(parsed.preview !== undefined ? { preview: parsed.preview } : {}),
+        sessionId: scope.runId,
+      });
+    } catch (err) {
+      return writeFailure(c, err);
+    }
     const created: CreatedWorkflowArtifact = {
       id: row.id,
       version: row.version,

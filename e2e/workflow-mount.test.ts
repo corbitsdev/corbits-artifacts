@@ -422,3 +422,42 @@ describe("PATCH /artifacts/:id", () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe("user-input errors", () => {
+  test("an oversized binary filename or link-file title is 400", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const long = "x".repeat(600);
+    const binary = await app.request(
+      "/artifacts/binary",
+      json({
+        filename: `${long}.html`,
+        mimeType: "text/html",
+        contentBase64: Buffer.from("<p>hi</p>").toString("base64"),
+      }),
+    );
+    expect(binary.status).toBe(400);
+    const linked = await app.request(
+      "/artifacts/link-file",
+      json({ title: long, kind: "document", path: "out/report.md" }),
+    );
+    expect(linked.status).toBe(400);
+  });
+
+  test("read of a missing version is 404; a version past int4 is 400", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const row = await seedArtifact(db, { tenantId: "acme" });
+    const read = (query: string) =>
+      app.request(`/artifacts/${row.id}/read${query}`, { headers: authed });
+    expect((await read("?version=7")).status).toBe(404);
+    expect((await read("?version=2147483648")).status).toBe(400);
+    expect(
+      (
+        await app.request(`/artifacts/${row.id}/chunk?version=2147483648`, {
+          headers: authed,
+        })
+      ).status,
+    ).toBe(400);
+  });
+});

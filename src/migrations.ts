@@ -55,7 +55,11 @@ export async function runArtifactMigrations(
     password: config.password,
     database: config.database,
     max: 1,
-    onnotice: () => undefined,
+    onnotice: (notice) => {
+      if (notice.severity === "WARNING") {
+        console.warn(`@corbits/artifacts migration: ${notice.message}`);
+      }
+    },
   };
   if (config.ssl !== undefined) clientOptions.ssl = config.ssl;
   const client = postgres(clientOptions);

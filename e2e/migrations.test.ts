@@ -80,6 +80,71 @@ describe("runArtifactMigrations", () => {
     ]);
   });
 
+  const invariants = async () => {
+    const checks = await testDb.db.execute<{ conname: string }>(sql`
+      SELECT conname FROM pg_constraint
+      WHERE conname IN ('artifact_version_gte_1', 'artifact_version_version_gte_1', 'upload_size_gte_0')
+      ORDER BY conname
+    `);
+    const [tenant] = await testDb.db.execute<{ is_nullable: string }>(sql`
+      SELECT is_nullable FROM information_schema.columns
+      WHERE table_schema = 'artifacts' AND table_name = 'artifact' AND column_name = 'tenant_id'
+    `);
+    return {
+      checks: checks.map((row) => row.conname),
+      tenantNullable: tenant?.is_nullable,
+    };
+  };
+
+  test("restores 0.1.0's CHECK constraints and tenant_id NOT NULL", async () => {
+    await testDb.db.execute(sql`
+      ALTER TABLE "artifacts"."artifact"
+        DROP CONSTRAINT "artifact_version_gte_1",
+        ALTER COLUMN "tenant_id" DROP NOT NULL
+    `);
+    await testDb.db.execute(sql`
+      ALTER TABLE "artifacts"."artifact_version" DROP CONSTRAINT "artifact_version_version_gte_1"
+    `);
+    await testDb.db.execute(sql`
+      ALTER TABLE "artifacts"."upload" DROP CONSTRAINT "upload_size_gte_0"
+    `);
+    await runArtifactMigrations(testDb.config, { schema: "public" });
+    expect(await invariants()).toEqual({
+      checks: [
+        "artifact_version_gte_1",
+        "artifact_version_version_gte_1",
+        "upload_size_gte_0",
+      ],
+      tenantNullable: "NO",
+    });
+  });
+
+  test("leaves tenant_id nullable and warns while null tenants remain", async () => {
+    await testDb.db.execute(sql`
+      ALTER TABLE "artifacts"."artifact" ALTER COLUMN "tenant_id" DROP NOT NULL
+    `);
+    await testDb.db.execute(sql`
+      INSERT INTO "artifacts"."artifact" ("tenant_id", "kind", "title", "content")
+      VALUES (NULL, 'document', 'orphan', 'body')
+    `);
+    const warnings: unknown[] = [];
+    const warn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(args[0]);
+    try {
+      await runArtifactMigrations(testDb.config, { schema: "public" });
+    } finally {
+      console.warn = warn;
+    }
+    expect((await invariants()).tenantNullable).toBe("YES");
+    expect(String(warnings[0])).toContain("null tenant_id");
+
+    await testDb.db.execute(
+      sql`DELETE FROM "artifacts"."artifact" WHERE "tenant_id" IS NULL`,
+    );
+    await runArtifactMigrations(testDb.config, { schema: "public" });
+    expect((await invariants()).tenantNullable).toBe("NO");
+  });
+
   test("a host boots with createArtifactDb after migrating, and close releases it", async () => {
     const { db, close } = createArtifactDb(connectionString(testDb.config));
     try {

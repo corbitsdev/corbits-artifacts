@@ -135,9 +135,7 @@ async function resolveForRead(
 
   const pinned = await getArtifactVersion(db, args.artifactId, args.version);
   if (!pinned) {
-    throw new Error(
-      `Version ${args.version} not found for artifact ${args.artifactId}`,
-    );
+    throw new ArtifactNotFoundError(args.artifactId);
   }
   return {
     base: {

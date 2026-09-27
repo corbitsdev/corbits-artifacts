@@ -300,6 +300,9 @@ export async function createArtifact(
   return row;
 }
 
+/** Postgres `int4` max: the largest version a column can hold. */
+export const MAX_VERSION = 2_147_483_647;
+
 export class ArtifactNotFoundError extends Error {
   constructor(artifactId: string) {
     super(`Artifact not found: ${artifactId}`);
@@ -673,7 +676,13 @@ export type ListArtifactsFilters = {
 const dateBound = (endOfDay: boolean) =>
   type("string").pipe((raw, ctx) => {
     const parsed = new Date(raw);
-    if (Number.isNaN(parsed.getTime())) return ctx.error("a valid date");
+    if (
+      Number.isNaN(parsed.getTime()) ||
+      parsed.getUTCFullYear() < 1 ||
+      parsed.getUTCFullYear() > 9999
+    ) {
+      return ctx.error("a valid date between years 1 and 9999");
+    }
     if (endOfDay && DATE_ONLY.test(raw)) parsed.setUTCHours(23, 59, 59, 999);
     return parsed;
   });
@@ -730,7 +739,7 @@ export const ListArtifactsQuery = type({
 export const ListArtifactVersionsQuery = type({
   "cursor?": type("string").pipe((raw, ctx) => {
     const n = Number(raw);
-    if (!Number.isInteger(n) || n < 1) {
+    if (!Number.isInteger(n) || n < 1 || n > MAX_VERSION) {
       return ctx.error("a positive integer version cursor");
     }
     return n;
