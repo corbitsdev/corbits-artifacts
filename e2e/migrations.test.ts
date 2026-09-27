@@ -58,7 +58,10 @@ describe("runArtifactMigrations", () => {
         DROP COLUMN "metadata", DROP COLUMN "parent_version_ids", DROP COLUMN "content_sha256"
     `);
     await runArtifactMigrations(testDb.config, { schema: "public" });
-    const columns = await testDb.db.execute<{ column: string; type: string }>(sql`
+    const columns = await testDb.db.execute<{
+      column: string;
+      type: string;
+    }>(sql`
       SELECT table_name || '.' || column_name AS column, udt_name AS type
       FROM information_schema.columns
       WHERE table_schema = 'artifacts'

@@ -31,7 +31,10 @@ export type ArtifactsToolEnv = BaseEnv & {
   readonly address: string;
 };
 
-type MediatedFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+type MediatedFetch = (
+  input: string | URL | Request,
+  init?: RequestInit,
+) => Promise<Response>;
 
 type Request_ = {
   readonly method: "GET" | "POST" | "PATCH";
@@ -55,7 +58,10 @@ function str(value: unknown): string | undefined {
 
 /** Maps one model-facing tool call onto the run-scoped route that performs
  * it. An unknown name returns undefined and answers as a tool error. */
-function requestFor(name: string, args: Record<string, unknown>): Request_ | undefined {
+function requestFor(
+  name: string,
+  args: Record<string, unknown>,
+): Request_ | undefined {
   switch (name) {
     case "artifact_create":
       return {
@@ -65,7 +71,9 @@ function requestFor(name: string, args: Record<string, unknown>): Request_ | und
           title: args["title"],
           kind: args["kind"],
           content: args["content"],
-          ...(args["metadata"] !== undefined ? { metadata: args["metadata"] } : {}),
+          ...(args["metadata"] !== undefined
+            ? { metadata: args["metadata"] }
+            : {}),
         },
       };
     case "artifact_link_file":
@@ -76,24 +84,30 @@ function requestFor(name: string, args: Record<string, unknown>): Request_ | und
           title: args["title"],
           kind: args["kind"],
           path: args["path"],
-          ...(str(args["preview"]) !== undefined ? { preview: args["preview"] } : {}),
+          ...(str(args["preview"]) !== undefined
+            ? { preview: args["preview"] }
+            : {}),
         },
       };
     case "artifact_read":
       return {
         method: "GET",
-        path: `/artifacts/${encodeURIComponent(String(args["artifactId"] ?? ""))}/read${query({
-          version: args["version"],
-        })}`,
+        path: `/artifacts/${encodeURIComponent(String(args["artifactId"] ?? ""))}/read${query(
+          {
+            version: args["version"],
+          },
+        )}`,
       };
     case "artifact_read_chunk":
       return {
         method: "GET",
-        path: `/artifacts/${encodeURIComponent(String(args["artifactId"] ?? ""))}/chunk${query({
-          version: args["version"],
-          offset: args["offset"],
-          limit: args["limit"],
-        })}`,
+        path: `/artifacts/${encodeURIComponent(String(args["artifactId"] ?? ""))}/chunk${query(
+          {
+            version: args["version"],
+            offset: args["offset"],
+            limit: args["limit"],
+          },
+        )}`,
       };
     case "artifact_write":
       return {
@@ -101,8 +115,12 @@ function requestFor(name: string, args: Record<string, unknown>): Request_ | und
         path: `/artifacts/${encodeURIComponent(String(args["artifactId"] ?? ""))}`,
         body: {
           ...(str(args["title"]) !== undefined ? { title: args["title"] } : {}),
-          ...(typeof args["content"] === "string" ? { content: args["content"] } : {}),
-          ...(args["metadata"] !== undefined ? { metadata: args["metadata"] } : {}),
+          ...(typeof args["content"] === "string"
+            ? { content: args["content"] }
+            : {}),
+          ...(args["metadata"] !== undefined
+            ? { metadata: args["metadata"] }
+            : {}),
         },
       };
     case "artifact_list":
@@ -143,14 +161,21 @@ export async function callArtifactRoute(
   runAddress: string,
   request: Request_,
 ): Promise<unknown> {
-  const response = await fetchImpl(`${WORKFLOW_ARTIFACTS_BASE_PATH}${request.path}`, {
-    method: request.method,
-    headers: {
-      "x-workflow-run-address": runAddress,
-      ...(request.body !== undefined ? { "content-type": "application/json" } : {}),
+  const response = await fetchImpl(
+    `${WORKFLOW_ARTIFACTS_BASE_PATH}${request.path}`,
+    {
+      method: request.method,
+      headers: {
+        "x-workflow-run-address": runAddress,
+        ...(request.body !== undefined
+          ? { "content-type": "application/json" }
+          : {}),
+      },
+      ...(request.body !== undefined
+        ? { body: JSON.stringify(request.body) }
+        : {}),
     },
-    ...(request.body !== undefined ? { body: JSON.stringify(request.body) } : {}),
-  });
+  );
   if (!response.ok) throw new Error(await readErrorMessage(response));
   const payload: unknown = await response.json().catch(() => undefined);
   if (typeof payload === "object" && payload !== null && "data" in payload) {
@@ -169,13 +194,15 @@ export const artifacts = defineTool<ArtifactsToolEnv>({
   requires: ["capabilities", "address"],
   definitions: ARTIFACT_TOOL_DEFINITIONS.map((def) => ({ name: def.name })),
   factory: (env) => {
-    let handle: Promise<{ fetch: MediatedFetch; dispose(): void | Promise<void> }> | undefined;
+    let handle:
+      | Promise<{ fetch: MediatedFetch; dispose(): void | Promise<void> }>
+      | undefined;
 
     function hub() {
       handle ??= (async () => {
-        const credential = await env.capabilities.resolve("credentials").resolve(
-          HUB_CREDENTIAL_HANDLE,
-        );
+        const credential = await env.capabilities
+          .resolve("credentials")
+          .resolve(HUB_CREDENTIAL_HANDLE);
         if (credential.kind !== "http") {
           throw new Error(
             `the "${HUB_CREDENTIAL_HANDLE}" credential is a ${credential.kind} handle; the artifact tools need an http one`,
@@ -200,7 +227,11 @@ export const artifacts = defineTool<ArtifactsToolEnv>({
         const name = bareToolName(call.name);
         const request = requestFor(name, call.arguments);
         if (request === undefined) {
-          return { callId: call.id, content: `unknown artifact tool: ${call.name}`, isError: true };
+          return {
+            callId: call.id,
+            content: `unknown artifact tool: ${call.name}`,
+            isError: true,
+          };
         }
         try {
           const { fetch: mediated } = await hub();

@@ -36,7 +36,11 @@ describe("list projection", () => {
 
     const page = await listArtifacts(db, "acme", {});
     expect(page.rows.map((r) => r.id)).toEqual([seeded.id]);
-    const row = page.rows[0] as { id: string; content?: string; title?: string };
+    const row = page.rows[0] as {
+      id: string;
+      content?: string;
+      title?: string;
+    };
     // The list query must not select the body column at all.
     expect("content" in row).toBe(false);
     expect(row.content).toBeUndefined();
@@ -76,12 +80,15 @@ describe("list filters", () => {
   test("search matches title or content and escapes ILIKE metacharacters", async () => {
     const db = await testDb();
     await seedArtifact(db, { title: "Quarterly", content: "nothing" });
-    await seedArtifact(db, { title: "Other", content: "mentions quarterly plans" });
+    await seedArtifact(db, {
+      title: "Other",
+      content: "mentions quarterly plans",
+    });
     await seedArtifact(db, { title: "100%", content: "literal" });
 
-    expect((await listArtifacts(db, "acme", { query: "quarter" })).rows.length).toBe(
-      2,
-    );
+    expect(
+      (await listArtifacts(db, "acme", { query: "quarter" })).rows.length,
+    ).toBe(2);
     const percent = await listArtifacts(db, "acme", { query: "%" });
     expect(percent.rows.map((r) => r.title)).toEqual(["100%"]);
   });
@@ -122,10 +129,15 @@ describe("list filters", () => {
     const db = await testDb();
     const csv = await seedArtifact(db, { title: "Export", kind: "csv-export" });
     await seedArtifact(db, { title: "Doc" });
-    const theirs = await seedArtifact(db, { title: "Bot", ownerPrincipalId: "agent-9" });
+    const theirs = await seedArtifact(db, {
+      title: "Bot",
+      ownerPrincipalId: "agent-9",
+    });
 
     expect(
-      (await listArtifacts(db, "acme", { kind: "csv-export" })).rows.map((r) => r.id),
+      (await listArtifacts(db, "acme", { kind: "csv-export" })).rows.map(
+        (r) => r.id,
+      ),
     ).toEqual([csv.id]);
     expect(
       (
@@ -148,11 +160,12 @@ describe("list paging", () => {
     const seen: string[] = [];
     let cursor: string | null = null;
     for (let page = 0; page < 5; page += 1) {
-      const result: Awaited<ReturnType<typeof listArtifacts>> = await listArtifacts(
-        db,
-        "acme",
-        parseQuery({ limit: "2", ...(cursor ? { cursor } : {}) }),
-      );
+      const result: Awaited<ReturnType<typeof listArtifacts>> =
+        await listArtifacts(
+          db,
+          "acme",
+          parseQuery({ limit: "2", ...(cursor ? { cursor } : {}) }),
+        );
       seen.push(...result.rows.map((r) => r.id));
       cursor = result.nextCursor;
       if (cursor === null) break;
@@ -183,7 +196,11 @@ describe("list paging", () => {
   });
 
   test("a malformed cursor is rejected by the query schema", () => {
-    for (const cursor of ["garbage", "not-a-date__abc", `${new Date().toISOString()}__`]) {
+    for (const cursor of [
+      "garbage",
+      "not-a-date__abc",
+      `${new Date().toISOString()}__`,
+    ]) {
       expect(ListArtifactsQuery({ cursor })).toBeInstanceOf(type.errors);
     }
   });
@@ -198,7 +215,11 @@ describe("list paging", () => {
       FROM generate_series(1, ${MAX_LIST_LIMIT + 5}) AS i
     `);
 
-    const huge = await listArtifacts(db, "acme", parseQuery({ limit: "10000" }));
+    const huge = await listArtifacts(
+      db,
+      "acme",
+      parseQuery({ limit: "10000" }),
+    );
     expect(huge.rows.length).toBe(MAX_LIST_LIMIT);
     expect(huge.nextCursor).not.toBeNull();
 
@@ -206,7 +227,11 @@ describe("list paging", () => {
     expect(zero.rows.length).toBe(1);
 
     // A non-numeric `?limit=` must take the default, not collapse to one row.
-    const garbage = await listArtifacts(db, "acme", parseQuery({ limit: "abc" }));
+    const garbage = await listArtifacts(
+      db,
+      "acme",
+      parseQuery({ limit: "abc" }),
+    );
     expect(garbage.rows.length).toBe(DEFAULT_LIST_LIMIT);
 
     // An absent limit defaults at the schema.
@@ -228,11 +253,12 @@ describe("list paging", () => {
     const seen: string[] = [];
     let cursor: string | null = null;
     for (let page = 0; page < 6; page += 1) {
-      const result: Awaited<ReturnType<typeof listArtifacts>> = await listArtifacts(
-        db,
-        "acme",
-        parseQuery({ limit: "1", ...(cursor ? { cursor } : {}) }),
-      );
+      const result: Awaited<ReturnType<typeof listArtifacts>> =
+        await listArtifacts(
+          db,
+          "acme",
+          parseQuery({ limit: "1", ...(cursor ? { cursor } : {}) }),
+        );
       seen.push(...result.rows.map((r) => r.id));
       cursor = result.nextCursor;
       if (cursor === null) break;

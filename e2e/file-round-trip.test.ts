@@ -36,13 +36,23 @@ async function download(id: string, version?: number): Promise<Response> {
 
 describe("upload, version, download on a filesystem ContentStore", () => {
   test("each version downloads its own bytes", async () => {
-    const v1Bytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x00, 0xff, 0x10, 0x80]);
+    const v1Bytes = new Uint8Array([
+      0x25, 0x50, 0x44, 0x46, 0x00, 0xff, 0x10, 0x80,
+    ]);
     const v3Bytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x01, 0x02]);
     const form = new FormData();
-    form.append("files", new File([v1Bytes], "report.pdf", { type: "application/pdf" }));
-    const uploaded = await app.request("/api/artifacts/upload", { method: "POST", body: form });
+    form.append(
+      "files",
+      new File([v1Bytes], "report.pdf", { type: "application/pdf" }),
+    );
+    const uploaded = await app.request("/api/artifacts/upload", {
+      method: "POST",
+      body: form,
+    });
     expect(uploaded.status).toBe(201);
-    const { artifacts } = (await uploaded.json()) as { artifacts: { id: string }[] };
+    const { artifacts } = (await uploaded.json()) as {
+      artifacts: { id: string }[];
+    };
     const id = artifacts[0]!.id;
 
     const renamed = await app.request(`/api/artifacts/${id}/versions`, {
@@ -53,7 +63,10 @@ describe("upload, version, download on a filesystem ContentStore", () => {
     expect(renamed.status).toBe(200);
 
     const revise = new FormData();
-    revise.append("file", new File([v3Bytes], "report.pdf", { type: "application/pdf" }));
+    revise.append(
+      "file",
+      new File([v3Bytes], "report.pdf", { type: "application/pdf" }),
+    );
     const revised = await app.request(`/api/artifacts/${id}/versions`, {
       method: "POST",
       body: revise,
@@ -76,15 +89,22 @@ describe("upload, version, download on a filesystem ContentStore", () => {
     for (const version of [1, 3]) {
       const res = await app.request(`/api/artifacts/${id}/versions/${version}`);
       expect(res.status).toBe(200);
-      sources.push(((await res.json()) as { artifact: { source: unknown } }).artifact.source);
+      sources.push(
+        ((await res.json()) as { artifact: { source: unknown } }).artifact
+          .source,
+      );
     }
     expect(sources[0]).toMatchObject({ upload: { size: v1Bytes.length } });
     expect(sources[1]).toMatchObject({ upload: { size: v3Bytes.length } });
 
-    const storedFiles = async () => (await readdir(dir, { recursive: true })).length;
+    const storedFiles = async () =>
+      (await readdir(dir, { recursive: true })).length;
     const before = await storedFiles();
     const stale = new FormData();
-    stale.append("file", new File([v3Bytes], "report.pdf", { type: "application/pdf" }));
+    stale.append(
+      "file",
+      new File([v3Bytes], "report.pdf", { type: "application/pdf" }),
+    );
     stale.append("expectedVersion", "1");
     const conflict = await app.request(`/api/artifacts/${id}/versions`, {
       method: "POST",

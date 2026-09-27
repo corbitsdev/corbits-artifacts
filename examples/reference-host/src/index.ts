@@ -54,10 +54,15 @@ import { databaseConfig, DATABASE_URL } from "../../../e2e/helpers.js";
 const EPOCH = new Date(0);
 
 /** Display-only decorator. Adds a label, never changes what is returned. */
-async function decorate(_tenantId: string, rows: readonly SerializedArtifactBase[]) {
+async function decorate(
+  _tenantId: string,
+  rows: readonly SerializedArtifactBase[],
+) {
   for (const row of rows) {
     (row as Record<string, unknown>).generatedByLabel =
-      typeof row.source.generatedBy === "string" ? row.source.generatedBy : null;
+      typeof row.source.generatedBy === "string"
+        ? row.source.generatedBy
+        : null;
   }
 }
 
@@ -74,7 +79,11 @@ async function decorate(_tenantId: string, rows: readonly SerializedArtifactBase
  * a policy layer, it is recording, in the platform's own grant table, the
  * one fact this module already decided: `scope.principalId` made this row.
  */
-async function grantOwnership(tx: ArtifactTx, row: ArtifactRow, scope: ResolvedPrincipal) {
+async function grantOwnership(
+  tx: ArtifactTx,
+  row: ArtifactRow,
+  scope: ResolvedPrincipal,
+) {
   const resource = `artifact:${row.id}`;
   await tx.insert(intxSchema.grant).values(
     (["write", "archive"] as const).map((action) => ({
@@ -172,7 +181,9 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
   await db.execute(sql`DELETE FROM "principal" WHERE "tenant_id" IN
     (SELECT "id" FROM "tenant" WHERE "slug" = 'reference')`);
   await db.execute(sql`DELETE FROM "tenant" WHERE "slug" = 'reference'`);
-  await db.execute(sql`DELETE FROM "user" WHERE "id" IN ('user-alice', 'user-bob')`);
+  await db.execute(
+    sql`DELETE FROM "user" WHERE "id" IN ('user-alice', 'user-bob')`,
+  );
 
   // Seed the host's own control plane: a tenant, two humans, and one agent
   // owned by Alice. Returning full rows so TenantEnv middleware can place them
@@ -195,7 +206,12 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
       email: "alice@example.com",
       emailVerified: true,
     },
-    { id: "user-bob", name: "Bob Birch", email: "bob@example.com", emailVerified: true },
+    {
+      id: "user-bob",
+      name: "Bob Birch",
+      email: "bob@example.com",
+      emailVerified: true,
+    },
   ]);
   const principals = await db
     .insert(intxSchema.principal)
@@ -316,7 +332,8 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
       const user = c.get("user");
       if (user) {
         const principal = principals.find(
-          (p) => p.kind === "user" && p.refId === user.id && p.status === "active",
+          (p) =>
+            p.kind === "user" && p.refId === user.id && p.status === "active",
         );
         if (principal) {
           c.set("tenant", tenant);
@@ -332,7 +349,10 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
     // specific answer without provisioning rows for it (e.g. "deny always").
     const requireGrant: RequireGrant =
       authorize === undefined
-        ? createRequireGrant({ grantStore: createGrantStore(hub.db), conditionRegistry: {} })
+        ? createRequireGrant({
+            grantStore: createGrantStore(hub.db),
+            conditionRegistry: {},
+          })
         : (resource, action) => async (c, next) => {
             const resolved =
               typeof resource === "function"
@@ -380,8 +400,9 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
     agentPrincipal,
     scope: () => ({
       tenantId: tenant.id,
-      principalId: principals.find((p) => p.kind === "user" && p.refId === "user-alice")!
-        .id,
+      principalId: principals.find(
+        (p) => p.kind === "user" && p.refId === "user-alice",
+      )!.id,
     }),
     setSession: (session) => {
       currentSession = session;

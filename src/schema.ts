@@ -88,8 +88,12 @@ export const artifact = artifactsSchema.table(
     contentSha256: text("content_sha256"),
     /** Soft-archive: null = visible, a timestamp = hidden from discovery. */
     archivedAt: timestamp("archived_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
   },
   (t) => [
     // The id tie-break must be IN the keyset index (see migrations.ts).
@@ -140,7 +144,9 @@ export const artifactVersion = artifactsSchema.table(
      * existed" — there is no backfill.
      */
     contentSha256: text("content_sha256"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
   },
   (t) => [
     unique("artifact_version_artifact_id_version").on(t.artifactId, t.version),
@@ -164,7 +170,9 @@ export const upload = artifactsSchema.table(
     mimeType: text("mime_type").notNull(),
     content: bytea("content").notNull(),
     size: integer("size").notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
   },
   (t) => [
     index("upload_tenant_idx").on(t.tenantId),

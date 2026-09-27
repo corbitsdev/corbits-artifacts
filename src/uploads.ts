@@ -22,7 +22,9 @@ export class UnsupportedUploadTypeError extends Error {
     readonly filename: string,
     readonly mimeType: string,
   ) {
-    super(`File "${filename}" has an unsupported type: ${mimeType || "(none)"}`);
+    super(
+      `File "${filename}" has an unsupported type: ${mimeType || "(none)"}`,
+    );
     this.name = "UnsupportedUploadTypeError";
   }
 }
@@ -53,7 +55,10 @@ const DOCUMENT_EXTENSIONS = new Map([
   [".html", "text/html"],
   [".pdf", "application/pdf"],
   [".json", "application/json"],
-  [".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+  [
+    ".xlsx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ],
   [
     ".docx",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -89,7 +94,11 @@ const ARCHIVE_EXTENSIONS = new Map([
 
 /** Declared types accepted alongside the archive extensions above: browsers
  *  disagree on which gzip MIME they report, so both are accepted. */
-const ARCHIVE_MIME_TYPES = ["application/gzip", "application/x-gzip", "application/x-tar"];
+const ARCHIVE_MIME_TYPES = [
+  "application/gzip",
+  "application/x-gzip",
+  "application/x-tar",
+];
 
 /**
  * The gallery import surface: documents, raster images, and packaged
@@ -111,7 +120,11 @@ export const ARTIFACT_UPLOAD_POLICY: UploadPolicy = {
     ...IMAGE_EXTENSIONS.values(),
     ...ARCHIVE_MIME_TYPES,
   ]),
-  extensions: new Map([...DOCUMENT_EXTENSIONS, ...IMAGE_EXTENSIONS, ...ARCHIVE_EXTENSIONS]),
+  extensions: new Map([
+    ...DOCUMENT_EXTENSIONS,
+    ...IMAGE_EXTENSIONS,
+    ...ARCHIVE_EXTENSIONS,
+  ]),
 };
 
 /** The spreadsheet-ingest surface: one format, validated at the boundary so a
@@ -122,7 +135,10 @@ export const SPREADSHEET_UPLOAD_POLICY: UploadPolicy = {
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   ]),
   extensions: new Map([
-    [".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+    [
+      ".xlsx",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ],
   ]),
 };
 
@@ -251,7 +267,9 @@ export async function createFileArtifact(
     contentSha256,
     source: {
       origin: args.origin ?? "imported",
-      ...(args.generatedBy !== undefined ? { generatedBy: args.generatedBy } : {}),
+      ...(args.generatedBy !== undefined
+        ? { generatedBy: args.generatedBy }
+        : {}),
       ...stored.source,
     },
     ...(args.metadata !== undefined ? { metadata: args.metadata } : {}),
@@ -294,11 +312,16 @@ export async function reviseFileArtifact(
         });
         return {
           content: stored.content,
-          source: { ...(locked.source as Record<string, unknown>), ...stored.source },
+          source: {
+            ...(locked.source as Record<string, unknown>),
+            ...stored.source,
+          },
           contentSha256: bytesSha256(args.bytes),
         };
       },
-      ...(args.expectedVersion !== undefined ? { expectedVersion: args.expectedVersion } : {}),
+      ...(args.expectedVersion !== undefined
+        ? { expectedVersion: args.expectedVersion }
+        : {}),
     },
     new Date(),
   );
