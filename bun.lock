@@ -13,6 +13,8 @@
         "@intx/authz": "0.4.0",
         "@intx/db": "0.4.0",
         "@intx/hub-api": "0.4.0",
+        "@intx/hub-common": "0.4.0",
+        "@intx/hub-sessions": "0.4.0",
         "@intx/types": "0.4.0",
         "@types/bun": "1.1.14",
         "@types/node": "22.10.5",

@@ -17,7 +17,7 @@ import {
   UnsupportedUploadTypeError,
   type ContentStore,
 } from "@corbits/artifacts";
-import { createReferenceHost, type ReferenceHost } from "../src/index.js";
+import { createReferenceHost, type ReferenceHost } from "../examples/reference-host/src/index.js";
 
 let host: ReferenceHost;
 const json = async <T>(res: Response): Promise<T> => (await res.json()) as T;
@@ -33,7 +33,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await host.close();
+  await host?.close();
 });
 
 // The one artifact the later scenarios (archive, authz, deep link) reuse.
