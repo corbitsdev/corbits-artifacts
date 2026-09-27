@@ -59,7 +59,7 @@ const surrogateId = () =>
  * key into the host's control plane: this package binds to Interchange, and
  * the database refuses an artifact whose tenant or principal does not exist.
  * Whether a principal *belongs* to that tenant is host-owned — see the data
- * model note in ARCHITECTURE.md — so there is no multi-table trigger here.
+ * model notes in CONTRIBUTING.md — so there is no multi-table trigger here.
  */
 export const artifact = artifactsSchema.table(
   "artifact",

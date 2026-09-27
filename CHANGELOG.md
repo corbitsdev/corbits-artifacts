@@ -84,8 +84,8 @@ always called out under their own heading.
   `createArtifact` is a public, unconditional insert used directly by the
   import route, uploads, and `artifact_link_file`, and a shared title across
   independent creates on those paths is normal, not a bug a schema
-  constraint should forbid. See the "Find-or-version" section of
-  ARCHITECTURE.md.
+  constraint should forbid. See the find-or-version notes in
+  CONTRIBUTING.md.
 
 ### Changed
 
@@ -106,7 +106,7 @@ always called out under their own heading.
   `examples/reference-host` now wires a real one (`grantOwnership`) against
   Interchange's own `grant` table, and its default `requireGrant` is the
   platform's real `createRequireGrant` over that table rather than a
-  default-allow stub — see ARCHITECTURE.md's "Grant provisioning" section.
+  default-allow stub — see CONTRIBUTING.md's "Grant provisioning" section.
 - Single-artifact write routes (`POST .../versions`, `POST .../archive`,
   `POST .../unarchive`) now resolve existence/tenant/skill-draft (the same
   check `loadScoped` does) BEFORE running `requireGrant`, not after. A real,
