@@ -3,7 +3,7 @@ import { sql } from "drizzle-orm";
 import { createArtifactDb, runArtifactMigrations } from "../src/index.js";
 import { connectionString, createTestDb, seedActor, type TestDb } from "./lib/db-harness.js";
 
-const TABLES = ["artifact", "artifact_version", "mail_attachment_ref", "upload"];
+const TABLES = ["artifact", "artifact_version", "upload"];
 
 let testDb: TestDb;
 

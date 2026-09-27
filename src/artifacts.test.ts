@@ -18,7 +18,7 @@ import {
   writeArtifactVersion,
 } from "./artifacts.js";
 import { artifact, artifactVersion } from "./schema.js";
-import { seedArtifact, seedSkillDraft, SCOPE, testDb } from "./test-helpers.js";
+import { seedArtifact, SCOPE, testDb } from "./test-helpers.js";
 
 describe("create", () => {
   test("writes version 1 eagerly, so a pinned read of v1 resolves immediately", async () => {
@@ -35,22 +35,6 @@ describe("create", () => {
       parentVersionIds: null,
       contentSha256: sha256Hex("first"),
     });
-  });
-
-  test("refuses to mint a skill-draft", async () => {
-    const db = await testDb();
-    await expect(
-      db.transaction((tx) =>
-        createArtifact(tx, {
-          scope: SCOPE,
-          ownerPrincipalId: null,
-          kind: "skill-draft",
-          title: "x",
-          content: "y",
-          source: { origin: "agent" },
-        }),
-      ),
-    ).rejects.toThrow(/skill-draft/);
   });
 
   test("a failure after the bytes are written rolls the whole artifact back", async () => {
@@ -71,18 +55,6 @@ describe("create", () => {
 
     const rows = await db.select().from(artifactVersion);
     expect(rows.length).toBe(0);
-  });
-
-  test("normalizes web_site content through its schema", async () => {
-    const db = await testDb();
-    const row = await seedArtifact(db, {
-      kind: "web_site",
-      content: JSON.stringify({ files: { "/index.html": "<p>hi</p>" } }),
-    });
-    expect(JSON.parse(row.content)).toEqual({
-      entry: "index.html",
-      files: { "index.html": "<p>hi</p>" },
-    });
   });
 });
 
@@ -209,15 +181,12 @@ describe("find by title", () => {
     expect((await findArtifactByTitle(db, "acme", "Report"))?.artifactId).toBe(older.id);
   });
 
-  test("never returns an archived or skill-draft artifact", async () => {
+  test("never returns an archived artifact", async () => {
     const db = await testDb();
     const row = await seedArtifact(db, { title: "Hidden" });
     await setArtifactArchived(db, row, true);
-    await seedSkillDraft(db, "Scratch");
 
     expect(await findArtifactByTitle(db, "acme", "Hidden")).toBeNull();
-    expect(await findArtifactByTitle(db, "acme", "Scratch")).toBeNull();
-    expect(await findArtifactByTitle(db, "acme", "Report", "skill-draft")).toBeNull();
   });
 
   test("honors a kind filter", async () => {

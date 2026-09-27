@@ -13,7 +13,6 @@ import {
   isNull,
   lt,
   lte,
-  ne,
   or,
   sql,
   type SQL,
@@ -21,18 +20,6 @@ import {
 import type { ArtifactDb, ArtifactTx } from "./db.js";
 import { artifact, artifactVersion, type ArtifactRow } from "./schema.js";
 import type { ResolvedPrincipal } from "./ports.js";
-import {
-  parseWebSiteContentJson,
-  serializeWebSiteContent,
-  WEB_SITE_KIND,
-} from "./web-site.js";
-
-/**
- * Internal skill-authoring scratch. Every surface here treats it as NOT FOUND
- * rather than forbidden: its existence is not the caller's business, and a 403
- * would leak that an id is real.
- */
-export const SKILL_DRAFT_KIND = "skill-draft";
 
 /**
  * Max title length (JavaScript string length) accepted on create/revise.
@@ -42,8 +29,7 @@ export const MAX_ARTIFACT_TITLE_LENGTH = 512;
 
 /**
  * Max body size in UTF-8 bytes on create/revise. Sized above MAX_UPLOAD_BYTES
- * so base64 data-URL expansion for file artifacts still fits, and above the
- * web_site total budget.
+ * so base64 data-URL expansion for file artifacts still fits.
  */
 export const MAX_ARTIFACT_CONTENT_BYTES = 15 * 1024 * 1024;
 
@@ -210,14 +196,6 @@ export function serializeArtifactListItem(
   return serializeArtifactBase(row);
 }
 
-/** `web_site` content is round-tripped through its schema; other kinds pass through. */
-function normalizeContentForKind(kind: string, content: string): string {
-  if (kind === WEB_SITE_KIND) {
-    return serializeWebSiteContent(parseWebSiteContentJson(content));
-  }
-  return content;
-}
-
 /**
  * sha256 (hex) over the UTF-8 bytes of `content`. Used for every text/URL
  * artifact write; a blob-backed file artifact's first version instead passes
@@ -269,18 +247,14 @@ export async function createArtifact(
   tx: ArtifactTx,
   args: CreateArtifactArgs,
 ): Promise<ArtifactRow> {
-  if (args.kind === SKILL_DRAFT_KIND) {
-    throw new Error("skill-draft artifacts are not created through this module");
-  }
-  const content = normalizeContentForKind(args.kind, args.content);
-  assertArtifactFieldSizes({ title: args.title, content });
+  assertArtifactFieldSizes({ title: args.title, content: args.content });
   assertVersionMetadataShape({
     metadata: args.metadata,
     parentVersionIds: args.parentVersionIds,
   });
   const metadata = args.metadata ?? null;
   const parentVersionIds = args.parentVersionIds ?? null;
-  const contentSha256 = args.contentSha256 ?? sha256Hex(content);
+  const contentSha256 = args.contentSha256 ?? sha256Hex(args.content);
   const now = new Date();
 
   const [row] = await tx
@@ -291,7 +265,7 @@ export async function createArtifact(
       ownerPrincipalId: args.ownerPrincipalId,
       kind: args.kind,
       title: args.title,
-      content,
+      content: args.content,
       source: args.source,
       version: 1,
       metadata,
@@ -306,7 +280,7 @@ export async function createArtifact(
     artifactId: row.id,
     version: 1,
     title: args.title,
-    content,
+    content: args.content,
     authorId: args.scope.principalId,
     metadata,
     parentVersionIds,
@@ -349,7 +323,7 @@ export class VersionConflictError extends Error {
  * instead of both computing the same next version; the (artifactId, version)
  * unique index is the second half of that guard.
  *
- * Archived and skill-draft artifacts present as NOT FOUND — an agent holding a
+ * Archived artifacts present as NOT FOUND — an agent holding a
  * stale id must not silently revise something the user put away.
  */
 async function reviseArtifactVersion(
@@ -388,11 +362,7 @@ async function reviseArtifactVersion(
     .for("update")
     .limit(1);
 
-  if (
-    !existing ||
-    existing.archivedAt !== null ||
-    existing.kind === SKILL_DRAFT_KIND
-  ) {
+  if (!existing || existing.archivedAt !== null) {
     throw new ArtifactNotFoundError(args.artifactId);
   }
 
@@ -405,10 +375,7 @@ async function reviseArtifactVersion(
 
   const version = existing.version + 1;
   const title = args.title ?? existing.title;
-  const content =
-    args.content === undefined
-      ? existing.content
-      : normalizeContentForKind(existing.kind, args.content);
+  const content = args.content ?? existing.content;
   if (args.content !== undefined) {
     assertArtifactFieldSizes({ content });
   }
@@ -763,8 +730,6 @@ export async function listArtifacts(
   const conditions: SQL[] = [
     eq(artifact.tenantId, tenantId),
     filters.archived ? isNotNull(artifact.archivedAt) : isNull(artifact.archivedAt),
-    // Never listed, even under an explicit kind=skill-draft filter.
-    ne(artifact.kind, SKILL_DRAFT_KIND),
   ];
 
   // ILIKE metacharacters in user input are escaped so a `%` searches for a
@@ -823,11 +788,9 @@ async function selectArtifactByTitle(
   title: string,
   kind?: string,
 ): Promise<{ artifactId: string; version: number } | null> {
-  if (kind === SKILL_DRAFT_KIND) return null;
   const conditions: SQL[] = [
     eq(artifact.tenantId, tenantId),
     eq(artifact.title, title),
-    ne(artifact.kind, SKILL_DRAFT_KIND),
     isNull(artifact.archivedAt),
   ];
   if (kind !== undefined) conditions.push(eq(artifact.kind, kind));
@@ -907,10 +870,9 @@ export type FindOrVersionArtifactResult = {
  * same title. A caller for a *different* tenant, kind, or title is never
  * blocked by this lock — the key is scoped to the exact triple.
  *
- * Archived and skill-draft artifacts are invisible to the lookup, same as
+ * Archived artifacts are invisible to the lookup, same as
  * `findArtifactByTitle`: an archived match does not get silently revived, and
- * a skill-draft is never adopted as the target of a public write. Both cases
- * create a fresh artifact instead.
+ * a fresh artifact is created instead.
  */
 export async function findOrVersionArtifact(
   db: ArtifactDb,

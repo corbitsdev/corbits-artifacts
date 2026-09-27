@@ -12,45 +12,57 @@ import {
   readArtifact,
   readArtifactChunk,
   SAFE_ENCODED_BUDGET,
-  windowContent,
 } from "./tools.js";
-import { seedArtifact, seedSkillDraft, SCOPE, testDb } from "./test-helpers.js";
+import { seedArtifact, SCOPE, testDb } from "./test-helpers.js";
 
-const base = { artifactId: "a1", title: "T", kind: "document", version: 1 };
+async function read(content: string, offset?: number, limit?: number) {
+  const db = await testDb();
+  const row = await seedArtifact(db, { content });
+  if (offset === undefined) return await readArtifact(db, { scope: SCOPE, artifactId: row.id });
+  return await readArtifactChunk(db, {
+    scope: SCOPE,
+    artifactId: row.id,
+    offset,
+    ...(limit !== undefined ? { limit } : {}),
+  });
+}
+
 const encoded = (value: unknown) => JSON.stringify(value, null, 2).length;
 
 describe("read windowing", () => {
-  test("returns short content whole, with no chunk metadata", () => {
-    const result = windowContent(base, "short body");
+  test("returns short content whole, with no chunk metadata", async () => {
+    const result = await read("short body");
     expect(result.content).toBe("short body");
     expect(result.contentLength).toBeUndefined();
     expect(result.continuation).toBeUndefined();
   });
 
-  test("chunks content longer than the default read limit", () => {
+  test("chunks content longer than the default read limit", async () => {
     const content = "x".repeat(DEFAULT_READ_LIMIT + 500);
-    const result = windowContent(base, content);
+    const result = await read(content);
     expect(result.contentLength).toBe(content.length);
     expect(result.chunkStart).toBe(0);
     expect(result.continuation).toContain(`offset=${result.chunkEnd}`);
   });
 
-  test("shrinks a chunk whose JSON encoding would blow the budget", () => {
+  test("shrinks a chunk whose JSON encoding would blow the budget", async () => {
     // Every character escapes to two, so a raw slice at the default limit
     // encodes to well over the budget unless the window shrinks.
     const content = "\n".repeat(DEFAULT_READ_LIMIT * 2);
-    const result = windowContent(base, content);
+    const result = await read(content);
     expect(encoded(result)).toBeLessThanOrEqual(SAFE_ENCODED_BUDGET);
     expect(result.chunkEnd!).toBeLessThan(DEFAULT_READ_LIMIT);
     expect(result.continuation).toBeDefined();
   });
 
-  test("walking the continuation offsets reads the whole content exactly once", () => {
+  test("walking the continuation offsets reads the whole content exactly once", async () => {
     const content = "abcdefghij".repeat(2000);
+    const db = await testDb();
+    const row = await seedArtifact(db, { content });
     let offset = 0;
     let assembled = "";
     for (let guard = 0; guard < 100; guard += 1) {
-      const result = windowContent(base, content, offset, 3000);
+      const result = await read(content, offset, 3000);
       assembled += result.content;
       if (result.continuation === undefined) break;
       offset = result.chunkEnd!;
@@ -58,8 +70,8 @@ describe("read windowing", () => {
     expect(assembled).toBe(content);
   });
 
-  test("an offset past the end yields an empty final chunk", () => {
-    const result = windowContent(base, "abc", 99, 10);
+  test("an offset past the end yields an empty final chunk", async () => {
+    const result = await read("abc", 99, 10);
     expect(result.content).toBe("");
     expect(result.continuation).toBeUndefined();
   });
@@ -101,82 +113,12 @@ describe("artifact_read", () => {
     ).rejects.toThrow(/Version 7 not found/);
   });
 
-  test("a skill-draft is not found, not forbidden", async () => {
-    const db = await testDb();
-    const id = await seedSkillDraft(db, "scratch");
-    await expect(
-      readArtifact(db, { scope: SCOPE, artifactId: id }),
-    ).rejects.toBeInstanceOf(ArtifactNotFoundError);
-  });
-
   test("an artifact in another tenant is not found", async () => {
     const db = await testDb();
     const row = await seedArtifact(db, { tenantId: "other" });
     await expect(
       readArtifact(db, { scope: SCOPE, artifactId: row.id }),
     ).rejects.toBeInstanceOf(ArtifactNotFoundError);
-  });
-});
-
-describe("web_site reads", () => {
-  const site = JSON.stringify({
-    entry: "index.html",
-    files: { "index.html": "<h1>Hi</h1>", "style.css": "body{}" },
-  });
-
-  test("an unpinned read returns the structure, not the bundle", async () => {
-    const db = await testDb();
-    const row = await seedArtifact(db, { kind: "web_site", content: site });
-
-    const result = await readArtifact(db, { scope: SCOPE, artifactId: row.id });
-    expect(result).toMatchObject({
-      summary: {
-        kind: "web_site",
-        entry: "index.html",
-        files: [
-          { path: "index.html", bytes: 11 },
-          { path: "style.css", bytes: 6 },
-        ],
-        totalBytes: 17,
-      },
-    });
-    expect("content" in result).toBe(false);
-  });
-
-  test("a path read returns that one file, normalizing the path", async () => {
-    const db = await testDb();
-    const row = await seedArtifact(db, { kind: "web_site", content: site });
-
-    const result = await readArtifact(db, {
-      scope: SCOPE,
-      artifactId: row.id,
-      path: "/style.css",
-    });
-    expect(result).toMatchObject({ path: "style.css", content: "body{}" });
-  });
-
-  test("a path outside the bundle is an error, and traversal is refused", async () => {
-    const db = await testDb();
-    const row = await seedArtifact(db, { kind: "web_site", content: site });
-
-    await expect(
-      readArtifact(db, { scope: SCOPE, artifactId: row.id, path: "nope.js" }),
-    ).rejects.toThrow(/File not found in web_site artifact/);
-    await expect(
-      readArtifact(db, {
-        scope: SCOPE,
-        artifactId: row.id,
-        path: "../secret",
-      }),
-    ).rejects.toThrow(/traversal/);
-  });
-
-  test("chunked reads are refused for web_site with a pointer to the right tool", async () => {
-    const db = await testDb();
-    const row = await seedArtifact(db, { kind: "web_site", content: site });
-    await expect(
-      readArtifactChunk(db, { scope: SCOPE, artifactId: row.id }),
-    ).rejects.toThrow(/use artifact_read/);
   });
 });
 
@@ -313,12 +255,6 @@ describe("artifact_link_file", () => {
     expect(rows[0]!.n).toBe("0");
   });
 
-  test("it cannot be used to mint a skill-draft", async () => {
-    const db = await testDb();
-    await expect(
-      linkFileArtifact(db, linkArgs({ kind: "skill-draft" })),
-    ).rejects.toThrow();
-  });
 
   test("a linked artifact is readable through artifact_read", async () => {
     const db = await testDb();

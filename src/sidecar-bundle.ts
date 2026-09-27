@@ -84,7 +84,6 @@ function requestFor(name: string, args: Record<string, unknown>): Request_ | und
         method: "GET",
         path: `/artifacts/${encodeURIComponent(String(args["artifactId"] ?? ""))}/read${query({
           version: args["version"],
-          path: args["path"],
         })}`,
       };
     case "artifact_read_chunk":

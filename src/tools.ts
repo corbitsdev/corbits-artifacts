@@ -4,17 +4,9 @@ import {
   ArtifactNotFoundError,
   createArtifact,
   getArtifactVersion,
-  SKILL_DRAFT_KIND,
 } from "./artifacts.js";
 import { artifact, type ArtifactRow } from "./schema.js";
 import type { ResolvedPrincipal } from "./ports.js";
-import {
-  parseWebSiteContentJson,
-  normalizeWebSitePath,
-  summarizeWebSiteContent,
-  WEB_SITE_KIND,
-  type WebSiteReadSummary,
-} from "./web-site.js";
 
 /**
  * An agent runtime caps a tool result at ~10K characters and spills the rest to
@@ -35,7 +27,6 @@ export type ArtifactReadResult = {
   chunkStart?: number;
   chunkEnd?: number;
   continuation?: string;
-  path?: string;
 };
 
 const encodedLength = (value: unknown) => JSON.stringify(value, null, 2).length;
@@ -68,7 +59,7 @@ function chunk(
  * small enough and no window was asked for; otherwise a chunk shrunk (by the
  * measured overshoot ratio, so it converges fast) until it encodes small enough.
  */
-export function windowContent(
+function windowContent(
   base: ReadBase,
   content: string,
   offset?: number,
@@ -100,8 +91,7 @@ export function windowContent(
 
 /**
  * Resolve an artifact for an agent read, honoring a version pin. Reads are
- * always confined to the caller's tenant; there is no tenant override. A
- * skill-draft reads as NOT FOUND, not forbidden.
+ * always confined to the caller's tenant; there is no tenant override.
  */
 async function resolveForRead(
   db: ArtifactDb,
@@ -118,7 +108,7 @@ async function resolveForRead(
       and(eq(artifact.id, args.artifactId), eq(artifact.tenantId, args.scope.tenantId)),
     )
     .limit(1);
-  if (!row || row.kind === SKILL_DRAFT_KIND) {
+  if (!row) {
     throw new ArtifactNotFoundError(args.artifactId);
   }
 
@@ -151,35 +141,20 @@ async function resolveForRead(
   };
 }
 
-/**
- * `artifact_read`: whole (budgeted) content, or — for `web_site` — a structural
- * summary, or one file's content when `path` is given. Reading the raw JSON
- * bundle of a site is never useful to a model and always blows the budget.
- */
+/** `artifact_read`: whole (budgeted) content. */
 export async function readArtifact(
   db: ArtifactDb,
   args: {
     scope: ResolvedPrincipal;
     artifactId: string;
     version?: number;
-    path?: string;
   },
-): Promise<ArtifactReadResult | (ReadBase & { summary: WebSiteReadSummary })> {
+): Promise<ArtifactReadResult> {
   const { base, content } = await resolveForRead(db, args);
-  if (base.kind !== WEB_SITE_KIND) return windowContent(base, content);
-
-  if (args.path === undefined) {
-    return { ...base, summary: summarizeWebSiteContent(content) };
-  }
-  const path = normalizeWebSitePath(args.path);
-  const file = parseWebSiteContentJson(content).files[path];
-  if (file === undefined) {
-    throw new Error(`File not found in web_site artifact: ${path}`);
-  }
-  return { ...windowContent(base, file), path };
+  return windowContent(base, content);
 }
 
-/** `artifact_read_chunk`: one bounded character range. Not for `web_site`. */
+/** `artifact_read_chunk`: one bounded character range. */
 export async function readArtifactChunk(
   db: ArtifactDb,
   args: {
@@ -191,11 +166,6 @@ export async function readArtifactChunk(
   },
 ): Promise<ArtifactReadResult> {
   const { base, content } = await resolveForRead(db, args);
-  if (base.kind === WEB_SITE_KIND) {
-    throw new Error(
-      "artifact_read_chunk does not support web_site artifacts; use artifact_read for a summary or pass path to read one file",
-    );
-  }
   return windowContent(
     base,
     content,
@@ -219,8 +189,7 @@ export async function readArtifactChunk(
  * the file itself and calls `createFileArtifact` instead.
  *
  * Like every other create path: the artifact and its version 1 land in one
- * transaction, `web_site` content is normalized, and skill-draft is refused by
- * `createArtifact`.
+ * transaction through `createArtifact`.
  */
 export async function linkFileArtifact(
   db: ArtifactDb,
@@ -286,7 +255,7 @@ export const ARTIFACT_TOOL_DEFINITIONS: readonly ArtifactToolDefinition[] = [
         kind: {
           type: "string",
           description:
-            "Artifact kind, such as document, email, memo, note, or web_site for a multi-file static site stored as JSON { entry?, files: { path: content } }.",
+            "Artifact kind, such as document, email, memo, or note.",
         },
         content: { type: "string", description: "The full text content." },
         metadata: {
@@ -333,11 +302,6 @@ export const ARTIFACT_TOOL_DEFINITIONS: readonly ArtifactToolDefinition[] = [
           type: "number",
           description: "Optional version to read. Defaults to the latest.",
         },
-        path: {
-          type: "string",
-          description:
-            "For kind=web_site only: return one file's content at this relative path. Without path, web_site reads return a summary.",
-        },
       },
       required: ["artifactId"],
     },
@@ -346,7 +310,7 @@ export const ARTIFACT_TOOL_DEFINITIONS: readonly ArtifactToolDefinition[] = [
     name: "artifact_read_chunk",
     sideEffect: "read",
     description:
-      "Read one bounded chunk of an artifact's content by character range. Pass the offset named in the prior result's 'continuation' field, and keep going until a result has no 'continuation'. Not supported for kind=web_site.",
+      "Read one bounded chunk of an artifact's content by character range. Pass the offset named in the prior result's 'continuation' field, and keep going until a result has no 'continuation'.",
     inputSchema: {
       type: "object",
       properties: {

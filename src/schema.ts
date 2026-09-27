@@ -166,39 +166,6 @@ export const upload = artifactsSchema.table(
   ],
 );
 
-/**
- * An artifact↔message association. Carries no bytes: the file already IS an
- * artifact, and this only records which artifacts rode along with which
- * message so a transcript can rehydrate its attachment chips.
- */
-export const mailAttachmentRef = artifactsSchema.table(
-  "mail_attachment_ref",
-  {
-    id: surrogateId(),
-    tenantId: tenantRef("tenant_id").notNull(),
-    // Nullable so a removed principal SET NULLs instead of blocking the delete.
-    principalId: principalRef("principal_id"),
-    instanceId: text("instance_id").notNull(),
-    mailId: text("mail_id").notNull(),
-    artifactId: text("artifact_id").notNull(),
-    name: text("name").notNull(),
-    mimeType: text("mime_type").notNull(),
-    size: integer("size").notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (t) => [
-    unique("mail_attachment_ref_mail_id_artifact_id").on(
-      t.mailId,
-      t.artifactId,
-    ),
-    index("mail_attachment_ref_instance_idx").on(t.instanceId),
-    index("mail_attachment_ref_tenant_idx").on(t.tenantId),
-    index("mail_attachment_ref_principal_idx").on(t.principalId),
-    check("mail_attachment_ref_size_gte_0", sql`${t.size} >= 0`),
-  ],
-);
-
 export type ArtifactRow = typeof artifact.$inferSelect;
 export type ArtifactVersionRow = typeof artifactVersion.$inferSelect;
 export type UploadRow = typeof upload.$inferSelect;
-export type MailAttachmentRefRow = typeof mailAttachmentRef.$inferSelect;
