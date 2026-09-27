@@ -11,7 +11,6 @@
         "@intx/hub-common": "0.4.0",
         "@intx/hub-sessions": "0.4.0",
         "@intx/types": "0.4.0",
-        "arktype": "2.1.29",
         "drizzle-orm": "0.45.2",
         "hono": "4.12.32",
         "hono-openapi": "1.2.0",

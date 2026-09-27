@@ -14,7 +14,7 @@ docker run -d --name corbits-artifact-pg -p 5457:5432 \
 export ALLOW_DESTRUCTIVE_ARTIFACT_TESTS=1
 
 bun run typecheck
-bun run test             # pretest dependency check, then unit + integration
+bun run test             # unit + integration
 bun run build            # dist/ (JS + .d.ts)
 bun run test:acceptance  # builds, then examples/reference-host
 ```
@@ -53,8 +53,7 @@ reference host is where that change has to be shown working.
 ## Dependency rule
 
 No `@workbench/*` imports anywhere — it is an unpublished scope, and importing it would
-make this package uninstallable outside the project that defines it. Checked by
-`scripts/check-deps.ts`, which runs as `pretest` and again in CI.
+make this package uninstallable outside the project that defines it.
 
 ## Tests
 
@@ -76,15 +75,16 @@ rendered SQL, so editing one that has already been applied fails with
 `MigrationChecksumError` on the next boot rather than letting fresh and existing
 databases diverge. Add a new migration instead.
 
-`schema.ts` and `migrations.ts` must agree — the drizzle table objects are public
-exports, and a test asserts the migrations create exactly the tables `schema.ts`
-declares, no more and no less. Change one, change the other, in the same commit.
+`schema.ts` and `migrations.ts` must agree — every query goes through the drizzle
+table objects, and a test asserts the migrations create exactly the tables
+`schema.ts` declares, no more and no less. Change one, change the other, in the
+same commit.
 
 ## Pull requests
 
 - Keep commits focused, and keep the diff to the change you are describing.
 - Explain *why* in the commit message; the code already says what.
-- CI must be green: dependency check, typecheck, unit + integration, build, reference-host
+- CI must be green: typecheck, unit + integration, build, reference-host
   acceptance, and a Node consumer smoke test that installs the packed tarball.
 - Contributions are accepted under the repository's LGPL-2.1-only licence.
 

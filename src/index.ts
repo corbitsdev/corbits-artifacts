@@ -25,13 +25,7 @@ export type { RunArtifactMigrationsOptions } from "./migrations.js";
 export { createArtifactDb } from "./db.js";
 export type { ArtifactDb, ArtifactTx } from "./db.js";
 
-export {
-  ARTIFACTS_SCHEMA,
-  artifact,
-  artifactVersion,
-  upload,
-  mailAttachmentRef,
-} from "./schema.js";
+export { ARTIFACTS_SCHEMA } from "./schema.js";
 export type {
   ArtifactRow,
   ArtifactVersionRow,
