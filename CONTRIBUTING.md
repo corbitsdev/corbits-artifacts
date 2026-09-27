@@ -14,7 +14,8 @@ docker run -d --name corbits-artifact-pg -p 5457:5432 \
 export ALLOW_DESTRUCTIVE_ARTIFACT_TESTS=1
 
 bun run typecheck
-bun run test             # unit, integration and reference-host acceptance
+bun run test             # unit
+bun run test:e2e         # real-Postgres and reference-host acceptance
 bun run build            # dist/ (JS + .d.ts)
 ```
 
@@ -37,18 +38,18 @@ couple of migration cases. Those paths are fail-closed: set
 ephemeral database (`artifact_core`, or any name ending in `_test`). Without both, the
 suite throws before mutating.
 
-End-to-end suites live in `tests/`. `tests/lib/db-harness.ts` creates a fresh
+End-to-end suites live in `e2e/`. `e2e/helpers.ts` creates a fresh
 `artifact_<random>_test` database per suite on the `ARTIFACT_DATABASE_URL` server,
 applies Interchange's `runMigrations` and `runArtifactMigrations`, and drops it
 afterwards. `artifactApp` mounts `createArtifactRoutes` for a seeded tenant
 principal, authorized by the platform's real `createRequireGrant` over the
-database's `grant` table. `bun run test` runs `src/` and `tests/`.
+database's `grant` table. `bun run test` runs `src/`; `bun run test:e2e` runs `e2e/`.
 
 ## The reference host is the acceptance suite, not a demo
 
 `examples/reference-host` mounts the package on a real `@intx/hub-api` app against a
-live Postgres. `tests/reference-host.test.ts` asserts the end-to-end scenarios against
-it as part of `bun run test`; the example imports `@corbits/artifacts`, which the
+live Postgres. `e2e/reference-host.test.ts` asserts the end-to-end scenarios against
+it as part of `bun run test:e2e`; the example imports `@corbits/artifacts`, which the
 root `tsconfig.json` maps to `src/`. CI's Node consumer smoke test covers the built
 `dist/` a consumer installs.
 
@@ -79,6 +80,9 @@ Migrations are SQL files under `migrations/`, applied in filename order on every
 boot, so every statement must be idempotent (`IF NOT EXISTS`, `IF EXISTS`). There
 is no ledger: a schema change is a new file whose statements are safe to re-run,
 never an edit that assumes it runs once.
+
+Because every file re-runs on every boot, a data backfill must be cheap once it has
+run: guard it so an already-migrated database does no work beyond a quick check.
 
 `schema.ts` and `migrations/` must agree — every query goes through the drizzle
 table objects, and the route suites fail when a column they write is missing.
@@ -393,3 +397,10 @@ authenticated `tenant`/`principal` on the request context; the host's
 - **One 404 covers three causes** for a resolved caller — never minted,
   malformed, or another tenant's. Distinguishing them would be
   an existence oracle. Expect no more detail than that from the API.
+
+## Commit messages
+
+Commit subjects and PR titles follow [Conventional Commits](https://www.conventionalcommits.org): `feat`, `fix`, `refactor`, `test`, `docs`, `build`, `ci`, `perf`, and `chore(release): x.y.z` for releases.
+Add `!` only for public API breaks: removed or renamed exports, changed signatures, newly required params. Peer and dependency range changes are `build(deps):` with no `!`.
+Keep subjects imperative, lowercase after the colon, 72 characters or less, and free of ticket IDs.
+Every PR links its issue with a `Closes <issue id>` line in the PR body.

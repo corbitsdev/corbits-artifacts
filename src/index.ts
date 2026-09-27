@@ -2,12 +2,12 @@
 export { createArtifactRoutes } from "./mount.js";
 export type { CreateArtifactRoutesDeps } from "./mount.js";
 
-export { mountWorkflowArtifacts } from "./workflow-mount.js";
+export { createWorkflowArtifactRoutes } from "./workflow-mount.js";
 export type {
   AgentTokenAuth,
   AgentTokenIdentity,
   CreatedWorkflowArtifact,
-  MountWorkflowArtifactsOpts,
+  CreateWorkflowArtifactRoutesDeps,
   ResolvedWorkflowRunScope,
   WorkflowArtifactEnv,
   WorkflowRunResolver,
@@ -85,6 +85,7 @@ export {
   MAX_UPLOAD_FILE_COUNT,
   MAX_UPLOAD_TOTAL_BYTES,
   PARSED_DOCUMENT_POLICY,
+  reviseFileArtifact,
   SPREADSHEET_UPLOAD_POLICY,
   UnsupportedUploadTypeError,
 } from "./uploads.js";

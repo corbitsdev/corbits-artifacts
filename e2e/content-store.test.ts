@@ -4,18 +4,19 @@ import {
   InlineContentStore,
   decodeDataUrl,
   uploadRefFromSource,
-} from "./content-store.js";
-import { normalizeSource } from "./artifacts.js";
-import { resolveDownload } from "./download.js";
+} from "../src/content-store.js";
+import { normalizeSource } from "../src/artifacts.js";
+import { resolveDownload } from "../src/download.js";
 import {
   ARTIFACT_UPLOAD_POLICY,
   createFileArtifact,
   uploadArtifactKind,
-} from "./uploads.js";
-import { upload } from "./schema.js";
-import type { ContentStore } from "./ports.js";
-import { seedArtifact, SCOPE, testDb } from "./test-helpers.js";
-import type { ArtifactDb } from "./db.js";
+} from "../src/uploads.js";
+import { upload } from "../src/schema.js";
+import type { ContentStore } from "../src/ports.js";
+import { seedArtifact, SCOPE } from "./fixtures.js";
+import { testDb } from "./helpers.js";
+import type { ArtifactDb } from "../src/db.js";
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
 const PDF = new Uint8Array(Buffer.from("%PDF-1.4 body"));

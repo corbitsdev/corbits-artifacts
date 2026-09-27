@@ -1,14 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { Hono } from "hono";
 import {
-  mountWorkflowArtifacts,
+  createWorkflowArtifactRoutes,
   type AgentTokenAuth,
   type ResolvedWorkflowRunScope,
-  type WorkflowArtifactEnv,
-} from "./workflow-mount.js";
-import { InlineContentStore } from "./content-store.js";
-import { seedArtifact, testDb } from "./test-helpers.js";
-import type { ArtifactDb } from "./db.js";
+} from "../src/workflow-mount.js";
+import { InlineContentStore } from "../src/content-store.js";
+import { seedArtifact } from "./fixtures.js";
+import { testDb } from "./helpers.js";
+import type { ArtifactDb } from "../src/db.js";
 
 const RUN_SCOPE: ResolvedWorkflowRunScope = {
   tenantId: "acme",
@@ -33,8 +32,7 @@ function agentTokenAuth(overrides: Partial<AgentTokenAuth> = {}): AgentTokenAuth
 }
 
 function host(db: ArtifactDb, agentToken: AgentTokenAuth = agentTokenAuth()) {
-  const app = new Hono<WorkflowArtifactEnv>();
-  return mountWorkflowArtifacts(app, {
+  return createWorkflowArtifactRoutes({
     db,
     contentStore: InlineContentStore,
     // The sidecar path stays wired: an agent token is a second way in, not a

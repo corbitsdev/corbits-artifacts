@@ -11,5 +11,5 @@
     "types": ["node", "@types/bun"],
     "paths": { "@corbits/artifacts": ["./src/index.ts"] }
   },
-  "include": ["src", "tests"]
+  "include": ["src", "e2e"]
 }
