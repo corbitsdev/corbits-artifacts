@@ -19,8 +19,7 @@ export type { ArtifactCounts, ArtifactCountSegments } from "./counts.js";
 export { artifactPreviewHeaders, resolveArtifactPreview } from "./preview.js";
 export type { ArtifactPreviewResult } from "./preview.js";
 
-export { runArtifactMigrations, MigrationChecksumError, MigrationAdoptError } from "./migrations.js";
-export type { RunArtifactMigrationsOptions } from "./migrations.js";
+export { runArtifactMigrations } from "./migrations.js";
 
 export { createArtifactDb } from "./db.js";
 export type { ArtifactDb, ArtifactTx } from "./db.js";

@@ -11,6 +11,7 @@
       "devDependencies": {
         "@intx/agent": "0.4.0",
         "@intx/authz": "0.4.0",
+        "@intx/db": "0.4.0",
         "@intx/hub-api": "0.4.0",
         "@intx/types": "0.4.0",
         "@types/bun": "1.1.14",
@@ -23,6 +24,7 @@
       },
       "peerDependencies": {
         "@intx/agent": "^0.4.0",
+        "@intx/db": "^0.4.0",
         "@intx/hub-api": "^0.4.0",
         "@intx/types": "^0.4.0",
         "drizzle-orm": "^0.45.2",
