@@ -62,15 +62,15 @@ await close();
 
 ### `createArtifactRoutes(deps)`
 
-| `deps`              | Type                                | What the host provides                                                                                               |
-| ------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `db`                | `ArtifactDb`                        | The hub's drizzle handle, for example from `createDB`.                                                               |
-| `contentStore`      | `ContentStore`                      | Where file bytes go. `InlineContentStore` keeps them in Postgres; implement the port for object storage.             |
-| `requireGrant`      | `RequireGrant`                      | From `@intx/hub-api`'s `createRequireGrant`.                                                                         |
-| `onArtifactCreated` | `(tx, row, scope) => Promise<void>` | Optional. Runs in the creating transaction; mint the creator's `write` and `archive` grants on `artifact:<id>` here. |
-| `decorate`          | `(tenantId, rows) => Promise<void>` | Optional. Adds display-only fields to serialized rows. It must not change which rows are returned.                   |
-| `uploadPolicy`      | `UploadPolicy`                      | Optional. MIME types `POST /artifacts/upload` accepts. Defaults to `ARTIFACT_UPLOAD_POLICY`.                         |
-| `countSegments`     | `ArtifactCountSegments`             | Optional. Named predicates for `GET /artifacts/counts`.                                                              |
+| `deps`              | Type                                | What the host provides                                                                                                                        |
+| ------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `db`                | `ArtifactDb`                        | The hub's drizzle handle, for example from `createDB`.                                                                                        |
+| `contentStore`      | `ContentStore`                      | Where file bytes go. `InlineContentStore` keeps them in Postgres; implement the port for object storage.                                      |
+| `requireGrant`      | `RequireGrant`                      | From `@intx/hub-api`'s `createRequireGrant`.                                                                                                  |
+| `onArtifactCreated` | `(tx, row, scope) => Promise<void>` | Optional. Runs in the creating transaction for any other creation side effect. The creator's `write` and `archive` grants are minted for you. |
+| `decorate`          | `(tenantId, rows) => Promise<void>` | Optional. Adds display-only fields to serialized rows. It must not change which rows are returned.                                            |
+| `uploadPolicy`      | `UploadPolicy`                      | Optional. MIME types `POST /artifacts/upload` accepts. Defaults to `ARTIFACT_UPLOAD_POLICY`.                                                  |
+| `countSegments`     | `ArtifactCountSegments`             | Optional. Named predicates for `GET /artifacts/counts`.                                                                                       |
 
 | Route                                      | Grant                        | Does                                                                  |
 | ------------------------------------------ | ---------------------------- | --------------------------------------------------------------------- |

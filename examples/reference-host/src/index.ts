@@ -43,8 +43,6 @@ import {
   createArtifactRoutes,
   runArtifactMigrations,
   type ArtifactDb,
-  type ArtifactRow,
-  type ArtifactTx,
   type ResolvedPrincipal,
   type ContentStore,
   type SerializedArtifactBase,
@@ -64,40 +62,6 @@ async function decorate(
         ? row.source.generatedBy
         : null;
   }
-}
-
-/**
- * The worked example this host owes the next `@corbits/*-core` package: what
- * a "the artifact's owner may write to it" grant actually IS, and who mints
- * it. `@corbits/artifacts` provisions nothing itself — this runs through
- * `createArtifactRoutes`' `onArtifactCreated` hook, inside the same transaction as
- * the row it grants on, so a grant never outlives (or fails to accompany) the
- * artifact it names.
- *
- * `origin: "creator"` is the platform's own vocabulary for exactly this case
- * (see `@intx/types/authz`'s `GrantRule.origin`) — the host is not inventing
- * a policy layer, it is recording, in the platform's own grant table, the
- * one fact this module already decided: `scope.principalId` made this row.
- */
-async function grantOwnership(
-  tx: ArtifactTx,
-  row: ArtifactRow,
-  scope: ResolvedPrincipal,
-) {
-  const resource = `artifact:${row.id}`;
-  await tx.insert(intxSchema.grant).values(
-    (["write", "archive"] as const).map((action) => ({
-      id: generateId("grant"),
-      tenantId: scope.tenantId,
-      principalId: scope.principalId,
-      roleId: null,
-      resource,
-      action,
-      effect: "allow" as const,
-      origin: "creator" as const,
-      conditions: null,
-    })),
-  );
 }
 
 export type Session = { userId: string } | null;
@@ -379,7 +343,6 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
         contentStore,
         requireGrant,
         decorate,
-        onArtifactCreated: grantOwnership,
       }),
     );
     const mounted = app.route("/api", api);
