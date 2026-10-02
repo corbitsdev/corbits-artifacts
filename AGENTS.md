@@ -219,7 +219,7 @@ title.
 A uniqueness constraint on `(tenant_id, title, kind)` was considered and
 rejected — not just for now, but structurally. `createArtifact` is a
 public, unconditional insert with no title lookup of its own, called
-directly by the import route, the upload path, and `artifact_link_file`.
+directly by the import route, the upload path, and `artifact_write` linking a workspace file.
 Two independent creates sharing a title is normal, intended behavior on
 every one of those paths — a coworker uploading `report.pdf` twice, or two
 agents each linking a file named `notes.md`, are not bugs. A hard

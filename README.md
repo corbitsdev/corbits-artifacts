@@ -108,7 +108,11 @@ Takes the same `DBConfig` and `schema` as Interchange's `runMigrations`. `schema
 
 ### `@corbits/artifacts/sidecar-bundle`
 
-`artifacts` is an `@intx/agent` tool pack: `artifact_create`, `artifact_write`, `artifact_read`, `artifact_read_chunk`, `artifact_list`, `artifact_find_by_title` and `artifact_link_file`. They call the run-scoped routes through the agent's `hub` credential.
+`artifacts` is an `@intx/agent` tool pack of three tools. They call the run-scoped routes through the agent's `hub` credential.
+
+- `artifact_write` creates an artifact when no id is given, from content or a workspace file path. With an id it revises, either with the full text or with `edits`: exact passages, each of which must appear once, or nothing is written. `expectedVersion` refuses the write if a newer version exists.
+- `artifact_read` returns the content, a past version with `version`, or a range with `offset` and `limit`.
+- `artifact_search` lists the newest artifacts, filtered by `kind` and by a `query` matched against title and content.
 
 ## Using with Interchange
 
