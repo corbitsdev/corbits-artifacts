@@ -50,7 +50,9 @@ export { DataUrlContentStore, InlineContentStore } from "./content-store.js";
 export type { UploadRef } from "./content-store.js";
 
 export {
+  applyArtifactEdits,
   ARTIFACT_ORIGINS,
+  ArtifactEditError,
   ArtifactNotFoundError,
   ArtifactSizeError,
   assertArtifactFieldSizes,
@@ -74,6 +76,7 @@ export {
   writeArtifactVersion,
 } from "./artifacts.js";
 export type {
+  ArtifactEdit,
   ArtifactListRow,
   ArtifactVersionListItem,
   CreateArtifactArgs,
@@ -115,7 +118,6 @@ export {
   ARTIFACT_TOOL_DEFINITIONS,
   linkFileArtifact,
   readArtifact,
-  readArtifactChunk,
   windowContent,
 } from "./tools.js";
 export type { ArtifactReadResult, ArtifactToolDefinition } from "./tools.js";

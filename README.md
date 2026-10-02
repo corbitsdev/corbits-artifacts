@@ -110,12 +110,12 @@ mountWorkflowArtifacts(workflowApi, {
 app.route("/workflow-artifacts", workflowApi);
 ```
 
-Routes: `POST /artifacts` (create), `GET /artifacts` (list, `kind`/`limit`),
-`GET /artifacts/recent`, `GET /artifacts/find?title=` (exact-title lookup),
-`POST /artifacts/link-file`, `PATCH /artifacts/:id` (revise), `GET /artifacts/:id`
-(read-back — 404s a skill-draft or another tenant's row, same as `mountArtifacts`'
-detail route), `GET /artifacts/:id/read` and `GET /artifacts/:id/chunk` (the budgeted
-reads the artifact tools use), and `POST /artifacts/binary` (base64 `contentBase64`
+Routes: `POST /artifacts` (create), `GET /artifacts` (search, `query`/`kind`/`limit`),
+`GET /artifacts/recent`, `POST /artifacts/link-file`, `PATCH /artifacts/:id` (revise,
+by `content` or exact-passage `edits`, with an optional `expectedVersion`),
+`GET /artifacts/:id` (read-back — 404s a skill-draft or another tenant's row, same as
+`mountArtifacts`' detail route), `GET /artifacts/:id/read` (the budgeted read the
+artifact tools use, with `offset`/`limit` for a range), and `POST /artifacts/binary` (base64 `contentBase64`
 body, for a render step that needs to persist bytes rather than text). Together they
 cover every entry in `ARTIFACT_TOOL_DEFINITIONS`. Every route is authenticated; there
 is no unauthenticated case here the way collection reads have one on the
@@ -158,7 +158,15 @@ calls the routes above through that mediated fetch with the run address header. 
 credential is the agent's own hub token; the bundle never sees the secret and never
 names a host — the handle's origin pin resolves its relative paths.
 
-`artifact_create` and `artifact_write` both take an optional `metadata` object —
+The pack is three tools. `artifact_write` creates without an `artifactId` (from
+`content`, or a workspace `path`) and revises with one, by full `content` or by `edits`:
+exact passages that must each appear once, or nothing is written. `expectedVersion`
+refuses the write if a newer version exists. `artifact_read` returns content, a past
+`version`, a range with `offset`/`limit`, or a `web_site` summary or file by `path`.
+`artifact_search` lists the newest artifacts, filtered by `kind` and a `query` matched
+against title and content.
+
+`artifact_write` takes an optional `metadata` object —
 application metadata stored with the version, e.g. which project and stage this belongs
 to — which the bundle forwards to the route unchanged, omitting the field entirely when
 the model does not supply one.

@@ -223,7 +223,7 @@ describe("versioning", () => {
     const row = await seedArtifact(db);
     await expect(
       writeArtifactVersion(db, { scope: SCOPE, artifactId: row.id }),
-    ).rejects.toThrow(/content, title, and\/or metadata/);
+    ).rejects.toThrow(/content, edits, title, and\/or metadata/);
   });
 });
 

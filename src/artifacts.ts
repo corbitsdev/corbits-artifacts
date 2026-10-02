@@ -324,6 +324,52 @@ export class ArtifactNotFoundError extends Error {
   }
 }
 
+/** One exact-passage replacement in a revision. */
+export type ArtifactEdit = {
+  readonly oldText: string;
+  readonly newText: string;
+};
+
+/** An edit whose passage is missing or ambiguous. Nothing is written. */
+export class ArtifactEditError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ArtifactEditError";
+  }
+}
+
+/**
+ * Apply edits in order. Each `oldText` must occur exactly once in the text as
+ * the earlier edits left it, so an edit lands where the caller meant or not
+ * at all.
+ */
+export function applyArtifactEdits(
+  content: string,
+  edits: readonly ArtifactEdit[],
+): string {
+  if (edits.length === 0) throw new ArtifactEditError("edits is empty");
+  return edits.reduce((text, edit, index) => {
+    const label = `edit ${index + 1}`;
+    if (edit.oldText.length === 0) {
+      throw new ArtifactEditError(`${label}: oldText is empty`);
+    }
+    const at = text.indexOf(edit.oldText);
+    if (at === -1) {
+      throw new ArtifactEditError(
+        `${label}: oldText was not found; read the artifact and copy the passage exactly`,
+      );
+    }
+    if (text.indexOf(edit.oldText, at + 1) !== -1) {
+      throw new ArtifactEditError(
+        `${label}: oldText appears more than once; include more surrounding text`,
+      );
+    }
+    return (
+      text.slice(0, at) + edit.newText + text.slice(at + edit.oldText.length)
+    );
+  }, content);
+}
+
 /**
  * Thrown by `reviseArtifactVersion` when the caller's `expectedVersion`
  * precondition does not match the current version, observed under the same
@@ -359,6 +405,10 @@ async function reviseArtifactVersion(
     artifactId: string;
     title?: string;
     content?: string;
+    /** Applied to the locked current content. Exclusive with `content`. */
+    edits?: readonly ArtifactEdit[];
+    /** A host's own ceiling on the resulting content, in characters. */
+    maxContentChars?: number;
     /** Opaque to the package; undefined carries the prior version's metadata forward. */
     metadata?: Record<string, unknown> | null;
     /** Explicit lineage for this version — never inferred, never carried forward. */
@@ -405,12 +455,25 @@ async function reviseArtifactVersion(
 
   const version = existing.version + 1;
   const title = args.title ?? existing.title;
-  const content =
-    args.content === undefined
-      ? existing.content
-      : normalizeContentForKind(existing.kind, args.content);
-  if (args.content !== undefined) {
+  const replaced =
+    args.content ??
+    (args.edits === undefined
+      ? undefined
+      : applyArtifactEdits(existing.content, args.edits));
+  const contentChanged = replaced !== undefined;
+  const content = contentChanged
+    ? normalizeContentForKind(existing.kind, replaced)
+    : existing.content;
+  if (contentChanged) {
     assertArtifactFieldSizes({ content });
+    if (
+      args.maxContentChars !== undefined &&
+      content.length > args.maxContentChars
+    ) {
+      throw new ArtifactSizeError(
+        `content would be ${content.length} characters, over the ${args.maxContentChars}-character limit`,
+      );
+    }
   }
   const metadata =
     args.metadata === undefined
@@ -419,8 +482,9 @@ async function reviseArtifactVersion(
   const parentVersionIds = args.parentVersionIds ?? null;
   // Content omitted: the previous content carries forward, so its digest
   // carries forward unchanged rather than being recomputed.
-  const contentSha256 =
-    args.content === undefined ? existing.contentSha256 : sha256Hex(content);
+  const contentSha256 = contentChanged
+    ? sha256Hex(content)
+    : existing.contentSha256;
 
   const [updated] = await tx
     .update(artifact)
@@ -455,6 +519,10 @@ export async function writeArtifactVersion(
     artifactId: string;
     title?: string;
     content?: string;
+    /** Exact-passage replacements on the current content. Exclusive with `content`. */
+    edits?: readonly ArtifactEdit[];
+    /** A host's own ceiling on the resulting content, in characters. */
+    maxContentChars?: number;
     /** Opaque to the package; omit to carry the prior version's metadata forward. */
     metadata?: Record<string, unknown> | null;
     /** Explicit lineage for this version — never inferred from order. */
@@ -472,9 +540,15 @@ export async function writeArtifactVersion(
   if (
     args.title === undefined &&
     args.content === undefined &&
+    args.edits === undefined &&
     args.metadata === undefined
   ) {
-    throw new Error("Provide content, title, and/or metadata to revise the artifact");
+    throw new Error(
+      "Provide content, edits, title, and/or metadata to revise the artifact",
+    );
+  }
+  if (args.content !== undefined && args.edits !== undefined) {
+    throw new ArtifactEditError("Provide content or edits, not both");
   }
   if (args.title !== undefined) {
     assertArtifactFieldSizes({ title: args.title });

@@ -104,10 +104,9 @@ describe("the routes the artifact tools call", () => {
     const listedBody = (await listed.json()) as { data: Array<{ id: string }> };
     expect(listedBody.data.map((row) => row.id)).toContain(artifact.id);
 
-    const found = await app.request("/artifacts/find?title=Notes", { headers: agentHeaders });
-    expect((await found.json()) as unknown).toEqual({
-      data: { artifactId: artifact.id, version: 1 },
-    });
+    const found = await app.request("/artifacts?query=first", { headers: agentHeaders });
+    const foundBody = (await found.json()) as { data: Array<{ id: string }> };
+    expect(foundBody.data.map((row) => row.id)).toEqual([artifact.id]);
 
     const revised = await app.request(`/artifacts/${artifact.id}`, {
       method: "PATCH",
@@ -128,7 +127,7 @@ describe("the routes the artifact tools call", () => {
     });
     expect(((await pinned.json()) as { data: { content: string } }).data.content).toBe("first");
 
-    const chunk = await app.request(`/artifacts/${artifact.id}/chunk?offset=0&limit=3`, {
+    const chunk = await app.request(`/artifacts/${artifact.id}/read?offset=0&limit=3`, {
       headers: agentHeaders,
     });
     expect(((await chunk.json()) as { data: { content: string } }).data.content).toBe("sec");

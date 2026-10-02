@@ -57,7 +57,7 @@ function chunk(
     chunkEnd: end,
     ...(end < total
       ? {
-          continuation: `Showing characters ${start}–${end} of ${total}. Call artifact_read_chunk again with offset=${end} (same artifactId) to read the next chunk, and keep going until there is no continuation field.`,
+          continuation: `Showing characters ${start}–${end} of ${total}. Call artifact_read again with offset=${end} (same artifactId) to read the next chunk, and keep going until there is no continuation field.`,
         }
       : {}),
   };
@@ -152,9 +152,11 @@ async function resolveForRead(
 }
 
 /**
- * `artifact_read`: whole (budgeted) content, or — for `web_site` — a structural
- * summary, or one file's content when `path` is given. Reading the raw JSON
- * bundle of a site is never useful to a model and always blows the budget.
+ * `artifact_read`: whole (budgeted) content, or one character range when
+ * `offset` or `limit` is given. A `web_site` reads as a structural summary, or
+ * one file's content (windowed the same way) when `path` is given. Reading the
+ * raw JSON bundle of a site is never useful to a model and always blows the
+ * budget.
  */
 export async function readArtifact(
   db: ArtifactDb,
@@ -163,10 +165,14 @@ export async function readArtifact(
     artifactId: string;
     version?: number;
     path?: string;
+    offset?: number;
+    limit?: number;
   },
 ): Promise<ArtifactReadResult | (ReadBase & { summary: WebSiteReadSummary })> {
   const { base, content } = await resolveForRead(db, args);
-  if (base.kind !== WEB_SITE_KIND) return windowContent(base, content);
+  if (base.kind !== WEB_SITE_KIND) {
+    return windowContent(base, content, args.offset, args.limit);
+  }
 
   if (args.path === undefined) {
     return { ...base, summary: summarizeWebSiteContent(content) };
@@ -176,37 +182,11 @@ export async function readArtifact(
   if (file === undefined) {
     throw new Error(`File not found in web_site artifact: ${path}`);
   }
-  return { ...windowContent(base, file), path };
-}
-
-/** `artifact_read_chunk`: one bounded character range. Not for `web_site`. */
-export async function readArtifactChunk(
-  db: ArtifactDb,
-  args: {
-    scope: ResolvedPrincipal;
-    artifactId: string;
-    version?: number;
-    offset?: number;
-    limit?: number;
-  },
-): Promise<ArtifactReadResult> {
-  const { base, content } = await resolveForRead(db, args);
-  if (base.kind === WEB_SITE_KIND) {
-    throw new Error(
-      "artifact_read_chunk does not support web_site artifacts; use artifact_read for a summary or pass path to read one file",
-    );
-  }
-  return windowContent(
-    base,
-    content,
-    args.offset ?? 0,
-    args.limit ?? DEFAULT_READ_LIMIT,
-  );
+  return { ...windowContent(base, file, args.offset, args.limit), path };
 }
 
 /**
- * `artifact_link_file`: the write behavior behind the descriptor of the same
- * name. An agent has just written a file into its own workspace; this mints the
+ * `artifact_write` given a workspace `path` instead of content. An agent has just written a file into its own workspace; this mints the
  * artifact that points at it, so the file shows up in the gallery next to every
  * other artifact instead of staying invisible inside the run.
  *
@@ -238,7 +218,7 @@ export async function linkFileArtifact(
 ): Promise<ArtifactRow> {
   const path = args.path.trim();
   if (path.length === 0) {
-    throw new Error("artifact_link_file requires a workspace path");
+    throw new Error("linking a file requires a workspace path");
   }
   return await db.transaction((tx) =>
     createArtifact(tx, {
@@ -268,151 +248,125 @@ export type ArtifactToolDefinition = {
   description: string;
   inputSchema: {
     type: "object";
-    properties: Record<string, { type: string; description: string }>;
+    properties: Record<
+      string,
+      { type: string; description: string; items?: Record<string, unknown> }
+    >;
     required: string[];
   };
 };
 
+const VERSION_PROPERTY = {
+  type: "number",
+  description: "Optional version to read. Defaults to the latest.",
+};
+
 export const ARTIFACT_TOOL_DEFINITIONS: readonly ArtifactToolDefinition[] = [
   {
-    name: "artifact_create",
+    name: "artifact_write",
     sideEffect: "write",
     description:
-      "Create a new artifact with inline content. Returns the artifact id and version. Revise it later with artifact_write.",
+      "Create or revise an artifact. Every call returns the artifact id and its new version; pass that version as expectedVersion on your next revision. Create: omit artifactId and pass title, kind, and content (or path, for a file you already wrote in your workspace). Revise: pass artifactId with edits to change exact passages, or content to replace the whole text. Prefer edits for small changes. If an edit is refused, nothing was written: read the artifact again and retry.",
     inputSchema: {
       type: "object",
       properties: {
-        title: { type: "string", description: "Artifact title." },
+        artifactId: {
+          type: "string",
+          description: "The artifact to revise. Omit to create one.",
+        },
+        title: {
+          type: "string",
+          description: "Title. Required when creating.",
+        },
         kind: {
           type: "string",
           description:
-            "Artifact kind, such as document, email, memo, note, or web_site for a multi-file static site stored as JSON { entry?, files: { path: content } }.",
+            "Kind, such as document, email, memo, note, or web_site for a multi-file static site stored as JSON { entry?, files: { path: content } }. Required when creating.",
         },
-        content: { type: "string", description: "The full text content." },
+        content: {
+          type: "string",
+          description: "The full text. Not allowed together with edits.",
+        },
+        edits: {
+          type: "array",
+          description:
+            "Revisions only: [{ oldText, newText }], applied in order. oldText is copied exactly from the current text and must appear there once; add surrounding words until it does. newText replaces it; an empty newText deletes it. To insert, use a nearby passage as oldText and repeat it in newText with the addition.",
+          items: {
+            type: "object",
+            properties: {
+              oldText: { type: "string" },
+              newText: { type: "string" },
+            },
+            required: ["oldText", "newText"],
+          },
+        },
+        expectedVersion: {
+          type: "number",
+          description:
+            "Revisions only: the version you last read. The write is refused if the artifact has moved past it.",
+        },
+        path: {
+          type: "string",
+          description:
+            "Creating only: a file in your workspace to link instead of passing content.",
+        },
+        preview: {
+          type: "string",
+          description:
+            "With path: a short preview shown before the file is opened.",
+        },
         metadata: {
           type: "object",
           description:
             "Optional application metadata stored with the version, e.g. which project and stage this belongs to.",
         },
       },
-      required: ["title", "kind", "content"],
-    },
-  },
-  {
-    name: "artifact_link_file",
-    sideEffect: "write",
-    description:
-      "Create an artifact row linked to a file in the agent workspace. Call this after writing the file.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        title: { type: "string", description: "Artifact title." },
-        kind: { type: "string", description: "Artifact kind." },
-        path: {
-          type: "string",
-          description: "Relative path to the file in the agent workspace.",
-        },
-        preview: {
-          type: "string",
-          description: "Optional short preview shown before the file is opened.",
-        },
-      },
-      required: ["title", "kind", "path"],
+      required: [],
     },
   },
   {
     name: "artifact_read",
     sideEffect: "read",
     description:
-      "Read an artifact by id. Returns its title, kind, current version, and content. Pass version to read a past version. When the content is too large, the result carries a 'continuation' field telling you to read on with artifact_read_chunk.",
+      "Read an artifact by id: its title, kind, version, and content. Pass version for a past version. Long content comes back in ranges; when the result has a 'continuation' field, call again with the offset it names.",
     inputSchema: {
       type: "object",
       properties: {
         artifactId: { type: "string", description: "The artifact id to read." },
-        version: {
-          type: "number",
-          description: "Optional version to read. Defaults to the latest.",
-        },
+        version: VERSION_PROPERTY,
         path: {
           type: "string",
           description:
             "For kind=web_site only: return one file's content at this relative path. Without path, web_site reads return a summary.",
         },
-      },
-      required: ["artifactId"],
-    },
-  },
-  {
-    name: "artifact_read_chunk",
-    sideEffect: "read",
-    description:
-      "Read one bounded chunk of an artifact's content by character range. Pass the offset named in the prior result's 'continuation' field, and keep going until a result has no 'continuation'. Not supported for kind=web_site.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        artifactId: { type: "string", description: "The artifact id to read." },
         offset: {
           type: "number",
-          description: "Zero-based character offset to start from. Defaults to 0.",
+          description: "Zero-based character offset to start from.",
         },
         limit: {
           type: "number",
-          description: "Maximum characters to return in this call.",
-        },
-        version: {
-          type: "number",
-          description: "Optional version to read. Defaults to the latest.",
+          description: "Maximum characters to return.",
         },
       },
       required: ["artifactId"],
     },
   },
   {
-    name: "artifact_write",
-    sideEffect: "write",
-    description:
-      "Revise an existing artifact, creating a new version. Provide content and/or title.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        artifactId: { type: "string", description: "The artifact id to revise." },
-        title: { type: "string", description: "New title." },
-        content: { type: "string", description: "New full content." },
-        metadata: {
-          type: "object",
-          description:
-            "Optional application metadata stored with the version, e.g. which project and stage this belongs to.",
-        },
-      },
-      required: ["artifactId"],
-    },
-  },
-  {
-    name: "artifact_list",
+    name: "artifact_search",
     sideEffect: "read",
     description:
-      "List artifacts in your tenant, most recently updated first. Archived artifacts are never listed.",
+      "Find artifacts in your tenant, most recently updated first. Returns each match's id, title, kind, and version, not its content; read one with artifact_read. With no query it lists the newest. Archived artifacts are never returned.",
     inputSchema: {
       type: "object",
       properties: {
+        query: {
+          type: "string",
+          description: "Text to match in the title or content.",
+        },
         kind: { type: "string", description: "Optional kind filter." },
         limit: { type: "number", description: "Maximum artifacts to return." },
       },
       required: [],
-    },
-  },
-  {
-    name: "artifact_find_by_title",
-    sideEffect: "read",
-    description:
-      "Find the most recently updated non-archived artifact with an exact title. Returns null when there is none.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        title: { type: "string", description: "The exact artifact title." },
-        kind: { type: "string", description: "Optional kind filter." },
-      },
-      required: ["title"],
     },
   },
 ];

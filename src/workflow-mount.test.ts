@@ -19,11 +19,15 @@ const RUN_SCOPE: ResolvedWorkflowRunScope = {
 const VALID_TOKEN = "sidecar-token";
 const VALID_ADDRESS = "run-1@acme";
 
-function host(db: ArtifactDb, opts: { resolves?: ResolvedWorkflowRunScope | null } = {}) {
+function host(
+  db: ArtifactDb,
+  opts: { resolves?: ResolvedWorkflowRunScope | null; maxContentChars?: number } = {},
+) {
   const app = new Hono<WorkflowArtifactEnv>();
   return mountWorkflowArtifacts(app, {
     db,
     contentStore: InlineContentStore,
+    ...(opts.maxContentChars !== undefined ? { maxContentChars: opts.maxContentChars } : {}),
     resolveRunScope: (token, address) => {
       if (opts.resolves === undefined) {
         return token === VALID_TOKEN && address === VALID_ADDRESS ? RUN_SCOPE : null;
@@ -351,5 +355,78 @@ describe("PATCH /artifacts/:id", () => {
 
     const res = await app.request(`/artifacts/${row.id}`, patchJson({}));
     expect(res.status).toBe(400);
+  });
+});
+
+describe("revising by edits", () => {
+  const seeded = async (opts: { maxContentChars?: number } = {}) => {
+    const db = await testDb();
+    const row = await seedArtifact(db, { tenantId: "acme", content: "## Goal\nShip it." });
+    return { db, row, app: host(db, opts) };
+  };
+
+  test("applies exact-passage edits as the next version", async () => {
+    const { db, row, app } = await seeded();
+    const res = await app.request(
+      `/artifacts/${row.id}`,
+      patchJson({
+        edits: [{ oldText: "Ship it.", newText: "Ship it by Friday." }],
+        expectedVersion: 1,
+      }),
+    );
+    expect(res.status).toBe(200);
+    const updated = await getArtifact(db, row.id);
+    expect(updated?.version).toBe(2);
+    expect(updated?.content).toBe("## Goal\nShip it by Friday.");
+  });
+
+  test("a passage that does not land is 400 and writes nothing", async () => {
+    const { db, row, app } = await seeded();
+    const res = await app.request(
+      `/artifacts/${row.id}`,
+      patchJson({ edits: [{ oldText: "Ship it later.", newText: "x" }] }),
+    );
+    expect(res.status).toBe(400);
+    expect((await getArtifact(db, row.id))?.version).toBe(1);
+  });
+
+  test("a stale expectedVersion is 409", async () => {
+    const { app, row } = await seeded();
+    const res = await app.request(
+      `/artifacts/${row.id}`,
+      patchJson({ edits: [{ oldText: "Ship it.", newText: "Ship." }], expectedVersion: 3 }),
+    );
+    expect(res.status).toBe(409);
+  });
+
+  test("content and edits together are 400", async () => {
+    const { app, row } = await seeded();
+    const res = await app.request(
+      `/artifacts/${row.id}`,
+      patchJson({ content: "whole", edits: [{ oldText: "Ship it.", newText: "Ship." }] }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  test("edits that grow the text past the host's limit are 400", async () => {
+    const { db, app, row } = await seeded({ maxContentChars: 20 });
+    const res = await app.request(
+      `/artifacts/${row.id}`,
+      patchJson({ edits: [{ oldText: "Ship it.", newText: "Ship it, and then some." }] }),
+    );
+    expect(res.status).toBe(400);
+    expect((await getArtifact(db, row.id))?.version).toBe(1);
+  });
+});
+
+describe("search by query", () => {
+  test("filters by text in the title or content", async () => {
+    const db = await testDb();
+    const hit = await seedArtifact(db, { tenantId: "acme", title: "Brief", content: "paper job notes" });
+    await seedArtifact(db, { tenantId: "acme", title: "Other", content: "unrelated" });
+    const app = host(db);
+    const res = await app.request("/artifacts?query=job%20notes", { headers: authed });
+    const body = (await res.json()) as { data: Array<{ id: string }> };
+    expect(body.data.map((row) => row.id)).toEqual([hit.id]);
   });
 });
