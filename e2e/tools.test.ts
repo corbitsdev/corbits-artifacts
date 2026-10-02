@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { sql } from "drizzle-orm";
 import {
+  ArtifactEditError,
   ArtifactNotFoundError,
+  getArtifact,
   listArtifactVersions,
+  VersionConflictError,
   writeArtifactVersion,
 } from "../src/artifacts.js";
 import {
@@ -10,7 +13,6 @@ import {
   DEFAULT_READ_LIMIT,
   linkFileArtifact,
   readArtifact,
-  readArtifactChunk,
   SAFE_ENCODED_BUDGET,
 } from "../src/tools.js";
 import { seedArtifact, SCOPE } from "./fixtures.js";
@@ -19,12 +21,10 @@ import { testDb } from "./helpers.js";
 async function read(content: string, offset?: number, limit?: number) {
   const db = await testDb();
   const row = await seedArtifact(db, { content });
-  if (offset === undefined)
-    return await readArtifact(db, { scope: SCOPE, artifactId: row.id });
-  return await readArtifactChunk(db, {
+  return await readArtifact(db, {
     scope: SCOPE,
     artifactId: row.id,
-    offset,
+    ...(offset !== undefined ? { offset } : {}),
     ...(limit !== undefined ? { limit } : {}),
   });
 }
@@ -132,12 +132,12 @@ describe("artifact_read", () => {
   });
 });
 
-describe("artifact_read_chunk", () => {
+describe("artifact_read with a range", () => {
   test("honors an explicit offset and limit", async () => {
     const db = await testDb();
     const row = await seedArtifact(db, { content: "abcdefghij" });
 
-    const result = await readArtifactChunk(db, {
+    const result = await readArtifact(db, {
       scope: SCOPE,
       artifactId: row.id,
       offset: 3,
@@ -158,7 +158,7 @@ describe("artifact_read_chunk", () => {
       content: "revised",
     });
 
-    const result = await readArtifactChunk(db, {
+    const result = await readArtifact(db, {
       scope: SCOPE,
       artifactId: row.id,
       version: 1,
@@ -181,8 +181,8 @@ describe("tool definitions", () => {
     }
   });
 
-  test("artifact_create and artifact_write both declare an optional metadata object", () => {
-    for (const name of ["artifact_create", "artifact_write"]) {
+  test("artifact_write declares an optional metadata object", () => {
+    for (const name of ["artifact_write"]) {
       const definition = ARTIFACT_TOOL_DEFINITIONS.find(
         (d) => d.name === name,
       )!;
@@ -199,11 +199,7 @@ describe("tool definitions", () => {
     const writes = ARTIFACT_TOOL_DEFINITIONS.filter(
       (d) => d.sideEffect === "write",
     ).map((d) => d.name);
-    expect(writes.sort()).toEqual([
-      "artifact_create",
-      "artifact_link_file",
-      "artifact_write",
-    ]);
+    expect(writes).toEqual(["artifact_write"]);
   });
 
   // A descriptor with no behavior behind it is worse than a missing tool: the
@@ -212,13 +208,9 @@ describe("tool definitions", () => {
   test("every declared tool has an implementing export in the package", async () => {
     const pkg = (await import("../src/index.js")) as Record<string, unknown>;
     const BINDINGS: Record<string, string> = {
-      artifact_create: "createArtifact",
-      artifact_link_file: "linkFileArtifact",
-      artifact_read: "readArtifact",
-      artifact_read_chunk: "readArtifactChunk",
       artifact_write: "writeArtifactVersion",
-      artifact_list: "listArtifacts",
-      artifact_find_by_title: "findArtifactByTitle",
+      artifact_read: "readArtifact",
+      artifact_search: "listArtifacts",
     };
     for (const definition of ARTIFACT_TOOL_DEFINITIONS) {
       const exportName = BINDINGS[definition.name];
@@ -231,7 +223,77 @@ describe("tool definitions", () => {
   });
 });
 
-describe("artifact_link_file", () => {
+describe("artifact_write edits", () => {
+  const edit = async (
+    content: string,
+    edits: { oldText: string; newText: string }[],
+    expectedVersion?: number,
+  ) => {
+    const db = await testDb();
+    const row = await seedArtifact(db, { content });
+    const write = () =>
+      writeArtifactVersion(db, {
+        scope: SCOPE,
+        artifactId: row.id,
+        edits,
+        ...(expectedVersion !== undefined ? { expectedVersion } : {}),
+      });
+    return { db, row, write };
+  };
+
+  test("replaces each exact passage in order as a new version", async () => {
+    const { db, row, write } = await edit("## Goal\nShip it.\n## Risk\nNone.", [
+      { oldText: "Ship it.", newText: "Ship it by Friday." },
+      { oldText: "Friday.\n## Risk", newText: "Friday.\n## Risks" },
+    ]);
+    expect((await write()).version).toBe(2);
+    expect((await getArtifact(db, row.id))?.content).toBe(
+      "## Goal\nShip it by Friday.\n## Risks\nNone.",
+    );
+  });
+
+  test("a missing passage writes nothing", async () => {
+    const { db, row, write } = await edit("alpha beta", [
+      { oldText: "alpha", newText: "a" },
+      { oldText: "gamma", newText: "g" },
+    ]);
+    await expect(write()).rejects.toBeInstanceOf(ArtifactEditError);
+    const after = await getArtifact(db, row.id);
+    expect(after?.version).toBe(1);
+    expect(after?.content).toBe("alpha beta");
+  });
+
+  test("a passage that appears twice is refused", async () => {
+    const { write } = await edit("same same", [
+      { oldText: "same", newText: "once" },
+    ]);
+    await expect(write()).rejects.toThrow("appears more than once");
+  });
+
+  test("a stale expectedVersion is refused", async () => {
+    const { write } = await edit(
+      "text",
+      [{ oldText: "text", newText: "new" }],
+      7,
+    );
+    await expect(write()).rejects.toBeInstanceOf(VersionConflictError);
+  });
+
+  test("content and edits together are refused", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db, { content: "text" });
+    await expect(
+      writeArtifactVersion(db, {
+        scope: SCOPE,
+        artifactId: row.id,
+        content: "whole",
+        edits: [{ oldText: "text", newText: "new" }],
+      }),
+    ).rejects.toBeInstanceOf(ArtifactEditError);
+  });
+});
+
+describe("linkFileArtifact", () => {
   const linkArgs = (over: Record<string, unknown> = {}) => ({
     scope: SCOPE,
     ownerPrincipalId: SCOPE.principalId,

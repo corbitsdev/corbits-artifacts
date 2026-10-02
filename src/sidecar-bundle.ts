@@ -56,6 +56,47 @@ function str(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+function present(
+  args: Record<string, unknown>,
+  keys: readonly string[],
+): Record<string, unknown> {
+  return Object.fromEntries(
+    keys
+      .filter((key) => args[key] !== undefined)
+      .map((key) => [key, args[key]]),
+  );
+}
+
+/** No id creates, from content or a workspace path; an id revises. */
+function writeRequest(args: Record<string, unknown>): Request_ {
+  const artifactId = str(args["artifactId"]);
+  if (artifactId !== undefined) {
+    return {
+      method: "PATCH",
+      path: `/artifacts/${encodeURIComponent(artifactId)}`,
+      body: present(args, [
+        "title",
+        "content",
+        "edits",
+        "expectedVersion",
+        "metadata",
+      ]),
+    };
+  }
+  if (str(args["path"]) !== undefined) {
+    return {
+      method: "POST",
+      path: "/artifacts/link-file",
+      body: present(args, ["title", "kind", "path", "preview"]),
+    };
+  }
+  return {
+    method: "POST",
+    path: "/artifacts",
+    body: present(args, ["title", "kind", "content", "metadata"]),
+  };
+}
+
 /** Maps one model-facing tool call onto the run-scoped route that performs
  * it. An unknown name returns undefined and answers as a tool error. */
 function requestFor(
@@ -63,45 +104,12 @@ function requestFor(
   args: Record<string, unknown>,
 ): Request_ | undefined {
   switch (name) {
-    case "artifact_create":
-      return {
-        method: "POST",
-        path: "/artifacts",
-        body: {
-          title: args["title"],
-          kind: args["kind"],
-          content: args["content"],
-          ...(args["metadata"] !== undefined
-            ? { metadata: args["metadata"] }
-            : {}),
-        },
-      };
-    case "artifact_link_file":
-      return {
-        method: "POST",
-        path: "/artifacts/link-file",
-        body: {
-          title: args["title"],
-          kind: args["kind"],
-          path: args["path"],
-          ...(str(args["preview"]) !== undefined
-            ? { preview: args["preview"] }
-            : {}),
-        },
-      };
+    case "artifact_write":
+      return writeRequest(args);
     case "artifact_read":
       return {
         method: "GET",
         path: `/artifacts/${encodeURIComponent(String(args["artifactId"] ?? ""))}/read${query(
-          {
-            version: args["version"],
-          },
-        )}`,
-      };
-    case "artifact_read_chunk":
-      return {
-        method: "GET",
-        path: `/artifacts/${encodeURIComponent(String(args["artifactId"] ?? ""))}/chunk${query(
           {
             version: args["version"],
             offset: args["offset"],
@@ -109,29 +117,10 @@ function requestFor(
           },
         )}`,
       };
-    case "artifact_write":
-      return {
-        method: "PATCH",
-        path: `/artifacts/${encodeURIComponent(String(args["artifactId"] ?? ""))}`,
-        body: {
-          ...(str(args["title"]) !== undefined ? { title: args["title"] } : {}),
-          ...(typeof args["content"] === "string"
-            ? { content: args["content"] }
-            : {}),
-          ...(args["metadata"] !== undefined
-            ? { metadata: args["metadata"] }
-            : {}),
-        },
-      };
-    case "artifact_list":
+    case "artifact_search":
       return {
         method: "GET",
-        path: `/artifacts${query({ kind: args["kind"], limit: args["limit"] })}`,
-      };
-    case "artifact_find_by_title":
-      return {
-        method: "GET",
-        path: `/artifacts/find${query({ title: args["title"], kind: args["kind"] })}`,
+        path: `/artifacts${query({ query: args["query"], kind: args["kind"], limit: args["limit"] })}`,
       };
     default:
       return undefined;

@@ -19,21 +19,22 @@
 import { type } from "arktype";
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import {
+  ArtifactEditError,
   ArtifactNotFoundError,
   ArtifactSizeError,
   createArtifact,
-  findArtifactByTitle,
   getArtifact,
   listArtifacts,
   MAX_VERSION,
   MetadataShape,
   serializeArtifact,
   serializeArtifactListItem,
+  VersionConflictError,
   writeArtifactVersion,
   type SerializedArtifact,
   type SerializedArtifactListItem,
 } from "./artifacts.js";
-import { linkFileArtifact, readArtifact, readArtifactChunk } from "./tools.js";
+import { linkFileArtifact, readArtifact } from "./tools.js";
 import type { ArtifactDb } from "./db.js";
 import {
   ARTIFACT_UPLOAD_POLICY,
@@ -154,17 +155,23 @@ const LinkWorkflowFileBody = type({
 
 // `metadata` is opaque and, when omitted, carries the prior version's
 // metadata forward — same semantics as `ReviseArtifactRequest` in mount.ts —
-// so at least one of the three must be present or there is nothing to revise.
+// so at least one field must be present or there is nothing to revise.
 const ReviseWorkflowArtifactBody = type({
   "title?": "string > 0",
   "content?": "string",
+  "edits?": type({ oldText: "string", newText: "string" }).array(),
+  "expectedVersion?": "number.integer >= 1",
   "metadata?": NullableMetadata,
 }).narrow(
   (body, ctx) =>
-    body.title !== undefined ||
-    body.content !== undefined ||
-    body.metadata !== undefined ||
-    ctx.mustBe("a body with content, title, and/or metadata"),
+    ((body.content === undefined || body.edits === undefined) &&
+      (body.title !== undefined ||
+        body.content !== undefined ||
+        body.edits !== undefined ||
+        body.metadata !== undefined)) ||
+    ctx.mustBe(
+      "a body with content or edits (not both), title, and/or metadata",
+    ),
 );
 
 /** Omits the key entirely when absent or unparseable, so the behavior's own
@@ -201,13 +208,23 @@ function readFailure(c: Context<WorkflowArtifactEnv>, err: unknown): Response {
   throw err;
 }
 
-/** An archived or missing artifact reads as 404, an oversized field as 400. */
+/** An archived or missing artifact reads as 404, an oversized field or an
+ * edit that does not land as 400, a stale `expectedVersion` as 409. */
 function writeFailure(c: Context<WorkflowArtifactEnv>, err: unknown): Response {
   if (err instanceof ArtifactNotFoundError) {
     return c.json({ error: "Artifact not found" }, 404);
   }
-  if (err instanceof ArtifactSizeError)
+  if (err instanceof ArtifactSizeError || err instanceof ArtifactEditError) {
     return c.json({ error: err.message }, 400);
+  }
+  if (err instanceof VersionConflictError) {
+    return c.json(
+      {
+        error: `${err.message}. Read it again, then write against version ${err.currentVersion}.`,
+      },
+      409,
+    );
+  }
   throw err;
 }
 
@@ -409,28 +426,16 @@ export function createWorkflowArtifactRoutes({
   app.get("/artifacts", async (c) => {
     const scope = c.get("workflowRunScope");
     const kind = c.req.query("kind");
+    const search = c.req.query("query");
     const page = await listArtifacts(db, scope.tenantId, {
       limit: parseRecentLimit(c.req.query("limit")),
       ...(kind !== undefined && kind !== "" ? { kind } : {}),
+      ...(search !== undefined && search !== "" ? { query: search } : {}),
     });
     const data: readonly SerializedArtifactListItem[] = page.rows.map(
       serializeArtifactListItem,
     );
     return c.json({ data });
-  });
-
-  app.get("/artifacts/find", async (c) => {
-    const scope = c.get("workflowRunScope");
-    const title = c.req.query("title") ?? "";
-    if (title === "") return c.json({ error: "title is required" }, 400);
-    const kind = c.req.query("kind");
-    const found = await findArtifactByTitle(
-      db,
-      scope.tenantId,
-      title,
-      kind === "" ? undefined : kind,
-    );
-    return c.json({ data: found });
   });
 
   app.post("/artifacts/link-file", async (c) => {
@@ -504,7 +509,12 @@ export function createWorkflowArtifactRoutes({
         artifactId,
         ...(parsed.title !== undefined ? { title: parsed.title } : {}),
         ...(parsed.content !== undefined ? { content: parsed.content } : {}),
+        ...(parsed.edits !== undefined ? { edits: parsed.edits } : {}),
+        ...(parsed.expectedVersion !== undefined
+          ? { expectedVersion: parsed.expectedVersion }
+          : {}),
         ...(parsed.metadata !== undefined ? { metadata: parsed.metadata } : {}),
+        maxContentChars,
       });
     } catch (err) {
       return writeFailure(c, err);
@@ -520,20 +530,6 @@ export function createWorkflowArtifactRoutes({
     const scope = c.get("workflowRunScope");
     try {
       const data = await readArtifact(db, {
-        scope: { tenantId: scope.tenantId, principalId: scope.principalId },
-        artifactId: c.req.param("id"),
-        ...parseVersionQuery(c.req.query("version")),
-      });
-      return c.json({ data });
-    } catch (err) {
-      return readFailure(c, err);
-    }
-  });
-
-  app.get("/artifacts/:id/chunk", async (c) => {
-    const scope = c.get("workflowRunScope");
-    try {
-      const data = await readArtifactChunk(db, {
         scope: { tenantId: scope.tenantId, principalId: scope.principalId },
         artifactId: c.req.param("id"),
         ...parseVersionQuery(c.req.query("version")),
