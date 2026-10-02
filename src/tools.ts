@@ -246,7 +246,7 @@ export const ARTIFACT_TOOL_DEFINITIONS: readonly ArtifactToolDefinition[] = [
     name: "artifact_write",
     sideEffect: "write",
     description:
-      "Create or revise an artifact; every call returns the artifact id and its new version. Without artifactId it creates one from title, kind, and content (or from path, a file you already wrote in your workspace). With artifactId it revises: pass edits to change exact passages, or content to replace the whole text. Each edit's oldText must appear exactly once, or nothing is written. Pass expectedVersion to refuse the write if someone saved a newer version first.",
+      "Create or revise an artifact. Every call returns the artifact id and its new version; pass that version as expectedVersion on your next revision. Create: omit artifactId and pass title, kind, and content (or path, for a file you already wrote in your workspace). Revise: pass artifactId with edits to change exact passages, or content to replace the whole text. Prefer edits for small changes. If an edit is refused, nothing was written: read the artifact again and retry.",
     inputSchema: {
       type: "object",
       properties: {
@@ -270,7 +270,7 @@ export const ARTIFACT_TOOL_DEFINITIONS: readonly ArtifactToolDefinition[] = [
         edits: {
           type: "array",
           description:
-            "Revisions only: [{ oldText, newText }], applied in order. oldText is an exact passage of the current text that appears once; newText replaces it.",
+            "Revisions only: [{ oldText, newText }], applied in order. oldText is copied exactly from the current text and must appear there once; add surrounding words until it does. newText replaces it; an empty newText deletes it. To insert, use a nearby passage as oldText and repeat it in newText with the addition.",
           items: {
             type: "object",
             properties: {
@@ -330,7 +330,7 @@ export const ARTIFACT_TOOL_DEFINITIONS: readonly ArtifactToolDefinition[] = [
     name: "artifact_search",
     sideEffect: "read",
     description:
-      "Find artifacts in your tenant, most recently updated first. With no query it lists the newest. Archived artifacts are never returned.",
+      "Find artifacts in your tenant, most recently updated first. Returns each match's id, title, kind, and version, not its content; read one with artifact_read. With no query it lists the newest. Archived artifacts are never returned.",
     inputSchema: {
       type: "object",
       properties: {
