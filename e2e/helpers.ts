@@ -175,24 +175,26 @@ async function ensureControlPlane(db: ArtifactDb): Promise<void> {
     );
   }
   // The mint-on-create paths write the creator's grants into Interchange's
-  // `grant` table. On a shared dev DB that table already exists (real Interchange
-  // migration); the id-only stand-in harness needs a compatible copy.
-  await db.execute(sql`
-    CREATE TABLE IF NOT EXISTS "public"."grant" (
-      "id" text PRIMARY KEY,
-      "tenant_id" text NOT NULL,
-      "role_id" text,
-      "principal_id" text,
-      "resource" text NOT NULL,
-      "action" text NOT NULL,
-      "effect" text NOT NULL,
-      "conditions" jsonb,
-      "origin" text NOT NULL,
-      "expires_at" timestamptz,
-      "created_at" timestamptz NOT NULL DEFAULT now(),
-      "updated_at" timestamptz NOT NULL DEFAULT now()
-    )
-  `);
+  // `grant` table. On a real control plane that table already exists (Interchange
+  // owns its shape); only the id-only stand-in harness needs a compatible copy.
+  if (!real?.present) {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS "public"."grant" (
+        "id" text PRIMARY KEY,
+        "tenant_id" text NOT NULL,
+        "role_id" text,
+        "principal_id" text,
+        "resource" text NOT NULL,
+        "action" text NOT NULL,
+        "effect" text NOT NULL,
+        "conditions" jsonb,
+        "origin" text NOT NULL,
+        "expires_at" timestamptz,
+        "created_at" timestamptz NOT NULL DEFAULT now(),
+        "updated_at" timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+  }
 }
 
 export async function testDb(): Promise<ArtifactDb> {
