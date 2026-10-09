@@ -310,8 +310,7 @@ describe("GET /artifacts", () => {
       title: "quota",
       content: "usage at 100%",
     });
-    // A literal underscore in the title: matches "100%" but must NOT be a
-    // single-char wildcard.
+    // A literal underscore, not a single-char wildcard.
     await seedArtifact(db, {
       tenantId: "acme",
       title: "notes_keep",
@@ -324,8 +323,7 @@ describe("GET /artifacts", () => {
     });
     const app = host(db);
 
-    // "100%" with a literal % must match ONLY the content containing "100%",
-    // not "100x" (which "%" as a wildcard would have matched).
+    // A literal % matches only the content containing "100%", not "100x".
     const percent = await app.request("/artifacts?query=100%25", {
       headers: authed,
     });
@@ -333,9 +331,7 @@ describe("GET /artifacts", () => {
     expect(percent.status).toBe(200);
     expect(percentJson.data.map((a) => a.title)).toEqual(["quota"]);
 
-    // A literal "_" must not act as a one-character wildcard: "notes_keep"
-    // contains "notes_keep", but a literal-"_" query must not match a title
-    // like "notesXkeep" (there is none), and must match "notes_keep" exactly.
+    // A literal "_" matches "notes_keep" exactly, not something like "notesXkeep".
     const underscore = await app.request("/artifacts?query=notes_keep", {
       headers: authed,
     });
@@ -355,11 +351,8 @@ describe("GET /artifacts", () => {
     });
     const app = host(db);
 
-    // The list is always confined to the caller's tenant by the tenant filter;
-    // a cursor can only further RESTRICT that set, never widen it. Use a cursor
-    // at the foreign row's id but a far-future timestamp, so under newest-first
-    // it would include every acme row — proving both that paging still works
-    // and that the foreign row itself is never surfaced.
+    // A cursor only further restricts the tenant-confined list; the foreign
+    // row's id in a far-future cursor never surfaces it.
     const res = await app.request(
       `/artifacts?cursor=2999-01-01T00:00:00.000000Z__${foreign.id}`,
       { headers: authed },
@@ -694,9 +687,7 @@ describe("revising by edits", () => {
     expect((await getArtifact(db, row.id))?.content).toBe("## Goal\nShip it.");
   });
 
-  // Deleting 150 passages is bounded work (a delete shrinks the text, so the
-  // honest O(N·E) stays linear-ish) and stays under the ceiling, so this is a
-  // legitimate atomically-applied batch — not a destructive runaway.
+  // A delete-shrinking batch under the ceiling still applies atomically.
   test("a legit large-batch under the ceiling still applies atomically", async () => {
     const db = await testDb();
     const row = await seedArtifact(db, {
@@ -719,9 +710,8 @@ describe("revising by edits", () => {
   });
 
   test("the post-apply maxContentChars backstop fires when content is replaced past the ceiling", async () => {
-    // The route's pre-lock projected-check is skipped when the whole content is
-    // replaced (content path). The post-apply backstop in reviseArtifactVersion
-    // must still refuse an over-ceiling result and write nothing.
+    // The content path skips the pre-lock projected check; the post-apply
+    // backstop must still refuse and write nothing.
     const db = await testDb();
     const row = await seedArtifact(db, {
       tenantId: "acme",

@@ -33,14 +33,7 @@ export const MAX_ARTIFACT_TITLE_LENGTH = 512;
  */
 export const MAX_ARTIFACT_CONTENT_BYTES = 15 * 1024 * 1024;
 
-/**
- * Max number of exact-passage edits accepted in one revision. A count, not a
- * length bound: each edit is applied against the text as the previous edits
- * left it, so a pathological batch could otherwise do unbounded string work
- * under the `FOR UPDATE` lock. Sized to the repo's cap culture
- * (`MAX_RECENT_LIMIT=50`, `DEFAULT_READ_LIMIT=8000`) — generous for any honest
- * batch while still refusing a runaway one.
- */
+/** Cap on exact-passage edits per revision; a runaway batch would otherwise re-scan under the lock. */
 export const MAX_ARTIFACT_EDITS = 200;
 
 export class ArtifactSizeError extends Error {
@@ -431,10 +424,7 @@ export async function reviseArtifactVersion(
   if (args.content !== undefined && args.edits !== undefined) {
     throw new ArtifactEditError("Provide content or edits, not both");
   }
-  // Reject a runaway batch before taking the `FOR UPDATE` lock: each edit
-  // re-scans the growing text, so an unbounded count is unbounded O(N·E) work
-  // under the lock. A count, not a length bound — the row lock already guards
-  // the honest O(N·E) case.
+  // A runaway batch re-scans the growing text under the lock; cap the count.
   if (args.edits !== undefined && args.edits.length > MAX_ARTIFACT_EDITS) {
     throw new ArtifactEditError(
       `edits exceeds the ${MAX_ARTIFACT_EDITS}-edit limit`,

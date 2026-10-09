@@ -217,10 +217,8 @@ function readFailure(c: Context<WorkflowArtifactEnv>, err: unknown): Response {
   throw err;
 }
 
-/** An archived or missing artifact reads as 404, an oversized byte/title field
- * or an edit that does not land as 400, a stale `expectedVersion` as 409. The
- * `maxContentChars` ceiling is answered 413 by the routes BEFORE these core
- * errors are reached (see the create/PATCH handlers). */
+/** An archived or missing artifact reads as 404, an oversized field or an
+ * edit that does not land as 400, a stale `expectedVersion` as 409. */
 function writeFailure(c: Context<WorkflowArtifactEnv>, err: unknown): Response {
   if (err instanceof ArtifactNotFoundError) {
     return c.json({ error: "Artifact not found" }, 404);
@@ -522,12 +520,7 @@ export function createWorkflowArtifactRoutes({
     if (existing === null || existing.tenantId !== scope.tenantId) {
       return c.json({ error: "Artifact not found" }, 404);
     }
-    // Reject edits that would project past the ceiling BEFORE taking the row
-    // lock. Edits are non-overlapping by construction (each `oldText` lands
-    // exactly once in the text as earlier edits left it), so the projected
-    // length is exact: existing length plus the net of every replacement.
-    // Exact, not a bound on `edits.length` — that count bound is enforced by
-    // the schema and by `reviseArtifactVersion`.
+    // Edits are non-overlapping, so the projected length is exact: reject an over-ceiling batch before locking.
     if (parsed.edits !== undefined) {
       let projected = existing.content.length;
       for (const edit of parsed.edits) {

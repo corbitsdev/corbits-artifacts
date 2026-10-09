@@ -169,10 +169,8 @@ export async function callArtifactRoute(
   const payload: unknown = await response.json().catch(() => undefined);
   if (typeof payload === "object" && payload !== null && "data" in payload) {
     const body = payload as { data: unknown; nextCursor?: unknown };
-    // A paged list surfaces its cursor so the agent can continue paging: the
-    // route answers `{ data, nextCursor }`, and throwing the cursor away would
-    // strand the agent on page 1. Additive — only when a real next page exists,
-    // so tools whose responses carry no cursor keep their current shape.
+    // Surface a real next page's cursor so the agent can keep paging; additive —
+    // non-paged responses keep the data-only shape.
     if (typeof body.nextCursor === "string" && body.nextCursor.length > 0) {
       return { data: body.data, nextCursor: body.nextCursor };
     }
