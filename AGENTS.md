@@ -103,15 +103,12 @@ host's job" is meant to prevent. If a real product need for cross-tenant
 artifact reads shows up, it belongs in Interchange's grant model, not
 re-derived per package.
 
-### Three custom seams
+### Two custom seams
 
-Beyond the host's native context and grants, this package exposes **three**
-extension seams: the substrate (`ContentStore`), a display-only decorator
-(`decorate` / provenance), and a grant-provisioning hook (`onArtifactCreated`).
-Authorization is not a custom seam — it is the host's Interchange `RequireGrant`;
-`onArtifactCreated` is not authorization either, it is the write side of the
-same idea — the host deciding what makes its grant model true, this package
-only handing it the row and the scope that made it.
+Beyond the host's native context and grants, this package exposes **two**
+extension seams: the substrate (`ContentStore`) and a display-only decorator
+(`decorate` / provenance). Authorization is not a custom seam — it is the
+host's Interchange `RequireGrant`.
 
 ### Row decoration
 
@@ -122,26 +119,18 @@ couple it to a schema it must not know, so the host supplies the decorator.
 Clients that need an owner display name resolve `ownerPrincipalId` themselves;
 this package never ships directory names on the wire.
 
-### Grant provisioning (`onArtifactCreated`)
-
-Checking a grant (`requireGrant`) and minting one (`onArtifactCreated`) are the
-same host responsibility looked at from both ends: this package neither
-invents authorization policy nor decides who a newly created row belongs to
-for grant purposes — it hands the host the row, inside the transaction that
-made it durable, and the host decides.
+### Creator grants
 
 Creating needs its own grant, `create` on `artifact:*`, checked before the
 body is read; the reference host seeds it for every principal in its tenant.
-`examples/reference-host` then provisions a real `creator`-origin grant on create —
-`write` and `archive` on `artifact:<id>` for the creating principal, inserted
-into Interchange's own `grant` table via `@intx/db`'s schema, in the same
-transaction as the artifact row. Its `buildApp`'s default `requireGrant` is the
-platform's real `createRequireGrant` over that same table (via
-`createGrantStore`), not a stub — a principal with no matching row is refused,
-exactly as in production. See `grantOwnership` in
-`examples/reference-host/src/index.ts` and the "ownership-derived grants"
-scenarios in its acceptance suite for the end-to-end proof: the creator
-succeeds, a co-tenant with no grant does not.
+On create, the package mints `creator`-origin `write` and `archive` grants on
+`artifact:<id>` for the creating principal, inserted into Interchange's own
+`grant` table in the same transaction as the artifact row (once per file on
+upload). `onArtifactCreated` remains for a host's other creation side effects.
+The reference host's `buildApp` default `requireGrant` is the platform's real
+`createRequireGrant` over that table (via `createGrantStore`), so the
+"ownership-derived grants" scenarios in its acceptance suite prove the
+creator succeeds and a co-tenant with no grant does not.
 
 ### ContentStore
 

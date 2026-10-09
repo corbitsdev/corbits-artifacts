@@ -82,6 +82,7 @@
     "@intx/agent": "^0.4.0",
     "@intx/db": "^0.4.0",
     "@intx/hub-api": "^0.4.0",
+    "@intx/hub-common": "0.4.0",
     "@intx/types": "^0.4.0",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.32",

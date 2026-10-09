@@ -3,7 +3,9 @@ import { type } from "arktype";
 import { Hono, type Context } from "hono";
 import type { MiddlewareHandler } from "hono";
 import { describeRoute } from "hono-openapi";
+import { grant } from "@intx/db/schema";
 import { idResource, type RequireGrant, type TenantEnv } from "@intx/hub-api";
+import { generateId } from "@intx/hub-common";
 import type { ArtifactDb, ArtifactTx } from "./db.js";
 import {
   ArtifactNotFoundError,
@@ -53,6 +55,25 @@ import {
   type UploadPolicy,
 } from "./uploads.js";
 
+async function grantCreator(
+  tx: ArtifactTx,
+  row: ArtifactRow,
+  scope: ResolvedPrincipal,
+) {
+  await tx.insert(grant).values(
+    (["write", "archive"] as const).map((action) => ({
+      id: generateId("grant"),
+      tenantId: scope.tenantId,
+      principalId: scope.principalId,
+      roleId: null,
+      resource: `artifact:${row.id}`,
+      action,
+      effect: "allow" as const,
+      origin: "creator" as const,
+    })),
+  );
+}
+
 export type CreateArtifactRoutesDeps = {
   db: ArtifactDb;
   contentStore: ContentStore;
@@ -79,12 +100,9 @@ export type CreateArtifactRoutesDeps = {
   /**
    * Host hook run INSIDE the same transaction as artifact creation, once per
    * row (`POST /artifacts` once, `POST /artifacts/upload` once per file).
-   * This is the seam a host uses to provision whatever grants make its
-   * authorization model true — for example, a `creator`-origin grant on
-   * `artifact:<id>` for `write` and `archive` so the caller who just made the
-   * row can revise and archive it. artifact-core mints no grants itself:
-   * provisioning, like checking, is the host's job. Defaults to a no-op, so a
-   * host with no grant model omitting this behaves exactly as before.
+   * The creator's `write` and `archive` grants on `artifact:<id>` are already
+   * minted by then; this is the seam for any other side effect. Defaults to a
+   * no-op.
    */
   onArtifactCreated?: (
     tx: ArtifactTx,
@@ -521,6 +539,7 @@ export function createArtifactRoutes({
               : { origin: "manual" },
             ...(body.metadata !== undefined ? { metadata: body.metadata } : {}),
           });
+          await grantCreator(tx, created, scope);
           await onArtifactCreated(tx, created, scope);
           return created;
         });
@@ -633,6 +652,7 @@ export function createArtifactRoutes({
               bytes: new Uint8Array(await file.arrayBuffer()),
               ...(generatedBy !== undefined ? { generatedBy } : {}),
             });
+            await grantCreator(tx, row, scope);
             await onArtifactCreated(tx, row, scope);
             created.push(row);
           }

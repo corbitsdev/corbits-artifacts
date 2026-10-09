@@ -203,6 +203,33 @@ describe.each<[string, ContentStore]>([
     );
     expect(inline.headers.get("content-disposition")).toStartWith("inline;");
   });
+
+  test("each upload mints the creator's write and archive grants, which then revise and archive it", async () => {
+    for (const { id } of uploaded) {
+      const rows = await host.db.execute<{
+        action: string;
+        origin: string;
+      }>(sql`
+        SELECT "action", "origin" FROM "grant"
+        WHERE "resource" = ${`artifact:${id}`} ORDER BY "action"
+      `);
+      expect(rows.map((r) => ({ ...r }))).toEqual([
+        { action: "archive", origin: "creator" },
+        { action: "write", origin: "creator" },
+      ]);
+    }
+
+    const id = uploaded[0]!.id;
+    const revise = await app.request(
+      `/api/artifacts/${id}/versions`,
+      postJson({ content: "revised" }),
+    );
+    expect(revise.status).toBe(200);
+    const archive = await app.request(`/api/artifacts/${id}/archive`, {
+      method: "POST",
+    });
+    expect(archive.status).toBe(200);
+  });
 });
 
 describe("download an older version's content over HTTP (DataUrlContentStore)", () => {
