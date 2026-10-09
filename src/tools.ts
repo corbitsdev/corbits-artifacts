@@ -7,6 +7,7 @@ import {
 } from "./artifacts.js";
 import { artifact, type ArtifactRow } from "./schema.js";
 import type { ResolvedPrincipal } from "./ports.js";
+import { grantCreator } from "./grants.js";
 
 /**
  * An agent runtime caps a tool result at ~10K characters and spills the rest to
@@ -200,8 +201,8 @@ export async function linkFileArtifact(
   if (path.length === 0) {
     throw new Error("linking a file requires a workspace path");
   }
-  return await db.transaction((tx) =>
-    createArtifact(tx, {
+  return await db.transaction(async (tx) => {
+    const created = await createArtifact(tx, {
       scope: args.scope,
       ownerPrincipalId: args.ownerPrincipalId,
       kind: args.kind,
@@ -212,8 +213,10 @@ export async function linkFileArtifact(
         workspace: { path },
         ...(args.sessionId !== undefined ? { sessionId: args.sessionId } : {}),
       },
-    }),
-  );
+    });
+    await grantCreator(tx, created, args.scope);
+    return created;
+  });
 }
 
 /**

@@ -3,9 +3,7 @@ import { type } from "arktype";
 import { Hono, type Context } from "hono";
 import type { MiddlewareHandler } from "hono";
 import { describeRoute } from "hono-openapi";
-import { grant } from "@intx/db/schema";
 import { idResource, type RequireGrant, type TenantEnv } from "@intx/hub-api";
-import { generateId } from "@intx/hub-common";
 import type { ArtifactDb, ArtifactTx } from "./db.js";
 import {
   ArtifactNotFoundError,
@@ -41,6 +39,7 @@ import {
 import { artifactPreviewHeaders, resolveArtifactPreview } from "./preview.js";
 import type { ArtifactRow } from "./schema.js";
 import type { ResolvedPrincipal, ContentStore } from "./ports.js";
+import { grantCreator } from "./grants.js";
 import {
   ARTIFACT_UPLOAD_POLICY,
   contentDispositionHeader,
@@ -54,25 +53,6 @@ import {
   uploadArtifactKind,
   type UploadPolicy,
 } from "./uploads.js";
-
-async function grantCreator(
-  tx: ArtifactTx,
-  row: ArtifactRow,
-  scope: ResolvedPrincipal,
-) {
-  await tx.insert(grant).values(
-    (["write", "archive"] as const).map((action) => ({
-      id: generateId("grant"),
-      tenantId: scope.tenantId,
-      principalId: scope.principalId,
-      roleId: null,
-      resource: `artifact:${row.id}`,
-      action,
-      effect: "allow" as const,
-      origin: "creator" as const,
-    })),
-  );
-}
 
 export type CreateArtifactRoutesDeps = {
   db: ArtifactDb;
