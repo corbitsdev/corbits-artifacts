@@ -520,7 +520,8 @@ export function createWorkflowArtifactRoutes({
     if (existing === null || existing.tenantId !== scope.tenantId) {
       return c.json({ error: "Artifact not found" }, 404);
     }
-    // Edits are non-overlapping, so the projected length is exact: reject an over-ceiling batch before locking.
+    // Reject an over-ceiling batch before taking the lock; edits are
+    // non-overlapping, so the projected length is exact.
     if (parsed.edits !== undefined) {
       let projected = existing.content.length;
       for (const edit of parsed.edits) {

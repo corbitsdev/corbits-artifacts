@@ -137,9 +137,8 @@ describe("reviseArtifactVersion pre-lock guards", () => {
   });
 
   test("a batch of exactly the bound passes the pre-lock guard and hits the DB", async () => {
-    // Just below the refusal line, the guard must NOT fire: the batch proceeds
-    // to the locked select (the noDbTx proxy then throws on the DB read, which
-    // is the proof the pre-lock guard passed). Distinct from the refusal case.
+    // At the bound the pre-lock guard must not fire, so the batch reaches the
+    // noDbTx proxy's DB read.
     const atBound: readonly ArtifactEdit[] = Array.from(
       { length: MAX_ARTIFACT_EDITS },
       () => ({ oldText: "x", newText: "y" }),

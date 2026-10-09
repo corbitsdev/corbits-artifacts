@@ -198,7 +198,7 @@ The sidecar tool pack collapsed its five finer-grained tools into three. `artifa
 
 **`artifact_find_by_title` is not a drop-in.** In 0.2 it matched the title **exactly**, matched the title only, and returned at most one `{ artifactId, version }` (or null). In 0.3 `artifact_search` does a case-insensitive substring (ILIKE) match on both the **title and the content**, and returns a list of matches. A caller that needs the old exact-title, single-result semantics must post-filter the results (compare `title` case-insensitively and take the first exact match).
 
-Search results are capped at 50 artifacts per call. Cursor paging is being added to the workflow route and the tool; when it lands, `artifact_search` accepts a `cursor` property (plus `limit`, capped at 50) to page through all matches, and the cap above applies per page.
+Search results are capped at 50 artifacts per call. `artifact_search` accepts a `cursor` property (plus `limit`, capped at 50) to page through all matches; pass back the previous call's `nextCursor` (keeping the same query and kind) until none is returned.
 
 ### Hosts
 
