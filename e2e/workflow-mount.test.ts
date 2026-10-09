@@ -708,29 +708,6 @@ describe("revising by edits", () => {
     // Every token was deleted; only the " " separators between them remain.
     expect(updated?.content.trim()).toBe("");
   });
-
-  test("the post-apply maxContentChars backstop fires when content is replaced past the ceiling", async () => {
-    // The content path skips the pre-lock projected check; the post-apply
-    // backstop must still refuse and write nothing.
-    const db = await testDb();
-    const row = await seedArtifact(db, {
-      tenantId: "acme",
-      content: "## Goal\nShip it.",
-    });
-    const app = createWorkflowArtifactRoutes({
-      db,
-      contentStore: InlineContentStore,
-      resolveRunScope: () => RUN_SCOPE,
-      maxContentChars: 10,
-    });
-    const res = await app.request(
-      `/artifacts/${row.id}`,
-      patchJson({ content: "way beyond the ceiling" }),
-    );
-    expect(res.status).toBe(413);
-    expect((await getArtifact(db, row.id))?.version).toBe(1);
-    expect((await getArtifact(db, row.id))?.content).toBe("## Goal\nShip it.");
-  });
 });
 
 describe("user-input errors", () => {

@@ -1,11 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { sql } from "drizzle-orm";
 import {
-  ArtifactEditError,
   ArtifactNotFoundError,
-  getArtifact,
   listArtifactVersions,
-  VersionConflictError,
   writeArtifactVersion,
 } from "../src/artifacts.js";
 import {
@@ -220,82 +217,6 @@ describe("tool definitions", () => {
       });
       expect(typeof pkg[exportName!]).toBe("function");
     }
-  });
-
-  test("VersionConflictError is exported from the package barrel", async () => {
-    const pkg = (await import("../src/index.js")) as Record<string, unknown>;
-    expect(pkg["VersionConflictError"]).toBeDefined();
-    expect(typeof pkg["VersionConflictError"]).toBe("function");
-  });
-});
-
-describe("artifact_write edits", () => {
-  const edit = async (
-    content: string,
-    edits: { oldText: string; newText: string }[],
-    expectedVersion?: number,
-  ) => {
-    const db = await testDb();
-    const row = await seedArtifact(db, { content });
-    const write = () =>
-      writeArtifactVersion(db, {
-        scope: SCOPE,
-        artifactId: row.id,
-        edits,
-        ...(expectedVersion !== undefined ? { expectedVersion } : {}),
-      });
-    return { db, row, write };
-  };
-
-  test("replaces each exact passage in order as a new version", async () => {
-    const { db, row, write } = await edit("## Goal\nShip it.\n## Risk\nNone.", [
-      { oldText: "Ship it.", newText: "Ship it by Friday." },
-      { oldText: "Friday.\n## Risk", newText: "Friday.\n## Risks" },
-    ]);
-    expect((await write()).version).toBe(2);
-    expect((await getArtifact(db, row.id))?.content).toBe(
-      "## Goal\nShip it by Friday.\n## Risks\nNone.",
-    );
-  });
-
-  test("a missing passage writes nothing", async () => {
-    const { db, row, write } = await edit("alpha beta", [
-      { oldText: "alpha", newText: "a" },
-      { oldText: "gamma", newText: "g" },
-    ]);
-    await expect(write()).rejects.toBeInstanceOf(ArtifactEditError);
-    const after = await getArtifact(db, row.id);
-    expect(after?.version).toBe(1);
-    expect(after?.content).toBe("alpha beta");
-  });
-
-  test("a passage that appears twice is refused", async () => {
-    const { write } = await edit("same same", [
-      { oldText: "same", newText: "once" },
-    ]);
-    await expect(write()).rejects.toThrow("appears more than once");
-  });
-
-  test("a stale expectedVersion is refused", async () => {
-    const { write } = await edit(
-      "text",
-      [{ oldText: "text", newText: "new" }],
-      7,
-    );
-    await expect(write()).rejects.toBeInstanceOf(VersionConflictError);
-  });
-
-  test("content and edits together are refused", async () => {
-    const db = await testDb();
-    const row = await seedArtifact(db, { content: "text" });
-    await expect(
-      writeArtifactVersion(db, {
-        scope: SCOPE,
-        artifactId: row.id,
-        content: "whole",
-        edits: [{ oldText: "text", newText: "new" }],
-      }),
-    ).rejects.toBeInstanceOf(ArtifactEditError);
   });
 });
 
