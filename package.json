@@ -1,6 +1,6 @@
 {
   "name": "@corbits/artifacts",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Artifacts, versions and uploads with a pluggable ContentStore, mountable onto any Interchange host. Requires @intx 0.4.0 or newer.",
   "keywords": [
     "artifacts",
