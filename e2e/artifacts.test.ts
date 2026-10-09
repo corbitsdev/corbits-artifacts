@@ -80,6 +80,28 @@ describe("versioning", () => {
     ).rejects.toBeInstanceOf(ArtifactSizeError);
   });
 
+  test("the post-apply maxContentChars backstop refuses over-ceiling content via edits", async () => {
+    // Direct core call (no route), so no pre-lock projected check runs: the
+    // route's 413 is a separate, cheaper gate that can be skipped by a caller
+    // (or raced by a concurrent writer's stale projection). The post-apply
+    // ArtifactSizeError backstop inside reviseArtifactVersion — after the batch
+    // is applied under the FOR UPDATE lock, before any SQL write — is the wall
+    // that must still refuse. Assert version stays put so the rollback is real.
+    const db = await testDb();
+    const row = await seedArtifact(db, { content: "base" });
+    await expect(
+      writeArtifactVersion(db, {
+        scope: SCOPE,
+        artifactId: row.id,
+        edits: [{ oldText: "base", newText: "base".repeat(20) }],
+        maxContentChars: 20,
+      }),
+    ).rejects.toBeInstanceOf(ArtifactSizeError);
+    const after = await getArtifact(db, row.id);
+    expect(after?.version).toBe(1);
+    expect(after?.content).toBe("base");
+  });
+
   test("concurrent writers serialize into distinct versions", async () => {
     const db = await testDb();
     const row = await seedArtifact(db, { content: "base" });

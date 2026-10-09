@@ -176,6 +176,63 @@ describe("the artifacts sidecar bundle", () => {
     );
   });
 
+  test("a paged search surfaces nextCursor so the agent can continue paging", async () => {
+    const recorded: Recorded[] = [];
+    const page = {
+      data: [{ id: "art_1", title: "first" }],
+      nextCursor: "2026-01-01T00:00:00.000000Z__art_1",
+    };
+    const bundle = artifacts(
+      env(
+        recorded,
+        () =>
+          new Response(JSON.stringify(page), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+    const result = await bundle.run(
+      {
+        id: "call-search",
+        name: "artifact_search",
+        arguments: { query: "brief" },
+      },
+      signal,
+    );
+    expect(result.isError).toBeUndefined();
+    // The agent sees the cursor alongside the page so it can re-invoke with the
+    // same query/kind plus this cursor — the loop preserves prior filters.
+    expect(JSON.parse(String(result.content))).toEqual(page);
+    expect(recorded[0]?.url).toBe(
+      "/api/workflow-artifacts/artifacts?query=brief",
+    );
+  });
+
+  test("a response with no nextCursor keeps the data-only shape", async () => {
+    const recorded: Recorded[] = [];
+    const bundle = artifacts(
+      env(
+        recorded,
+        () =>
+          new Response(JSON.stringify({ data: { id: "a1" } }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+    const result = await bundle.run(
+      {
+        id: "call-read",
+        name: "artifact_read",
+        arguments: { artifactId: "a1" },
+      },
+      signal,
+    );
+    // Non-paged tools are unchanged: only `data` is surfaced, no cursor key.
+    expect(JSON.parse(String(result.content))).toEqual({ id: "a1" });
+  });
+
   test("resolves the credential once across calls", async () => {
     const recorded: Recorded[] = [];
     const bundle = artifacts(env(recorded, ok));
@@ -254,6 +311,11 @@ describe("every declared tool maps onto a route", () => {
       "artifact_search",
       { query: "brief", kind: "document", limit: 5 },
       "/api/workflow-artifacts/artifacts?query=brief&kind=document&limit=5",
+    ],
+    [
+      "artifact_search",
+      { query: "brief", cursor: "2026-01-01T00:00:00.000000Z__a1" },
+      "/api/workflow-artifacts/artifacts?query=brief&cursor=2026-01-01T00%3A00%3A00.000000Z__a1",
     ],
   ];
 

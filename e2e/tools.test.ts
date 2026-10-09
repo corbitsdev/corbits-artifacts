@@ -221,6 +221,12 @@ describe("tool definitions", () => {
       expect(typeof pkg[exportName!]).toBe("function");
     }
   });
+
+  test("VersionConflictError is exported from the package barrel", async () => {
+    const pkg = (await import("../src/index.js")) as Record<string, unknown>;
+    expect(pkg["VersionConflictError"]).toBeDefined();
+    expect(typeof pkg["VersionConflictError"]).toBe("function");
+  });
 });
 
 describe("artifact_write edits", () => {

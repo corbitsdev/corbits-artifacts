@@ -92,15 +92,15 @@ With no principal, every route except the list and counts answers `403`. Another
 
 Run-scoped routes for a workflow run, which authenticates with a bearer token and an `x-workflow-run-address` header instead of a session.
 
-| `deps`            | Type                  | What the host provides                                                                       |
-| ----------------- | --------------------- | -------------------------------------------------------------------------------------------- |
-| `db`              | `ArtifactDb`          | Same as above.                                                                               |
-| `contentStore`    | `ContentStore`        | Same as above.                                                                               |
-| `resolveRunScope` | `WorkflowRunResolver` | `(bearerToken, runAddress) => ResolvedWorkflowRunScope \| null`. `null` answers `401`.       |
-| `agentToken`      | `AgentTokenAuth`      | Optional. Accepts an agent's own hub token as a second way in.                               |
-| `uploadPolicy`    | `UploadPolicy`        | Optional. MIME types `POST /artifacts/binary` accepts. Defaults to `ARTIFACT_UPLOAD_POLICY`. |
-| `maxBinaryBytes`  | `number`              | Optional. Byte ceiling for `POST /artifacts/binary`. Defaults to `MAX_UPLOAD_BYTES`.         |
-| `maxContentChars` | `number`              | Optional. Character ceiling for `content` on `POST /artifacts`. Defaults to 64,000.          |
+| `deps`            | Type                  | What the host provides                                                                                                                                           |
+| ----------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `db`              | `ArtifactDb`          | Same as above.                                                                                                                                                   |
+| `contentStore`    | `ContentStore`        | Same as above.                                                                                                                                                   |
+| `resolveRunScope` | `WorkflowRunResolver` | `(bearerToken, runAddress) => ResolvedWorkflowRunScope \| null`. `null` answers `401`.                                                                           |
+| `agentToken`      | `AgentTokenAuth`      | Optional. Accepts an agent's own hub token as a second way in.                                                                                                   |
+| `uploadPolicy`    | `UploadPolicy`        | Optional. MIME types `POST /artifacts/binary` accepts. Defaults to `ARTIFACT_UPLOAD_POLICY`.                                                                     |
+| `maxBinaryBytes`  | `number`              | Optional. Byte ceiling for `POST /artifacts/binary`. Defaults to `MAX_UPLOAD_BYTES`.                                                                             |
+| `maxContentChars` | `number`              | Optional. Character ceiling on the resulting content — full text or edited text — for `POST /artifacts` and `PATCH /artifacts/:id/versions`. Defaults to 64,000. |
 
 ### `runArtifactMigrations(config, { schema })`
 
@@ -179,6 +179,36 @@ export function buildAssistant(sources: readonly InferencePreference[]) {
 - That boot drops the 0.1.0 migration ledger. You cannot roll back to 0.1.0, and 0.1.0 and 0.2.0 replicas must not share a database.
 - The drizzle tables, the `web_site` helpers, `SKILL_DRAFT_KIND`, `windowContent` and the mail-attachment routes and helpers are removed. The `mail_attachment_ref` table is dropped.
 - Node 24 or newer is required.
+
+## Upgrading from 0.2
+
+Separated by surface: what changed for AGENTS (the sidecar tool pack) and what changed for HOSTS (the routes and exports).
+
+### Agent tools
+
+The sidecar tool pack collapsed its five finer-grained tools into three. `artifact_write` now covers both create and link (revise via `edits`/`content` is unchanged), and its `{ artifactId, version }` result is the same.
+
+| 0.2 tool                 | 0.3               | How                                                               |
+| ------------------------ | ----------------- | ----------------------------------------------------------------- |
+| `artifact_create`        | `artifact_write`  | Call it with no `artifactId`, passing `title`, `kind`, `content`. |
+| `artifact_link_file`     | `artifact_write`  | Call it with no `artifactId`, passing a workspace `path`.         |
+| `artifact_read_chunk`    | `artifact_read`   | Pass the range as `offset`/`limit` instead of `start`/`end`.      |
+| `artifact_list`          | `artifact_search` | Results are ordered most-recently-updated first.                  |
+| `artifact_find_by_title` | `artifact_search` | Not a drop-in — see the caveat below.                             |
+
+**`artifact_find_by_title` is not a drop-in.** In 0.2 it matched the title **exactly**, matched the title only, and returned at most one `{ artifactId, version }` (or null). In 0.3 `artifact_search` does a case-insensitive substring (ILIKE) match on both the **title and the content**, and returns a list of matches. A caller that needs the old exact-title, single-result semantics must post-filter the results (compare `title` case-insensitively and take the first exact match).
+
+Search results are capped at 50 artifacts per call. Cursor paging is being added to the workflow route and the tool; when it lands, `artifact_search` accepts a `cursor` property (plus `limit`, capped at 50) to page through all matches, and the cap above applies per page.
+
+### Hosts
+
+The roles are unchanged, but two routes and one export were removed:
+
+- `GET /artifacts/find` → `GET /artifacts?query=…`, where `query` is the same case-insensitive substring (ILIKE) match on title and content.
+- `GET /artifacts/:id/chunk` → `GET /artifacts/:id/read?offset&limit`.
+- `readArtifactChunk` is removed. `findArtifactByTitle` and `linkFileArtifact` remain exported. `README.md`'s `Reference` section describes the current routes and tools.
+
+Two error classes are now exported from the package entry: `VersionConflictError` answers `409` when an `expectedVersion` is stale, and `ArtifactEditError` answers `400` when a revise is refused. Catch them to surface precise failures to your users.
 
 ## License
 

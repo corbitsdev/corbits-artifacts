@@ -56,14 +56,17 @@ export {
   getArtifactVersion,
   listArtifacts,
   ListArtifactsQuery,
+  ListCursor,
   listArtifactVersions,
   ListArtifactVersionsQuery,
   MAX_ARTIFACT_CONTENT_BYTES,
+  MAX_ARTIFACT_EDITS,
   MAX_ARTIFACT_TITLE_LENGTH,
   MAX_LIST_LIMIT,
   serializeArtifact,
   serializeArtifactListItem,
   setArtifactArchived,
+  VersionConflictError,
   writeArtifactVersion,
 } from "./artifacts.js";
 export type {

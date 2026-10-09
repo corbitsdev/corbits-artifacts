@@ -224,6 +224,155 @@ describe("GET /artifacts/recent", () => {
   });
 });
 
+describe("GET /artifacts", () => {
+  test("forwards the query filter and returns a nextCursor", async () => {
+    const db = await testDb();
+    await seedArtifact(db, {
+      tenantId: "acme",
+      title: "first",
+      content: "alpha",
+    });
+    await seedArtifact(db, {
+      tenantId: "acme",
+      title: "second",
+      content: "beta",
+    });
+    const app = host(db);
+
+    const res = await app.request("/artifacts?query=alpha", {
+      headers: authed,
+    });
+    expect(res.status).toBe(200);
+    const { data, nextCursor } = (await res.json()) as {
+      data: { title: string }[];
+      nextCursor: string | null;
+    };
+    expect(data.map((a) => a.title)).toEqual(["first"]);
+    expect(nextCursor).toBeNull();
+  });
+
+  test("pages with a keyset cursor and honors kind", async () => {
+    const db = await testDb();
+    for (let i = 0; i < 5; i += 1) {
+      await seedArtifact(db, {
+        tenantId: "acme",
+        title: `doc-${i}`,
+        kind: "document",
+      });
+      await seedArtifact(db, {
+        tenantId: "acme",
+        title: `note-${i}`,
+        kind: "note",
+      });
+    }
+    const app = host(db);
+
+    const first = await app.request("/artifacts?kind=document&limit=2", {
+      headers: authed,
+    });
+    const firstJson = (await first.json()) as {
+      data: { title: string }[];
+      nextCursor: string | null;
+    };
+    expect(first.status).toBe(200);
+    expect(firstJson.data).toHaveLength(2);
+    expect(firstJson.nextCursor).not.toBeNull();
+
+    const second = await app.request(
+      `/artifacts?kind=document&limit=2&cursor=${encodeURIComponent(firstJson.nextCursor!)}`,
+      { headers: authed },
+    );
+    const secondJson = (await second.json()) as {
+      data: { title: string }[];
+      nextCursor: string | null;
+    };
+    expect(second.status).toBe(200);
+    expect(secondJson.data).toHaveLength(2);
+    const allTitles = [...firstJson.data, ...secondJson.data].map(
+      (a) => a.title,
+    );
+    expect(new Set(allTitles).size).toBe(4);
+  });
+
+  test("a malformed cursor is 400", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const res = await app.request("/artifacts?cursor=garbage", {
+      headers: authed,
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test("escapes ILIKE metacharacters so a query matches literals, not wildcards", async () => {
+    const db = await testDb();
+    await seedArtifact(db, {
+      tenantId: "acme",
+      title: "quota",
+      content: "usage at 100%",
+    });
+    // A literal underscore in the title: matches "100%" but must NOT be a
+    // single-char wildcard.
+    await seedArtifact(db, {
+      tenantId: "acme",
+      title: "notes_keep",
+      content: "unrelated",
+    });
+    await seedArtifact(db, {
+      tenantId: "acme",
+      title: "percent",
+      content: "now at 100x",
+    });
+    const app = host(db);
+
+    // "100%" with a literal % must match ONLY the content containing "100%",
+    // not "100x" (which "%" as a wildcard would have matched).
+    const percent = await app.request("/artifacts?query=100%25", {
+      headers: authed,
+    });
+    const percentJson = (await percent.json()) as { data: { title: string }[] };
+    expect(percent.status).toBe(200);
+    expect(percentJson.data.map((a) => a.title)).toEqual(["quota"]);
+
+    // A literal "_" must not act as a one-character wildcard: "notes_keep"
+    // contains "notes_keep", but a literal-"_" query must not match a title
+    // like "notesXkeep" (there is none), and must match "notes_keep" exactly.
+    const underscore = await app.request("/artifacts?query=notes_keep", {
+      headers: authed,
+    });
+    const underscoreJson = (await underscore.json()) as {
+      data: { title: string }[];
+    };
+    expect(underscore.status).toBe(200);
+    expect(underscoreJson.data.map((a) => a.title)).toEqual(["notes_keep"]);
+  });
+
+  test("a crafted cursor from another tenant never leaks that tenant's rows", async () => {
+    const db = await testDb();
+    await seedArtifact(db, { tenantId: "acme", title: "mine" });
+    const foreign = await seedArtifact(db, {
+      tenantId: "other",
+      title: "theirs",
+    });
+    const app = host(db);
+
+    // The list is always confined to the caller's tenant by the tenant filter;
+    // a cursor can only further RESTRICT that set, never widen it. Use a cursor
+    // at the foreign row's id but a far-future timestamp, so under newest-first
+    // it would include every acme row — proving both that paging still works
+    // and that the foreign row itself is never surfaced.
+    const res = await app.request(
+      `/artifacts?cursor=2999-01-01T00:00:00.000000Z__${foreign.id}`,
+      { headers: authed },
+    );
+    const json = (await res.json()) as {
+      data: { id: string; title: string }[];
+    };
+    expect(res.status).toBe(200);
+    expect(json.data.map((a) => a.title)).toEqual(["mine"]);
+    expect(json.data.map((a) => a.id)).not.toContain(foreign.id);
+  });
+});
+
 describe("GET /artifacts/:id", () => {
   test("reads back an artifact the run's own tenant owns", async () => {
     const db = await testDb();
@@ -488,7 +637,7 @@ describe("revising by edits", () => {
     expect(res.status).toBe(400);
   });
 
-  test("edits that grow the text past the host's limit are 400", async () => {
+  test("edits that grow the text past the host's limit are 413, version stays", async () => {
     const { db, app, row } = await seeded({ maxContentChars: 20 });
     const res = await app.request(
       `/artifacts/${row.id}`,
@@ -496,8 +645,101 @@ describe("revising by edits", () => {
         edits: [{ oldText: "Ship it.", newText: "Ship it, and then some." }],
       }),
     );
+    expect(res.status).toBe(413);
+    expect((await getArtifact(db, row.id))?.version).toBe(1);
+  });
+
+  test("an empty oldText is 400 and writes nothing", async () => {
+    const { db, row, app } = await seeded();
+    const res = await app.request(
+      `/artifacts/${row.id}`,
+      patchJson({ edits: [{ oldText: "", newText: "x" }] }),
+    );
     expect(res.status).toBe(400);
     expect((await getArtifact(db, row.id))?.version).toBe(1);
+  });
+
+  test("an empty newText deletes the passage as the next version", async () => {
+    const { db, row, app } = await seeded();
+    const res = await app.request(
+      `/artifacts/${row.id}`,
+      patchJson({ edits: [{ oldText: "Ship it.", newText: "" }] }),
+    );
+    expect(res.status).toBe(200);
+    expect((await getArtifact(db, row.id))?.version).toBe(2);
+    expect((await getArtifact(db, row.id))?.content).toBe("## Goal\n");
+  });
+
+  test("an edit batch over the count bound is 400 and writes nothing", async () => {
+    const { db, row, app } = await seeded();
+    const tooMany = Array.from({ length: 201 }, (_, i) => ({
+      oldText: `needle-${i}`,
+      newText: "x",
+    }));
+    const res = await app.request(
+      `/artifacts/${row.id}`,
+      patchJson({ edits: tooMany }),
+    );
+    expect(res.status).toBe(400);
+    expect((await getArtifact(db, row.id))?.version).toBe(1);
+  });
+
+  test("content over the ceiling is 413, matching the create path", async () => {
+    const { db, row, app } = await seeded({ maxContentChars: 10 });
+    const res = await app.request(
+      `/artifacts/${row.id}`,
+      patchJson({ content: "way beyond the ceiling" }),
+    );
+    expect(res.status).toBe(413);
+    expect((await getArtifact(db, row.id))?.content).toBe("## Goal\nShip it.");
+  });
+
+  // Deleting 150 passages is bounded work (a delete shrinks the text, so the
+  // honest O(N·E) stays linear-ish) and stays under the ceiling, so this is a
+  // legitimate atomically-applied batch — not a destructive runaway.
+  test("a legit large-batch under the ceiling still applies atomically", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db, {
+      tenantId: "acme",
+      content: Array.from({ length: 150 }, (_, i) =>
+        String(i).padStart(3, "0"),
+      ).join(" "),
+    });
+    const app = host(db);
+    const edits = Array.from({ length: 150 }, (_, i) => ({
+      oldText: String(i).padStart(3, "0"),
+      newText: "",
+    }));
+    const res = await app.request(`/artifacts/${row.id}`, patchJson({ edits }));
+    expect(res.status).toBe(200);
+    const updated = await getArtifact(db, row.id);
+    expect(updated?.version).toBe(2);
+    // Every token was deleted; only the " " separators between them remain.
+    expect(updated?.content.trim()).toBe("");
+  });
+
+  test("the post-apply maxContentChars backstop fires when content is replaced past the ceiling", async () => {
+    // The route's pre-lock projected-check is skipped when the whole content is
+    // replaced (content path). The post-apply backstop in reviseArtifactVersion
+    // must still refuse an over-ceiling result and write nothing.
+    const db = await testDb();
+    const row = await seedArtifact(db, {
+      tenantId: "acme",
+      content: "## Goal\nShip it.",
+    });
+    const app = createWorkflowArtifactRoutes({
+      db,
+      contentStore: InlineContentStore,
+      resolveRunScope: () => RUN_SCOPE,
+      maxContentChars: 10,
+    });
+    const res = await app.request(
+      `/artifacts/${row.id}`,
+      patchJson({ content: "way beyond the ceiling" }),
+    );
+    expect(res.status).toBe(413);
+    expect((await getArtifact(db, row.id))?.version).toBe(1);
+    expect((await getArtifact(db, row.id))?.content).toBe("## Goal\nShip it.");
   });
 });
 

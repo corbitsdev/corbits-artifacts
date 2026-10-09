@@ -265,7 +265,8 @@ export const ARTIFACT_TOOL_DEFINITIONS: readonly ArtifactToolDefinition[] = [
         },
         content: {
           type: "string",
-          description: "The full text. Not allowed together with edits.",
+          description:
+            "The full text. Mutually exclusive with path, and not allowed together with edits.",
         },
         edits: {
           type: "array",
@@ -316,7 +317,8 @@ export const ARTIFACT_TOOL_DEFINITIONS: readonly ArtifactToolDefinition[] = [
         version: VERSION_PROPERTY,
         offset: {
           type: "number",
-          description: "Zero-based character offset to start from.",
+          description:
+            "Zero-based character offset to start from. An offset at or past the end of the content returns empty content; read with offset 0 to tell that apart. Limit returns as much as fits before a continuation.",
         },
         limit: {
           type: "number",
@@ -330,16 +332,22 @@ export const ARTIFACT_TOOL_DEFINITIONS: readonly ArtifactToolDefinition[] = [
     name: "artifact_search",
     sideEffect: "read",
     description:
-      "Find artifacts in your tenant, most recently updated first. Returns each match's id, title, kind, and version, not its content; read one with artifact_read. With no query it lists the newest. Archived artifacts are never returned.",
+      "Find artifacts in your tenant, most recently updated first. Returns each match's id, title, kind, and version, not its content; read one with artifact_read. When there are more matches than fit on the page, the result also carries a nextCursor — pass it back as cursor on your next artifact_search (keeping the same query and kind) to continue paging until no cursor is returned. With no query it lists the newest. Archived artifacts are never returned.",
     inputSchema: {
       type: "object",
       properties: {
         query: {
           type: "string",
-          description: "Text to match in the title or content.",
+          description:
+            "Text to match — a case-insensitive substring (ILIKE) match on the title or content, not an exact-title lookup.",
         },
         kind: { type: "string", description: "Optional kind filter." },
         limit: { type: "number", description: "Maximum artifacts to return." },
+        cursor: {
+          type: "string",
+          description:
+            "Pass the nextCursor of the previous artifact_search call to page to the next results.",
+        },
       },
       required: [],
     },

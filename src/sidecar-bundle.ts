@@ -120,7 +120,7 @@ function requestFor(
     case "artifact_search":
       return {
         method: "GET",
-        path: `/artifacts${query({ query: args["query"], kind: args["kind"], limit: args["limit"] })}`,
+        path: `/artifacts${query({ query: args["query"], kind: args["kind"], limit: args["limit"], cursor: args["cursor"] })}`,
       };
     default:
       return undefined;
@@ -168,7 +168,15 @@ export async function callArtifactRoute(
   if (!response.ok) throw new Error(await readErrorMessage(response));
   const payload: unknown = await response.json().catch(() => undefined);
   if (typeof payload === "object" && payload !== null && "data" in payload) {
-    return (payload as { data: unknown }).data;
+    const body = payload as { data: unknown; nextCursor?: unknown };
+    // A paged list surfaces its cursor so the agent can continue paging: the
+    // route answers `{ data, nextCursor }`, and throwing the cursor away would
+    // strand the agent on page 1. Additive — only when a real next page exists,
+    // so tools whose responses carry no cursor keep their current shape.
+    if (typeof body.nextCursor === "string" && body.nextCursor.length > 0) {
+      return { data: body.data, nextCursor: body.nextCursor };
+    }
+    return body.data;
   }
   return payload;
 }

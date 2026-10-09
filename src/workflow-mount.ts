@@ -25,6 +25,8 @@ import {
   createArtifact,
   getArtifact,
   listArtifacts,
+  ListCursor,
+  MAX_ARTIFACT_EDITS,
   MAX_VERSION,
   MetadataShape,
   serializeArtifact,
@@ -162,17 +164,24 @@ const ReviseWorkflowArtifactBody = type({
   "edits?": type({ oldText: "string", newText: "string" }).array(),
   "expectedVersion?": "number.integer >= 1",
   "metadata?": NullableMetadata,
-}).narrow(
-  (body, ctx) =>
-    ((body.content === undefined || body.edits === undefined) &&
-      (body.title !== undefined ||
-        body.content !== undefined ||
-        body.edits !== undefined ||
-        body.metadata !== undefined)) ||
-    ctx.mustBe(
-      "a body with content or edits (not both), title, and/or metadata",
-    ),
-);
+})
+  .narrow(
+    (body, ctx) =>
+      ((body.content === undefined || body.edits === undefined) &&
+        (body.title !== undefined ||
+          body.content !== undefined ||
+          body.edits !== undefined ||
+          body.metadata !== undefined)) ||
+      ctx.mustBe(
+        "a body with content or edits (not both), title, and/or metadata",
+      ),
+  )
+  .pipe((body, ctx) => {
+    if (body.edits !== undefined && body.edits.length > MAX_ARTIFACT_EDITS) {
+      return ctx.error(`edits exceeds the ${MAX_ARTIFACT_EDITS}-edit limit`);
+    }
+    return body;
+  });
 
 /** Omits the key entirely when absent or unparseable, so the behavior's own
  * default applies rather than a coerced zero. */
@@ -208,8 +217,10 @@ function readFailure(c: Context<WorkflowArtifactEnv>, err: unknown): Response {
   throw err;
 }
 
-/** An archived or missing artifact reads as 404, an oversized field or an
- * edit that does not land as 400, a stale `expectedVersion` as 409. */
+/** An archived or missing artifact reads as 404, an oversized byte/title field
+ * or an edit that does not land as 400, a stale `expectedVersion` as 409. The
+ * `maxContentChars` ceiling is answered 413 by the routes BEFORE these core
+ * errors are reached (see the create/PATCH handlers). */
 function writeFailure(c: Context<WorkflowArtifactEnv>, err: unknown): Response {
   if (err instanceof ArtifactNotFoundError) {
     return c.json({ error: "Artifact not found" }, 404);
@@ -427,15 +438,24 @@ export function createWorkflowArtifactRoutes({
     const scope = c.get("workflowRunScope");
     const kind = c.req.query("kind");
     const search = c.req.query("query");
+    const rawCursor = c.req.query("cursor");
+    const parsedCursor =
+      rawCursor === undefined || rawCursor === ""
+        ? undefined
+        : ListCursor(rawCursor);
+    if (parsedCursor instanceof type.errors) {
+      return c.json({ error: parsedCursor.summary }, 400);
+    }
     const page = await listArtifacts(db, scope.tenantId, {
       limit: parseRecentLimit(c.req.query("limit")),
       ...(kind !== undefined && kind !== "" ? { kind } : {}),
       ...(search !== undefined && search !== "" ? { query: search } : {}),
+      ...(parsedCursor !== undefined ? { cursor: parsedCursor } : {}),
     });
     const data: readonly SerializedArtifactListItem[] = page.rows.map(
       serializeArtifactListItem,
     );
-    return c.json({ data });
+    return c.json({ data, nextCursor: page.nextCursor });
   });
 
   app.post("/artifacts/link-file", async (c) => {
@@ -501,6 +521,29 @@ export function createWorkflowArtifactRoutes({
     const existing = await getArtifact(db, artifactId);
     if (existing === null || existing.tenantId !== scope.tenantId) {
       return c.json({ error: "Artifact not found" }, 404);
+    }
+    // Reject edits that would project past the ceiling BEFORE taking the row
+    // lock. Edits are non-overlapping by construction (each `oldText` lands
+    // exactly once in the text as earlier edits left it), so the projected
+    // length is exact: existing length plus the net of every replacement.
+    // Exact, not a bound on `edits.length` — that count bound is enforced by
+    // the schema and by `reviseArtifactVersion`.
+    if (parsed.edits !== undefined) {
+      let projected = existing.content.length;
+      for (const edit of parsed.edits) {
+        projected += edit.newText.length - edit.oldText.length;
+      }
+      if (projected > maxContentChars) {
+        return c.json(
+          {
+            error:
+              `content would be ${projected} characters, over the ` +
+              `${maxContentChars}-character limit — shorten it or split it ` +
+              "into multiple artifacts and try again.",
+          },
+          413,
+        );
+      }
     }
     let written: Awaited<ReturnType<typeof writeArtifactVersion>>;
     try {
