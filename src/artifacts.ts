@@ -20,6 +20,7 @@ import {
 import type { ArtifactDb, ArtifactTx } from "./db.js";
 import { artifact, artifactVersion, type ArtifactRow } from "./schema.js";
 import type { ResolvedPrincipal } from "./ports.js";
+import { grantCreator } from "./grants.js";
 
 /**
  * Max title length (JavaScript string length) accepted on create/revise.
@@ -1069,6 +1070,7 @@ export async function findOrVersionArtifact(
         ? { parentVersionIds: args.parentVersionIds }
         : {}),
     });
+    await grantCreator(tx, row, args.scope);
     return { artifact: row, outcome: "created" };
   });
 }

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { sql } from "drizzle-orm";
 import {
   createWorkflowArtifactRoutes,
   type ResolvedWorkflowRunScope,
@@ -469,6 +470,70 @@ describe("POST /artifacts/binary", () => {
       }),
     );
     expect(res.status).toBe(413);
+  });
+});
+
+// Every create path mints the creator's `write` + `archive` grants on
+// `artifact:<id>`; revise never mints a second pair.
+describe("creator grant minting", () => {
+  async function grantsFor(db: ArtifactDb, id: string) {
+    const rows = await db.execute<{ action: string; origin: string }>(sql`
+      SELECT "action", "origin" FROM "grant"
+      WHERE "resource" = ${`artifact:${id}`} ORDER BY "action"
+    `);
+    return rows.map((r) => ({ ...r }));
+  }
+
+  test("POST /artifacts mints write+archive creator grants", async () => {
+    const db = await testDb();
+    const res = await host(db).request(
+      "/artifacts",
+      json({ title: "Brief", kind: "document", content: "hello" }),
+    );
+    expect(res.status).toBe(201);
+    const { data } = (await res.json()) as {
+      data: { id: string; version: number };
+    };
+    expect(await grantsFor(db, data.id)).toEqual([
+      { action: "archive", origin: "creator" },
+      { action: "write", origin: "creator" },
+    ]);
+  });
+
+  test("POST /artifacts/binary mints write+archive creator grants", async () => {
+    const db = await testDb();
+    const res = await host(db).request(
+      "/artifacts/binary",
+      json({
+        filename: "a.txt",
+        mimeType: "text/plain",
+        contentBase64: Buffer.from("hi").toString("base64"),
+      }),
+    );
+    expect(res.status).toBe(201);
+    const { data } = (await res.json()) as {
+      data: { id: string; version: number };
+    };
+    expect(await grantsFor(db, data.id)).toEqual([
+      { action: "archive", origin: "creator" },
+      { action: "write", origin: "creator" },
+    ]);
+  });
+
+  test("POST /artifacts/link-file mints write+archive creator grants", async () => {
+    const db = await testDb();
+    const res = await host(db).request(
+      "/artifacts/link-file",
+      json({ title: "Report", kind: "document", path: "out/report.md" }),
+    );
+    expect(res.status).toBe(201);
+    const { data } = (await res.json()) as {
+      data: { id: string; version: number };
+    };
+    expect(await grantsFor(db, data.id)).toEqual([
+      { action: "archive", origin: "creator" },
+      { action: "write", origin: "creator" },
+    ]);
   });
 });
 

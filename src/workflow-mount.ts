@@ -37,6 +37,7 @@ import {
   type SerializedArtifactListItem,
 } from "./artifacts.js";
 import { linkFileArtifact, readArtifact } from "./tools.js";
+import { grantCreator } from "./grants.js";
 import type { ArtifactDb } from "./db.js";
 import {
   ARTIFACT_UPLOAD_POLICY,
@@ -330,8 +331,8 @@ export function createWorkflowArtifactRoutes({
     const scope = c.get("workflowRunScope");
     let row: Awaited<ReturnType<typeof createArtifact>>;
     try {
-      row = await db.transaction((tx) =>
-        createArtifact(tx, {
+      row = await db.transaction(async (tx) => {
+        const created = await createArtifact(tx, {
           scope: { tenantId: scope.tenantId, principalId: scope.principalId },
           // Workflow-authored artifacts have no human owner-member by default;
           // a human only enters the picture as the approver who let the
@@ -344,8 +345,13 @@ export function createWorkflowArtifactRoutes({
           ...(parsed.metadata !== undefined
             ? { metadata: parsed.metadata }
             : {}),
-        }),
-      );
+        });
+        await grantCreator(tx, created, {
+          tenantId: scope.tenantId,
+          principalId: scope.principalId,
+        });
+        return created;
+      });
     } catch (err) {
       return writeFailure(c, err);
     }
@@ -397,8 +403,8 @@ export function createWorkflowArtifactRoutes({
       principalId: scope.principalId,
     };
     try {
-      const row = await db.transaction((tx) =>
-        createFileArtifact(tx, contentStore, {
+      const row = await db.transaction(async (tx) => {
+        const created = await createFileArtifact(tx, contentStore, {
           scope: artifactScope,
           ownerPrincipalId: null,
           filename: parsed.filename,
@@ -412,8 +418,10 @@ export function createWorkflowArtifactRoutes({
           ...(parsed.metadata !== undefined
             ? { metadata: parsed.metadata }
             : {}),
-        }),
-      );
+        });
+        await grantCreator(tx, created, artifactScope);
+        return created;
+      });
       const created: CreatedWorkflowArtifact = {
         id: row.id,
         version: row.version,

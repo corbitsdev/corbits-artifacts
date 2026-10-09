@@ -289,4 +289,19 @@ describe("linkFileArtifact", () => {
       content: "Slide 1: revenue",
     });
   });
+
+  test("linkFileArtifact mints the creator's write+archive grants on create", async () => {
+    const db = await testDb();
+    const row = await linkFileArtifact(db, linkArgs());
+    const grantRows = await db.execute<{ action: string; origin: string }>(
+      sql`
+        SELECT "action", "origin" FROM "grant"
+        WHERE "resource" = ${`artifact:${row.id}`} ORDER BY "action"
+      `,
+    );
+    expect(grantRows.map((r) => ({ ...r }))).toEqual([
+      { action: "archive", origin: "creator" },
+      { action: "write", origin: "creator" },
+    ]);
+  });
 });

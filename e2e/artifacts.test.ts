@@ -404,6 +404,44 @@ describe("find-or-version", () => {
       .where(eq(artifactVersion.artifactId, results[0]!.artifact.id));
     expect(versions.length).toBe(callerCount);
   });
+
+  test("create mints the creator's write+archive grants; revise does not re-mint", async () => {
+    const db = await testDb();
+    const created = await findOrVersionArtifact(db, {
+      scope: SCOPE,
+      ownerPrincipalId: SCOPE.principalId,
+      kind: "document",
+      title: "Report",
+      content: "v1",
+      source: { origin: "agent" },
+    });
+    expect(created.outcome).toBe("created");
+
+    const revises = await findOrVersionArtifact(db, {
+      scope: SCOPE,
+      ownerPrincipalId: SCOPE.principalId,
+      kind: "document",
+      title: "Report",
+      content: "v2",
+      source: { origin: "agent" },
+    });
+    expect(revises.outcome).toBe("revised");
+
+    const grantRows = await db.execute<{
+      action: string;
+      origin: string;
+    }>(sql`
+      SELECT "action", "origin" FROM "grant"
+      WHERE "resource" = ${`artifact:${created.artifact.id}`}
+      ORDER BY "action"
+    `);
+    // Exactly one write + one archive, both creator-origin: the create minted
+    // them, and the revise added nothing.
+    expect(grantRows.map((r) => ({ ...r }))).toEqual([
+      { action: "archive", origin: "creator" },
+      { action: "write", origin: "creator" },
+    ]);
+  });
 });
 
 describe("serialization", () => {

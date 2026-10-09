@@ -1,6 +1,7 @@
 // @corbits/artifacts — a backend-only, mountable artifact + upload store.
 export { createArtifactRoutes } from "./mount.js";
 export type { CreateArtifactRoutesDeps } from "./mount.js";
+export { grantCreator } from "./grants.js";
 
 export { createWorkflowArtifactRoutes } from "./workflow-mount.js";
 export type {

@@ -174,6 +174,36 @@ async function ensureControlPlane(db: ArtifactDb): Promise<void> {
               ON CONFLICT DO NOTHING`,
     );
   }
+  // The mint-on-create paths write the creator's grants into Interchange's
+  // `grant` table. Detect the ACTUAL table rather than guessing from the
+  // control plane's shape: on a shared database Interchange's `runMigrations`
+  // has already created `public.grant` in its real shape (with FKs/CHECK), and
+  // the harness must never create, alter, or drop it. Only the id-only stand-in
+  // harness creates a compatible copy, and only when the table is absent.
+  const [grantExists] = await db.execute<{ present: boolean }>(sql`
+    SELECT EXISTS (
+      SELECT 1 FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name = 'grant'
+    ) AS present
+  `);
+  if (!grantExists?.present) {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS "public"."grant" (
+        "id" text PRIMARY KEY,
+        "tenant_id" text NOT NULL,
+        "role_id" text,
+        "principal_id" text,
+        "resource" text NOT NULL,
+        "action" text NOT NULL,
+        "effect" text NOT NULL,
+        "conditions" jsonb,
+        "origin" text NOT NULL,
+        "expires_at" timestamptz,
+        "created_at" timestamptz NOT NULL DEFAULT now(),
+        "updated_at" timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+  }
 }
 
 export async function testDb(): Promise<ArtifactDb> {
