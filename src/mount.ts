@@ -60,21 +60,18 @@ async function grantCreator(
   row: ArtifactRow,
   scope: ResolvedPrincipal,
 ) {
-  await tx
-    .insert(grant)
-    .values(
-      (["write", "archive"] as const).map((action) => ({
-        id: generateId("grant"),
-        tenantId: scope.tenantId,
-        principalId: scope.principalId,
-        roleId: null,
-        resource: `artifact:${row.id}`,
-        action,
-        effect: "allow" as const,
-        origin: "creator" as const,
-      })),
-    )
-    .onConflictDoNothing();
+  await tx.insert(grant).values(
+    (["write", "archive"] as const).map((action) => ({
+      id: generateId("grant"),
+      tenantId: scope.tenantId,
+      principalId: scope.principalId,
+      roleId: null,
+      resource: `artifact:${row.id}`,
+      action,
+      effect: "allow" as const,
+      origin: "creator" as const,
+    })),
+  );
 }
 
 export type CreateArtifactRoutesDeps = {
