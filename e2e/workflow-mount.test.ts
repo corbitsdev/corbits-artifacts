@@ -20,11 +20,17 @@ const VALID_ADDRESS = "run-1@acme";
 
 function host(
   db: ArtifactDb,
-  opts: { resolves?: ResolvedWorkflowRunScope | null } = {},
+  opts: {
+    resolves?: ResolvedWorkflowRunScope | null;
+    maxContentChars?: number;
+  } = {},
 ) {
   return createWorkflowArtifactRoutes({
     db,
     contentStore: InlineContentStore,
+    ...(opts.maxContentChars !== undefined
+      ? { maxContentChars: opts.maxContentChars }
+      : {}),
     resolveRunScope: (token, address) => {
       if (opts.resolves === undefined) {
         return token === VALID_TOKEN && address === VALID_ADDRESS
@@ -215,6 +221,148 @@ describe("GET /artifacts/recent", () => {
       headers: authed,
     });
     expect(res.status).toBe(200);
+  });
+});
+
+describe("GET /artifacts", () => {
+  test("forwards the query filter and returns a nextCursor", async () => {
+    const db = await testDb();
+    await seedArtifact(db, {
+      tenantId: "acme",
+      title: "first",
+      content: "alpha",
+    });
+    await seedArtifact(db, {
+      tenantId: "acme",
+      title: "second",
+      content: "beta",
+    });
+    const app = host(db);
+
+    const res = await app.request("/artifacts?query=alpha", {
+      headers: authed,
+    });
+    expect(res.status).toBe(200);
+    const { data, nextCursor } = (await res.json()) as {
+      data: { title: string }[];
+      nextCursor: string | null;
+    };
+    expect(data.map((a) => a.title)).toEqual(["first"]);
+    expect(nextCursor).toBeNull();
+  });
+
+  test("pages with a keyset cursor and honors kind", async () => {
+    const db = await testDb();
+    for (let i = 0; i < 5; i += 1) {
+      await seedArtifact(db, {
+        tenantId: "acme",
+        title: `doc-${i}`,
+        kind: "document",
+      });
+      await seedArtifact(db, {
+        tenantId: "acme",
+        title: `note-${i}`,
+        kind: "note",
+      });
+    }
+    const app = host(db);
+
+    const first = await app.request("/artifacts?kind=document&limit=2", {
+      headers: authed,
+    });
+    const firstJson = (await first.json()) as {
+      data: { title: string }[];
+      nextCursor: string | null;
+    };
+    expect(first.status).toBe(200);
+    expect(firstJson.data).toHaveLength(2);
+    expect(firstJson.nextCursor).not.toBeNull();
+
+    const second = await app.request(
+      `/artifacts?kind=document&limit=2&cursor=${encodeURIComponent(firstJson.nextCursor!)}`,
+      { headers: authed },
+    );
+    const secondJson = (await second.json()) as {
+      data: { title: string }[];
+      nextCursor: string | null;
+    };
+    expect(second.status).toBe(200);
+    expect(secondJson.data).toHaveLength(2);
+    const allTitles = [...firstJson.data, ...secondJson.data].map(
+      (a) => a.title,
+    );
+    expect(new Set(allTitles).size).toBe(4);
+  });
+
+  test("a malformed cursor is 400", async () => {
+    const db = await testDb();
+    const app = host(db);
+    const res = await app.request("/artifacts?cursor=garbage", {
+      headers: authed,
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test("escapes ILIKE metacharacters so a query matches literals, not wildcards", async () => {
+    const db = await testDb();
+    await seedArtifact(db, {
+      tenantId: "acme",
+      title: "quota",
+      content: "usage at 100%",
+    });
+    // A literal underscore, not a single-char wildcard.
+    await seedArtifact(db, {
+      tenantId: "acme",
+      title: "notes_keep",
+      content: "unrelated",
+    });
+    await seedArtifact(db, {
+      tenantId: "acme",
+      title: "percent",
+      content: "now at 100x",
+    });
+    const app = host(db);
+
+    // A literal % matches only the content containing "100%", not "100x".
+    const percent = await app.request("/artifacts?query=100%25", {
+      headers: authed,
+    });
+    const percentJson = (await percent.json()) as { data: { title: string }[] };
+    expect(percent.status).toBe(200);
+    expect(percentJson.data.map((a) => a.title)).toEqual(["quota"]);
+
+    // A literal "_" matches "notes_keep" exactly, not something like "notesXkeep".
+    const underscore = await app.request("/artifacts?query=notes_keep", {
+      headers: authed,
+    });
+    const underscoreJson = (await underscore.json()) as {
+      data: { title: string }[];
+    };
+    expect(underscore.status).toBe(200);
+    expect(underscoreJson.data.map((a) => a.title)).toEqual(["notes_keep"]);
+  });
+
+  test("a crafted cursor from another tenant never leaks that tenant's rows", async () => {
+    const db = await testDb();
+    await seedArtifact(db, { tenantId: "acme", title: "mine" });
+    const foreign = await seedArtifact(db, {
+      tenantId: "other",
+      title: "theirs",
+    });
+    const app = host(db);
+
+    // A cursor only further restricts the tenant-confined list; the foreign
+    // row's id in a far-future cursor never surfaces it.
+    const res = await app.request(
+      `/artifacts?cursor=2999-01-01T00:00:00.000000Z__${foreign.id}`,
+      { headers: authed },
+    );
+    const json = (await res.json()) as {
+      data: { id: string; title: string }[];
+    };
+    expect(res.status).toBe(200);
+    expect(json.data.map((a) => a.title)).toEqual(["mine"]);
+    expect(json.data.map((a) => a.id)).not.toContain(foreign.id);
   });
 });
 
@@ -423,6 +571,145 @@ describe("PATCH /artifacts/:id", () => {
   });
 });
 
+describe("revising by edits", () => {
+  const seeded = async (opts: { maxContentChars?: number } = {}) => {
+    const db = await testDb();
+    const row = await seedArtifact(db, {
+      tenantId: "acme",
+      content: "## Goal\nShip it.",
+    });
+    return { db, row, app: host(db, opts) };
+  };
+
+  test("applies exact-passage edits as the next version", async () => {
+    const { db, row, app } = await seeded();
+    const res = await app.request(
+      `/artifacts/${row.id}`,
+      patchJson({
+        edits: [{ oldText: "Ship it.", newText: "Ship it by Friday." }],
+        expectedVersion: 1,
+      }),
+    );
+    expect(res.status).toBe(200);
+    const updated = await getArtifact(db, row.id);
+    expect(updated?.version).toBe(2);
+    expect(updated?.content).toBe("## Goal\nShip it by Friday.");
+  });
+
+  test("a passage that does not land is 400 and writes nothing", async () => {
+    const { db, row, app } = await seeded();
+    const res = await app.request(
+      `/artifacts/${row.id}`,
+      patchJson({ edits: [{ oldText: "Ship it later.", newText: "x" }] }),
+    );
+    expect(res.status).toBe(400);
+    expect((await getArtifact(db, row.id))?.version).toBe(1);
+  });
+
+  test("a stale expectedVersion is 409", async () => {
+    const { app, row } = await seeded();
+    const res = await app.request(
+      `/artifacts/${row.id}`,
+      patchJson({
+        edits: [{ oldText: "Ship it.", newText: "Ship." }],
+        expectedVersion: 3,
+      }),
+    );
+    expect(res.status).toBe(409);
+  });
+
+  test("content and edits together are 400", async () => {
+    const { app, row } = await seeded();
+    const res = await app.request(
+      `/artifacts/${row.id}`,
+      patchJson({
+        content: "whole",
+        edits: [{ oldText: "Ship it.", newText: "Ship." }],
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  test("edits that grow the text past the host's limit are 413, version stays", async () => {
+    const { db, app, row } = await seeded({ maxContentChars: 20 });
+    const res = await app.request(
+      `/artifacts/${row.id}`,
+      patchJson({
+        edits: [{ oldText: "Ship it.", newText: "Ship it, and then some." }],
+      }),
+    );
+    expect(res.status).toBe(413);
+    expect((await getArtifact(db, row.id))?.version).toBe(1);
+  });
+
+  test("an empty oldText is 400 and writes nothing", async () => {
+    const { db, row, app } = await seeded();
+    const res = await app.request(
+      `/artifacts/${row.id}`,
+      patchJson({ edits: [{ oldText: "", newText: "x" }] }),
+    );
+    expect(res.status).toBe(400);
+    expect((await getArtifact(db, row.id))?.version).toBe(1);
+  });
+
+  test("an empty newText deletes the passage as the next version", async () => {
+    const { db, row, app } = await seeded();
+    const res = await app.request(
+      `/artifacts/${row.id}`,
+      patchJson({ edits: [{ oldText: "Ship it.", newText: "" }] }),
+    );
+    expect(res.status).toBe(200);
+    expect((await getArtifact(db, row.id))?.version).toBe(2);
+    expect((await getArtifact(db, row.id))?.content).toBe("## Goal\n");
+  });
+
+  test("an edit batch over the count bound is 400 and writes nothing", async () => {
+    const { db, row, app } = await seeded();
+    const tooMany = Array.from({ length: 201 }, (_, i) => ({
+      oldText: `needle-${i}`,
+      newText: "x",
+    }));
+    const res = await app.request(
+      `/artifacts/${row.id}`,
+      patchJson({ edits: tooMany }),
+    );
+    expect(res.status).toBe(400);
+    expect((await getArtifact(db, row.id))?.version).toBe(1);
+  });
+
+  test("content over the ceiling is 413, matching the create path", async () => {
+    const { db, row, app } = await seeded({ maxContentChars: 10 });
+    const res = await app.request(
+      `/artifacts/${row.id}`,
+      patchJson({ content: "way beyond the ceiling" }),
+    );
+    expect(res.status).toBe(413);
+    expect((await getArtifact(db, row.id))?.content).toBe("## Goal\nShip it.");
+  });
+
+  // A delete-shrinking batch under the ceiling still applies atomically.
+  test("a legit large-batch under the ceiling still applies atomically", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db, {
+      tenantId: "acme",
+      content: Array.from({ length: 150 }, (_, i) =>
+        String(i).padStart(3, "0"),
+      ).join(" "),
+    });
+    const app = host(db);
+    const edits = Array.from({ length: 150 }, (_, i) => ({
+      oldText: String(i).padStart(3, "0"),
+      newText: "",
+    }));
+    const res = await app.request(`/artifacts/${row.id}`, patchJson({ edits }));
+    expect(res.status).toBe(200);
+    const updated = await getArtifact(db, row.id);
+    expect(updated?.version).toBe(2);
+    // Every token was deleted; only the " " separators between them remain.
+    expect(updated?.content.trim()).toBe("");
+  });
+});
+
 describe("user-input errors", () => {
   test("an oversized binary filename or link-file title is 400", async () => {
     const db = await testDb();
@@ -452,12 +739,5 @@ describe("user-input errors", () => {
       app.request(`/artifacts/${row.id}/read${query}`, { headers: authed });
     expect((await read("?version=7")).status).toBe(404);
     expect((await read("?version=2147483648")).status).toBe(400);
-    expect(
-      (
-        await app.request(`/artifacts/${row.id}/chunk?version=2147483648`, {
-          headers: authed,
-        })
-      ).status,
-    ).toBe(400);
   });
 });

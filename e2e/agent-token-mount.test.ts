@@ -97,7 +97,7 @@ describe("agent-token authentication", () => {
 });
 
 describe("the routes the artifact tools call", () => {
-  test("lists, finds, revises, reads and chunks an artifact", async () => {
+  test("searches, revises, reads and reads a range of an artifact", async () => {
     const db = await testDb();
     const app = host(db);
 
@@ -121,12 +121,11 @@ describe("the routes the artifact tools call", () => {
     const listedBody = (await listed.json()) as { data: Array<{ id: string }> };
     expect(listedBody.data.map((row) => row.id)).toContain(artifact.id);
 
-    const found = await app.request("/artifacts/find?title=Notes", {
+    const found = await app.request("/artifacts?query=first", {
       headers: agentHeaders,
     });
-    expect((await found.json()) as unknown).toEqual({
-      data: { artifactId: artifact.id, version: 1 },
-    });
+    const foundBody = (await found.json()) as { data: Array<{ id: string }> };
+    expect(foundBody.data.map((row) => row.id)).toEqual([artifact.id]);
 
     const revised = await app.request(`/artifacts/${artifact.id}`, {
       method: "PATCH",
@@ -157,7 +156,7 @@ describe("the routes the artifact tools call", () => {
     ).toBe("first");
 
     const chunk = await app.request(
-      `/artifacts/${artifact.id}/chunk?offset=0&limit=3`,
+      `/artifacts/${artifact.id}/read?offset=0&limit=3`,
       {
         headers: agentHeaders,
       },

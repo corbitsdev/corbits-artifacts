@@ -80,6 +80,24 @@ describe("versioning", () => {
     ).rejects.toBeInstanceOf(ArtifactSizeError);
   });
 
+  test("the post-apply maxContentChars backstop refuses over-ceiling content via edits", async () => {
+    // Direct core call (no route) skips the pre-lock projected gate; the
+    // post-apply backstop must still refuse and roll back.
+    const db = await testDb();
+    const row = await seedArtifact(db, { content: "base" });
+    await expect(
+      writeArtifactVersion(db, {
+        scope: SCOPE,
+        artifactId: row.id,
+        edits: [{ oldText: "base", newText: "base".repeat(20) }],
+        maxContentChars: 20,
+      }),
+    ).rejects.toBeInstanceOf(ArtifactSizeError);
+    const after = await getArtifact(db, row.id);
+    expect(after?.version).toBe(1);
+    expect(after?.content).toBe("base");
+  });
+
   test("concurrent writers serialize into distinct versions", async () => {
     const db = await testDb();
     const row = await seedArtifact(db, { content: "base" });
@@ -115,7 +133,7 @@ describe("versioning", () => {
     const row = await seedArtifact(db);
     await expect(
       writeArtifactVersion(db, { scope: SCOPE, artifactId: row.id }),
-    ).rejects.toThrow(/content, title, and\/or metadata/);
+    ).rejects.toThrow(/content, edits, title, and\/or metadata/);
   });
 });
 

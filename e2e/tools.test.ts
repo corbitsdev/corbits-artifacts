@@ -10,7 +10,6 @@ import {
   DEFAULT_READ_LIMIT,
   linkFileArtifact,
   readArtifact,
-  readArtifactChunk,
   SAFE_ENCODED_BUDGET,
 } from "../src/tools.js";
 import { seedArtifact, SCOPE } from "./fixtures.js";
@@ -19,12 +18,10 @@ import { testDb } from "./helpers.js";
 async function read(content: string, offset?: number, limit?: number) {
   const db = await testDb();
   const row = await seedArtifact(db, { content });
-  if (offset === undefined)
-    return await readArtifact(db, { scope: SCOPE, artifactId: row.id });
-  return await readArtifactChunk(db, {
+  return await readArtifact(db, {
     scope: SCOPE,
     artifactId: row.id,
-    offset,
+    ...(offset !== undefined ? { offset } : {}),
     ...(limit !== undefined ? { limit } : {}),
   });
 }
@@ -132,12 +129,12 @@ describe("artifact_read", () => {
   });
 });
 
-describe("artifact_read_chunk", () => {
+describe("artifact_read with a range", () => {
   test("honors an explicit offset and limit", async () => {
     const db = await testDb();
     const row = await seedArtifact(db, { content: "abcdefghij" });
 
-    const result = await readArtifactChunk(db, {
+    const result = await readArtifact(db, {
       scope: SCOPE,
       artifactId: row.id,
       offset: 3,
@@ -158,7 +155,7 @@ describe("artifact_read_chunk", () => {
       content: "revised",
     });
 
-    const result = await readArtifactChunk(db, {
+    const result = await readArtifact(db, {
       scope: SCOPE,
       artifactId: row.id,
       version: 1,
@@ -181,8 +178,8 @@ describe("tool definitions", () => {
     }
   });
 
-  test("artifact_create and artifact_write both declare an optional metadata object", () => {
-    for (const name of ["artifact_create", "artifact_write"]) {
+  test("artifact_write declares an optional metadata object", () => {
+    for (const name of ["artifact_write"]) {
       const definition = ARTIFACT_TOOL_DEFINITIONS.find(
         (d) => d.name === name,
       )!;
@@ -199,11 +196,7 @@ describe("tool definitions", () => {
     const writes = ARTIFACT_TOOL_DEFINITIONS.filter(
       (d) => d.sideEffect === "write",
     ).map((d) => d.name);
-    expect(writes.sort()).toEqual([
-      "artifact_create",
-      "artifact_link_file",
-      "artifact_write",
-    ]);
+    expect(writes).toEqual(["artifact_write"]);
   });
 
   // A descriptor with no behavior behind it is worse than a missing tool: the
@@ -212,13 +205,9 @@ describe("tool definitions", () => {
   test("every declared tool has an implementing export in the package", async () => {
     const pkg = (await import("../src/index.js")) as Record<string, unknown>;
     const BINDINGS: Record<string, string> = {
-      artifact_create: "createArtifact",
-      artifact_link_file: "linkFileArtifact",
-      artifact_read: "readArtifact",
-      artifact_read_chunk: "readArtifactChunk",
       artifact_write: "writeArtifactVersion",
-      artifact_list: "listArtifacts",
-      artifact_find_by_title: "findArtifactByTitle",
+      artifact_read: "readArtifact",
+      artifact_search: "listArtifacts",
     };
     for (const definition of ARTIFACT_TOOL_DEFINITIONS) {
       const exportName = BINDINGS[definition.name];
@@ -231,7 +220,7 @@ describe("tool definitions", () => {
   });
 });
 
-describe("artifact_link_file", () => {
+describe("linkFileArtifact", () => {
   const linkArgs = (over: Record<string, unknown> = {}) => ({
     scope: SCOPE,
     ownerPrincipalId: SCOPE.principalId,

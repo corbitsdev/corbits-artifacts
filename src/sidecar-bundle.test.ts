@@ -63,7 +63,7 @@ describe("the artifacts sidecar bundle", () => {
     const result = await bundle.run(
       {
         id: "call-1",
-        name: "artifact_create",
+        name: "artifact_write",
         arguments: { title: "Notes", kind: "document", content: "body" },
       },
       signal,
@@ -87,7 +87,7 @@ describe("the artifacts sidecar bundle", () => {
     await bundle.run(
       {
         id: "call-meta",
-        name: "artifact_create",
+        name: "artifact_write",
         arguments: {
           title: "Notes",
           kind: "document",
@@ -102,6 +102,29 @@ describe("the artifacts sidecar bundle", () => {
       kind: "document",
       content: "body",
       metadata: { project: "acme-onboarding", stage: "draft" },
+    });
+  });
+
+  test("revises by exact-passage edits against an expected version", async () => {
+    const recorded: Recorded[] = [];
+    const bundle = artifacts(env(recorded, ok));
+    await bundle.run(
+      {
+        id: "call-edit",
+        name: "artifact_write",
+        arguments: {
+          artifactId: "a1",
+          edits: [{ oldText: "Ship it.", newText: "Ship it by Friday." }],
+          expectedVersion: 4,
+        },
+      },
+      signal,
+    );
+    expect(recorded[0]?.url).toBe("/api/workflow-artifacts/artifacts/a1");
+    expect(recorded[0]?.init?.method).toBe("PATCH");
+    expect(JSON.parse(String(recorded[0]?.init?.body))).toEqual({
+      edits: [{ oldText: "Ship it.", newText: "Ship it by Friday." }],
+      expectedVersion: 4,
     });
   });
 
@@ -127,7 +150,7 @@ describe("the artifacts sidecar bundle", () => {
     await bundle.run(
       {
         id: "call-no-meta",
-        name: "artifact_create",
+        name: "artifact_write",
         arguments: { title: "Notes", kind: "document", content: "body" },
       },
       signal,
@@ -153,11 +176,74 @@ describe("the artifacts sidecar bundle", () => {
     );
   });
 
+  test("a paged search surfaces nextCursor so the agent can continue paging", async () => {
+    const recorded: Recorded[] = [];
+    const page = {
+      data: [{ id: "art_1", title: "first" }],
+      nextCursor: "2026-01-01T00:00:00.000000Z__art_1",
+    };
+    const bundle = artifacts(
+      env(
+        recorded,
+        () =>
+          new Response(JSON.stringify(page), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+    const result = await bundle.run(
+      {
+        id: "call-search",
+        name: "artifact_search",
+        arguments: { query: "brief" },
+      },
+      signal,
+    );
+    expect(result.isError).toBeUndefined();
+    // The agent sees the cursor alongside the page so it can re-invoke with the
+    // same query/kind plus this cursor — the loop preserves prior filters.
+    expect(JSON.parse(String(result.content))).toEqual(page);
+    expect(recorded[0]?.url).toBe(
+      "/api/workflow-artifacts/artifacts?query=brief",
+    );
+  });
+
+  test("a response with no nextCursor keeps the data-only shape", async () => {
+    const recorded: Recorded[] = [];
+    const bundle = artifacts(
+      env(
+        recorded,
+        () =>
+          new Response(JSON.stringify({ data: { id: "a1" } }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+    const result = await bundle.run(
+      {
+        id: "call-read",
+        name: "artifact_read",
+        arguments: { artifactId: "a1" },
+      },
+      signal,
+    );
+    // Non-paged tools are unchanged: only `data` is surfaced, no cursor key.
+    expect(JSON.parse(String(result.content))).toEqual({ id: "a1" });
+  });
+
   test("resolves the credential once across calls", async () => {
     const recorded: Recorded[] = [];
     const bundle = artifacts(env(recorded, ok));
-    await bundle.run({ id: "a", name: "artifact_list", arguments: {} }, signal);
-    await bundle.run({ id: "b", name: "artifact_list", arguments: {} }, signal);
+    await bundle.run(
+      { id: "a", name: "artifact_search", arguments: {} },
+      signal,
+    );
+    await bundle.run(
+      { id: "b", name: "artifact_search", arguments: {} },
+      signal,
+    );
     expect(recorded).toHaveLength(2);
     await bundle.dispose?.();
   });
@@ -197,14 +283,14 @@ describe("the artifacts sidecar bundle", () => {
 describe("every declared tool maps onto a route", () => {
   const calls: Array<[string, Record<string, unknown>, string]> = [
     [
-      "artifact_link_file",
-      { title: "T", kind: "document", path: "a.md", preview: "p" },
-      "/api/workflow-artifacts/artifacts/link-file",
+      "artifact_write",
+      { title: "T", kind: "document", content: "c" },
+      "/api/workflow-artifacts/artifacts",
     ],
     [
-      "artifact_read_chunk",
-      { artifactId: "a1", offset: 10, limit: 5 },
-      "/api/workflow-artifacts/artifacts/a1/chunk?offset=10&limit=5",
+      "artifact_write",
+      { title: "T", kind: "document", path: "a.md", preview: "p" },
+      "/api/workflow-artifacts/artifacts/link-file",
     ],
     [
       "artifact_write",
@@ -212,19 +298,24 @@ describe("every declared tool maps onto a route", () => {
       "/api/workflow-artifacts/artifacts/a1",
     ],
     [
-      "artifact_list",
-      { kind: "document", limit: 5 },
-      "/api/workflow-artifacts/artifacts?kind=document&limit=5",
-    ],
-    [
-      "artifact_find_by_title",
-      { title: "T", kind: "document" },
-      "/api/workflow-artifacts/artifacts/find?title=T&kind=document",
-    ],
-    [
       "artifact_read",
       { artifactId: "a1", version: 2 },
       "/api/workflow-artifacts/artifacts/a1/read?version=2",
+    ],
+    [
+      "artifact_read",
+      { artifactId: "a1", offset: 10, limit: 5 },
+      "/api/workflow-artifacts/artifacts/a1/read?offset=10&limit=5",
+    ],
+    [
+      "artifact_search",
+      { query: "brief", kind: "document", limit: 5 },
+      "/api/workflow-artifacts/artifacts?query=brief&kind=document&limit=5",
+    ],
+    [
+      "artifact_search",
+      { query: "brief", cursor: "2026-01-01T00:00:00.000000Z__a1" },
+      "/api/workflow-artifacts/artifacts?query=brief&cursor=2026-01-01T00%3A00%3A00.000000Z__a1",
     ],
   ];
 
@@ -248,7 +339,7 @@ describe("every declared tool maps onto a route", () => {
     await bundle.run(
       {
         id: "n",
-        name: "@corbits/artifacts/sidecar-bundle:artifact_list",
+        name: "@corbits/artifacts/sidecar-bundle:artifact_search",
         arguments: {},
       },
       signal,
@@ -262,7 +353,7 @@ describe("every declared tool maps onto a route", () => {
       env(recorded, () => new Response("nope", { status: 500 })),
     );
     const result = await bundle.run(
-      { id: "e", name: "artifact_list", arguments: {} },
+      { id: "e", name: "artifact_search", arguments: {} },
       signal,
     );
     expect(result.isError).toBe(true);

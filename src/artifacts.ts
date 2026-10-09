@@ -33,6 +33,9 @@ export const MAX_ARTIFACT_TITLE_LENGTH = 512;
  */
 export const MAX_ARTIFACT_CONTENT_BYTES = 15 * 1024 * 1024;
 
+/** Cap on exact-passage edits per revision; a runaway batch would otherwise re-scan under the lock. */
+export const MAX_ARTIFACT_EDITS = 200;
+
 export class ArtifactSizeError extends Error {
   constructor(message: string) {
     super(message);
@@ -246,7 +249,7 @@ export type CreateArtifactArgs = {
  * existing artifact of the same `(tenantId, kind, title)` — correct for its
  * three current callers, which each mean "make a new one" regardless of what
  * already has this title: the `POST /artifacts` route (`mount.ts`), the
- * `artifact_link_file` tool (`linkFileArtifact` in `tools.ts`), and file
+ * `artifact_write` tool (`linkFileArtifact` in `tools.ts`), and file
  * uploads (`createFileArtifact` in `uploads.ts`). A caller that instead wants
  * "find by title, or create if absent" — converging on one artifact instead
  * of letting duplicates pile up — should use {@link findOrVersionArtifact}.
@@ -310,6 +313,52 @@ export class ArtifactNotFoundError extends Error {
   }
 }
 
+/** One exact-passage replacement in a revision. */
+export type ArtifactEdit = {
+  readonly oldText: string;
+  readonly newText: string;
+};
+
+/** An edit whose passage is missing or ambiguous. Nothing is written. */
+export class ArtifactEditError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ArtifactEditError";
+  }
+}
+
+/**
+ * Apply edits in order. Each `oldText` must occur exactly once in the text as
+ * the earlier edits left it, so an edit lands where the caller meant or not
+ * at all.
+ */
+export function applyArtifactEdits(
+  content: string,
+  edits: readonly ArtifactEdit[],
+): string {
+  if (edits.length === 0) throw new ArtifactEditError("edits is empty");
+  return edits.reduce((text, edit, index) => {
+    const label = `edit ${index + 1}`;
+    if (edit.oldText.length === 0) {
+      throw new ArtifactEditError(`${label}: oldText is empty`);
+    }
+    const at = text.indexOf(edit.oldText);
+    if (at === -1) {
+      throw new ArtifactEditError(
+        `${label}: oldText was not found; read the artifact and copy the passage exactly`,
+      );
+    }
+    if (text.indexOf(edit.oldText, at + 1) !== -1) {
+      throw new ArtifactEditError(
+        `${label}: oldText appears more than once; include more surrounding text`,
+      );
+    }
+    return (
+      text.slice(0, at) + edit.newText + text.slice(at + edit.oldText.length)
+    );
+  }, content);
+}
+
 /**
  * Thrown by `reviseArtifactVersion` when the caller's `expectedVersion`
  * precondition does not match the current version, observed under the same
@@ -345,6 +394,10 @@ export async function reviseArtifactVersion(
     artifactId: string;
     title?: string;
     content?: string;
+    /** Applied to the locked current content. Exclusive with `content`. */
+    edits?: readonly ArtifactEdit[];
+    /** A host's own ceiling on the resulting content, in characters. */
+    maxContentChars?: number;
     /** Opaque to the package; undefined carries the prior version's metadata forward. */
     metadata?: Record<string, unknown> | null;
     /** Explicit lineage for this version — never inferred, never carried forward. */
@@ -368,6 +421,15 @@ export async function reviseArtifactVersion(
   },
   now: Date,
 ): Promise<ArtifactRow> {
+  if (args.content !== undefined && args.edits !== undefined) {
+    throw new ArtifactEditError("Provide content or edits, not both");
+  }
+  // A runaway batch re-scans the growing text under the lock; cap the count.
+  if (args.edits !== undefined && args.edits.length > MAX_ARTIFACT_EDITS) {
+    throw new ArtifactEditError(
+      `edits exceeds the ${MAX_ARTIFACT_EDITS}-edit limit`,
+    );
+  }
   assertVersionMetadataShape({
     metadata: args.metadata,
     parentVersionIds: args.parentVersionIds,
@@ -398,9 +460,22 @@ export async function reviseArtifactVersion(
   const file = args.storeFile ? await args.storeFile(existing) : undefined;
   const version = existing.version + 1;
   const title = args.title ?? existing.title;
-  const content = file?.content ?? args.content ?? existing.content;
-  if (args.content !== undefined) {
+  const edited =
+    args.edits === undefined
+      ? undefined
+      : applyArtifactEdits(existing.content, args.edits);
+  const content = file?.content ?? args.content ?? edited ?? existing.content;
+  const contentChanged = args.content !== undefined || edited !== undefined;
+  if (contentChanged) {
     assertArtifactFieldSizes({ content });
+    if (
+      args.maxContentChars !== undefined &&
+      content.length > args.maxContentChars
+    ) {
+      throw new ArtifactSizeError(
+        `content would be ${content.length} characters, over the ${args.maxContentChars}-character limit`,
+      );
+    }
   }
   const metadata =
     args.metadata === undefined
@@ -412,7 +487,7 @@ export async function reviseArtifactVersion(
   // carries forward unchanged rather than being recomputed.
   const contentSha256 =
     file?.contentSha256 ??
-    (args.content === undefined ? existing.contentSha256 : sha256Hex(content));
+    (contentChanged ? sha256Hex(content) : existing.contentSha256);
 
   const [updated] = await tx
     .update(artifact)
@@ -456,6 +531,10 @@ export async function writeArtifactVersion(
     artifactId: string;
     title?: string;
     content?: string;
+    /** Exact-passage replacements on the current content. Exclusive with `content`. */
+    edits?: readonly ArtifactEdit[];
+    /** A host's own ceiling on the resulting content, in characters. */
+    maxContentChars?: number;
     /** Opaque to the package; omit to carry the prior version's metadata forward. */
     metadata?: Record<string, unknown> | null;
     /** Explicit lineage for this version — never inferred from order. */
@@ -473,10 +552,11 @@ export async function writeArtifactVersion(
   if (
     args.title === undefined &&
     args.content === undefined &&
+    args.edits === undefined &&
     args.metadata === undefined
   ) {
     throw new Error(
-      "Provide content, title, and/or metadata to revise the artifact",
+      "Provide content, edits, title, and/or metadata to revise the artifact",
     );
   }
   if (args.title !== undefined) {
@@ -700,7 +780,7 @@ function isCursorTimestamp(at: string): boolean {
   );
 }
 
-const ListCursor = type("string").pipe((raw, ctx) => {
+export const ListCursor = type("string").pipe((raw, ctx) => {
   const separatorIndex = raw.lastIndexOf("__");
   const at = raw.slice(0, separatorIndex);
   const id = raw.slice(separatorIndex + 2);
