@@ -133,8 +133,16 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
     ) AS present
   `);
   if (!hostSchema?.present) {
+    // The stand-in harness makes `tenant`/`principal`/`grant` id-only with no
+    // FKs; a real control plane (slug present) has full Interchange tables.
+    // Interchange's migrations CREATE `grant` with raw DDL (no IF NOT EXISTS),
+    // so any leftover stand-in must go before `runMigrations` or it collides
+    // with `heap_create_with_catalog` 42P07. Dropping grant here is provably
+    // safe: slug-absent means Interchange never migrated, so the grant can
+    // only be a bare stand-in, never a real-shaped control-plane table.
     await db.execute(sql`DROP TABLE IF EXISTS "public"."principal" CASCADE`);
     await db.execute(sql`DROP TABLE IF EXISTS "public"."tenant" CASCADE`);
+    await db.execute(sql`DROP TABLE IF EXISTS "public"."grant" CASCADE`);
     await db.execute(sql`DROP SCHEMA IF EXISTS "artifacts" CASCADE`);
     await runMigrations(config, { schema: "public" });
   }
