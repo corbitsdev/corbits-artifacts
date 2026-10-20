@@ -283,6 +283,8 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
       sidecarRouter: createSidecarRouter({
         authenticateSidecar,
         validateSidecarIdentity: async () => false,
+        withExecutableWorkflowRun: async () => false,
+        resolveSidecarBindings: async () => [],
       }),
       sessionService,
       eventCollectors: createEventCollectorRegistry({ db: hub.db }),
