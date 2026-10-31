@@ -103,6 +103,17 @@ Run-scoped routes for a workflow run, which authenticates with a bearer token an
 | `uploadPolicy`    | `UploadPolicy`        | Optional. MIME types `POST /artifacts/binary` accepts. Defaults to `ARTIFACT_UPLOAD_POLICY`.                                                                     |
 | `maxBinaryBytes`  | `number`              | Optional. Byte ceiling for `POST /artifacts/binary`. Defaults to `MAX_UPLOAD_BYTES`.                                                                             |
 | `maxContentChars` | `number`              | Optional. Character ceiling on the resulting content — full text or edited text — for `POST /artifacts` and `PATCH /artifacts/:id/versions`. Defaults to 64,000. |
+| `beforeWrite`     | `WorkflowBeforeWrite` | Optional. Checks each text create (`POST /artifacts`) and revision (`PATCH /artifacts/:id`) before it is written. Omitted, every valid write lands.              |
+
+`beforeWrite({ scope, kind, write, content })` gets the run scope, the artifact kind, `write` as `{ op: "create" }` or `{ op: "revise", artifactId }`, and the content the version will hold after any edits. It returns one of:
+
+- `{ action: "allow" }` writes as usual.
+- `{ action: "refuse", code, message }` answers `422` with `{ code, message }`, and the agent's tool error is `message`. `code` must match `/^[a-z0-9_]+$/`; `message` must be 1 to 1,000 characters.
+- `{ action: "redirect", artifactId, expectedVersion? }` turns a create into a revision of that artifact, which must be of the same kind and in the run's tenant, answering `200` with its `{ id, version }`. The revision takes the create's title. A missing, archived or other-tenant artifact answers `404`, and a stale `expectedVersion` answers `409` telling the agent to read the existing artifact and revise it.
+
+Any other decision, a redirect returned for a revision, or a redirect to an artifact of another kind answers `500` and writes nothing. Binary uploads and linked files are not checked.
+
+A create's check is not serialized: two concurrent creates can both be allowed, so a policy like "one plan per tenant" can still end with two plans when runs race. A revision's check runs inside the transaction holding the artifact's row lock, so it should be fast and must not write that artifact.
 
 Every write (`POST /artifacts`, `POST /artifacts/binary`, `POST /artifacts/link-file`, `PATCH /artifacts/:id`) answers `{ data: { id, version, contentSha256 } }`, with the same digest the tenant routes report. For `link-file` the digest covers the stored `preview` text (empty when none is given), not the workspace file at `path`.
 

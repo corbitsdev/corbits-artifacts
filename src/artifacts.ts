@@ -419,6 +419,9 @@ export async function reviseArtifactVersion(
      * thrown and nothing is written. Omitted preserves today's behavior.
      */
     expectedVersion?: number;
+    /** Runs under the lock with the content this version will hold; a throw
+     * rolls the revision back. */
+    beforeWrite?: (locked: ArtifactRow, content: string) => Promise<void>;
   },
   now: Date,
 ): Promise<ArtifactRow> {
@@ -478,6 +481,7 @@ export async function reviseArtifactVersion(
       );
     }
   }
+  if (args.beforeWrite !== undefined) await args.beforeWrite(existing, content);
   const metadata =
     args.metadata === undefined
       ? (existing.metadata as Record<string, unknown> | null)
@@ -542,6 +546,8 @@ export async function writeArtifactVersion(
     parentVersionIds?: string[] | null;
     /** See `VersionConflictError` — omitted preserves today's behavior. */
     expectedVersion?: number;
+    /** See {@link reviseArtifactVersion}. */
+    beforeWrite?: (locked: ArtifactRow, content: string) => Promise<void>;
   },
 ): Promise<{
   artifactId: string;

@@ -41,12 +41,16 @@ import {
 import {
   InlineContentStore,
   createArtifactRoutes,
+  createWorkflowArtifactRoutes,
+  listArtifacts,
   runArtifactMigrations,
   type ArtifactDb,
   type ResolvedPrincipal,
   type ContentStore,
   type SerializedArtifactBase,
+  type WorkflowBeforeWrite,
 } from "../../../src/index.js";
+import { WORKFLOW_ARTIFACTS_BASE_PATH } from "../../../src/sidecar-bundle.js";
 import { databaseConfig, DATABASE_URL } from "../../../e2e/helpers.js";
 
 const EPOCH = new Date(0);
@@ -66,6 +70,39 @@ async function decorate(
 
 export type Session = { userId: string } | null;
 
+/** The one workflow run this host resolves, standing in for its run table. */
+const RUN_TOKEN = "reference-sidecar-token";
+const RUN_ADDRESS = "reference-run";
+
+/**
+ * The host's write policy for agents: a plan opens with a heading, and a
+ * tenant keeps one plan, so a second plan create revises the first.
+ */
+function planPolicy(db: ArtifactDb): WorkflowBeforeWrite {
+  return async ({ scope, kind, write, content }) => {
+    if (kind !== "plan") return { action: "allow" };
+    if (!content.startsWith("# ")) {
+      return {
+        action: "refuse",
+        code: "plan_needs_heading",
+        message: "Start the plan with a '# ' heading.",
+      };
+    }
+    if (write.op === "revise") return { action: "allow" };
+    const { rows } = await listArtifacts(db, scope.tenantId, {
+      kind: "plan",
+      limit: 1,
+    });
+    const [existing] = rows;
+    if (existing === undefined) return { action: "allow" };
+    return {
+      action: "redirect",
+      artifactId: existing.id,
+      expectedVersion: existing.version,
+    };
+  };
+}
+
 export type ReferenceHost = {
   db: ArtifactDb;
   /** The `DBConfig` the host migrates with. */
@@ -81,6 +118,8 @@ export type ReferenceHost = {
    * `createFileArtifact` with this.
    */
   scope: () => ResolvedPrincipal;
+  /** Headers a workflow run presents to `WORKFLOW_ARTIFACTS_BASE_PATH`. */
+  runHeaders: Record<string, string>;
   /** Who the hub's session middleware will report. `null` means signed out. */
   setSession: (session: Session) => void;
   /** Request the default host (InlineContentStore, real DB-backed grants). */
@@ -355,6 +394,22 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
         decorate,
       }),
     );
+    app.route(
+      WORKFLOW_ARTIFACTS_BASE_PATH,
+      createWorkflowArtifactRoutes({
+        db,
+        contentStore,
+        resolveRunScope: (token, address) =>
+          token === RUN_TOKEN && address === RUN_ADDRESS
+            ? {
+                tenantId: tenant.id,
+                principalId: agentPrincipal,
+                runId: address,
+              }
+            : null,
+        beforeWrite: planPolicy(db),
+      }),
+    );
     const mounted = app.route("/api", api);
     // `Hono#request` may answer synchronously; normalize to a promise so every
     // caller can simply await it.
@@ -371,6 +426,10 @@ export async function createReferenceHost(): Promise<ReferenceHost> {
     config,
     tenantId: tenant.id,
     agentPrincipal,
+    runHeaders: {
+      authorization: `Bearer ${RUN_TOKEN}`,
+      "x-workflow-run-address": RUN_ADDRESS,
+    },
     scope: () => ({
       tenantId: tenant.id,
       principalId: principals.find(

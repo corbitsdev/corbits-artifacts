@@ -2,11 +2,16 @@ import { describe, expect, test } from "bun:test";
 import { sql } from "drizzle-orm";
 import {
   createWorkflowArtifactRoutes,
+  type CreatedWorkflowArtifact,
   type ResolvedWorkflowRunScope,
+  type WorkflowBeforeWrite,
+  type WorkflowWriteCheck,
+  type WorkflowWriteDecision,
 } from "../src/workflow-mount.js";
 import { InlineContentStore } from "../src/content-store.js";
 import {
   getArtifact,
+  listArtifacts,
   setArtifactArchived,
   sha256Hex,
 } from "../src/artifacts.js";
@@ -28,6 +33,7 @@ function host(
   opts: {
     resolves?: ResolvedWorkflowRunScope | null;
     maxContentChars?: number;
+    beforeWrite?: WorkflowBeforeWrite;
   } = {},
 ) {
   return createWorkflowArtifactRoutes({
@@ -35,6 +41,9 @@ function host(
     contentStore: InlineContentStore,
     ...(opts.maxContentChars !== undefined
       ? { maxContentChars: opts.maxContentChars }
+      : {}),
+    ...(opts.beforeWrite !== undefined
+      ? { beforeWrite: opts.beforeWrite }
       : {}),
     resolveRunScope: (token, address) => {
       if (opts.resolves === undefined) {
@@ -821,5 +830,166 @@ describe("user-input errors", () => {
       app.request(`/artifacts/${row.id}/read${query}`, { headers: authed });
     expect((await read("?version=7")).status).toBe(404);
     expect((await read("?version=2147483648")).status).toBe(400);
+  });
+});
+
+describe("beforeWrite", () => {
+  const plan = { title: "Plan", kind: "plan", content: "## Plan\nShip." };
+  const created = async (res: Response) =>
+    ((await res.json()) as { data: CreatedWorkflowArtifact }).data;
+
+  test("a refused create is 422 with the code and message, and writes nothing", async () => {
+    const db = await testDb();
+    const checks: WorkflowWriteCheck[] = [];
+    const app = host(db, {
+      beforeWrite: (check) => {
+        checks.push(check);
+        return {
+          action: "refuse",
+          code: "plan_exists",
+          message: "Revise the existing plan instead.",
+        };
+      },
+    });
+    const res = await app.request("/artifacts", json(plan));
+    expect(res.status).toBe(422);
+    expect(await res.json()).toEqual({
+      code: "plan_exists",
+      message: "Revise the existing plan instead.",
+    });
+    expect(checks).toEqual([
+      {
+        scope: RUN_SCOPE,
+        kind: "plan",
+        write: { op: "create" },
+        content: plan.content,
+      },
+    ]);
+    expect((await listArtifacts(db, "acme", {})).rows).toHaveLength(0);
+  });
+
+  test("a refused revision sees the edited content and leaves the version alone", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db, {
+      tenantId: "acme",
+      kind: "design",
+      content: "## Plan\nShip.",
+    });
+    const checks: WorkflowWriteCheck[] = [];
+    const app = host(db, {
+      beforeWrite: (check) => {
+        checks.push(check);
+        return { action: "refuse", code: "too_vague", message: "Add a date." };
+      },
+    });
+    const res = await app.request(
+      `/artifacts/${row.id}`,
+      patchJson({ edits: [{ oldText: "Ship.", newText: "Ship soon." }] }),
+    );
+    expect(res.status).toBe(422);
+    expect(checks).toEqual([
+      {
+        scope: RUN_SCOPE,
+        kind: "design",
+        write: { op: "revise", artifactId: row.id },
+        content: "## Plan\nShip soon.",
+      },
+    ]);
+    expect((await getArtifact(db, row.id))?.version).toBe(1);
+  });
+
+  test("a redirected create revises the named artifact under expectedVersion", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db, { tenantId: "acme", kind: "plan" });
+    const redirectTo = (expectedVersion: number) =>
+      host(db, {
+        beforeWrite: () => ({
+          action: "redirect",
+          artifactId: row.id,
+          expectedVersion,
+        }),
+      });
+
+    const res = await redirectTo(1).request("/artifacts", json(plan));
+    expect(res.status).toBe(200);
+    expect(await created(res)).toEqual({
+      id: row.id,
+      version: 2,
+      contentSha256: sha256Hex(plan.content),
+    });
+    const revised = await getArtifact(db, row.id);
+    expect(revised?.title).toBe("Plan");
+    expect(revised?.content).toBe(plan.content);
+    expect((await listArtifacts(db, "acme", {})).rows).toHaveLength(1);
+
+    const stale = await redirectTo(1).request("/artifacts", json(plan));
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toEqual({
+      error: `A plan already exists as artifact ${row.id} at version 2. Read it, then revise it.`,
+    });
+    expect((await getArtifact(db, row.id))?.version).toBe(2);
+  });
+
+  test("a redirect to another tenant's artifact is 404 and writes nothing", async () => {
+    const db = await testDb();
+    const foreign = await seedArtifact(db, { tenantId: "other" });
+    const app = host(db, {
+      beforeWrite: () => ({ action: "redirect", artifactId: foreign.id }),
+    });
+    const res = await app.request("/artifacts", json(plan));
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({
+      error:
+        "This plan could not be created: the existing plan it should revise was not found.",
+    });
+    expect((await getArtifact(db, foreign.id))?.version).toBe(1);
+    expect((await listArtifacts(db, "acme", {})).rows).toHaveLength(0);
+  });
+
+  test("a redirect to an artifact of another kind fails closed", async () => {
+    const db = await testDb();
+    const design = await seedArtifact(db, { tenantId: "acme", kind: "design" });
+    const app = host(db, {
+      beforeWrite: () => ({ action: "redirect", artifactId: design.id }),
+    });
+    expect((await app.request("/artifacts", json(plan))).status).toBe(500);
+    const unchanged = await getArtifact(db, design.id);
+    expect(unchanged?.version).toBe(1);
+    expect(unchanged?.content).not.toBe(plan.content);
+    expect((await listArtifacts(db, "acme", {})).rows).toHaveLength(1);
+  });
+
+  test("a malformed decision fails closed", async () => {
+    const db = await testDb();
+    const row = await seedArtifact(db, { tenantId: "acme" });
+    const malformed: unknown[] = [
+      { action: "deny" },
+      { action: "refuse", code: "Bad Code", message: "x" },
+      { action: "refuse", code: "no_message" },
+      { action: "refuse", code: "empty_message", message: " " },
+      { action: "refuse", code: "long_message", message: "x".repeat(1_001) },
+    ];
+    for (const decision of malformed) {
+      // A host bug that the decision type alone cannot rule out at runtime.
+      const app = host(db, {
+        beforeWrite: () => decision as WorkflowWriteDecision,
+      });
+      expect((await app.request("/artifacts", json(plan))).status).toBe(500);
+      const revise = await app.request(
+        `/artifacts/${row.id}`,
+        patchJson({ content: "changed" }),
+      );
+      expect(revise.status).toBe(500);
+    }
+    const reviseRedirect = host(db, {
+      beforeWrite: () => ({ action: "redirect", artifactId: row.id }),
+    });
+    const res = await reviseRedirect.request(
+      `/artifacts/${row.id}`,
+      patchJson({ content: "changed" }),
+    );
+    expect(res.status).toBe(500);
+    expect((await getArtifact(db, row.id))?.version).toBe(1);
+    expect((await listArtifacts(db, "acme", {})).rows).toHaveLength(1);
   });
 });

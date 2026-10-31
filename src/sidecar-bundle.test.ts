@@ -278,6 +278,30 @@ describe("the artifacts sidecar bundle", () => {
     expect(result.content).toBe("Artifact not found");
   });
 
+  test("a host refusal reaches the agent as its message", async () => {
+    const recorded: Recorded[] = [];
+    const bundle = artifacts(
+      env(
+        recorded,
+        () =>
+          new Response(
+            JSON.stringify({ code: "duplicate", message: "Revise the plan." }),
+            { status: 422, headers: { "content-type": "application/json" } },
+          ),
+      ),
+    );
+    const result = await bundle.run(
+      {
+        id: "r",
+        name: "artifact_write",
+        arguments: { title: "Plan", kind: "plan", content: "x" },
+      },
+      signal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toBe("Revise the plan.");
+  });
+
   test("an unknown tool name is a tool error", async () => {
     const recorded: Recorded[] = [];
     const bundle = artifacts(env(recorded, ok));
