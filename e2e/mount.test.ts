@@ -185,6 +185,7 @@ describe("POST /artifacts", () => {
     expect(body.artifact).toMatchObject({
       kind: "document",
       source: { origin: "manual" },
+      contentSha256: sha256Hex("body"),
     });
   });
 
@@ -722,6 +723,7 @@ describe("versions", () => {
     expect(await res.json()).toMatchObject({
       version: 2,
       metadata: { kind: "run", supersededByNodeId: null },
+      contentSha256: sha256Hex("v2"),
     });
   });
 

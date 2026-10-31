@@ -249,7 +249,7 @@ export const ARTIFACT_TOOL_DEFINITIONS: readonly ArtifactToolDefinition[] = [
     name: "artifact_write",
     sideEffect: "write",
     description:
-      "Create or revise an artifact. Every call returns the artifact id and its new version; pass that version as expectedVersion on your next revision. Create: omit artifactId and pass title, kind, and content (or path, for a file you already wrote in your workspace). Revise: pass artifactId with edits to change exact passages, or content to replace the whole text. Prefer edits for small changes. If an edit is refused, nothing was written: read the artifact again and retry.",
+      "Create or revise an artifact. Every call returns the artifact id, its new version and contentSha256, the sha256 of the stored content; pass that version as expectedVersion on your next revision. Create: omit artifactId and pass title, kind, and content (or path, for a file you already wrote in your workspace). Revise: pass artifactId with edits to change exact passages, or content to replace the whole text. Prefer edits for small changes. If an edit is refused, nothing was written: read the artifact again and retry.",
     inputSchema: {
       type: "object",
       properties: {

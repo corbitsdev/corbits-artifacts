@@ -88,6 +88,8 @@ await close();
 
 With no principal, every route except the list and counts answers `403`. Another tenant's artifact, or an unknown id, answers `404`. Set a request-body limit on the host for the upload and file-revise routes; they buffer the body before checking `MAX_UPLOAD_BYTES`.
 
+Every write reports `contentSha256`, the hex sha256 stored with the new version: over the UTF-8 text, or over the file's bytes for an upload. `POST /artifacts` and `POST /artifacts/upload` carry it on each artifact, and `POST /artifacts/:id/versions` returns it beside `artifactId` and `version`. It is `null` only for a version written before digests existed.
+
 ### `createWorkflowArtifactRoutes(deps)`
 
 Run-scoped routes for a workflow run, which authenticates with a bearer token and an `x-workflow-run-address` header instead of a session.
@@ -102,6 +104,8 @@ Run-scoped routes for a workflow run, which authenticates with a bearer token an
 | `maxBinaryBytes`  | `number`              | Optional. Byte ceiling for `POST /artifacts/binary`. Defaults to `MAX_UPLOAD_BYTES`.                                                                             |
 | `maxContentChars` | `number`              | Optional. Character ceiling on the resulting content — full text or edited text — for `POST /artifacts` and `PATCH /artifacts/:id/versions`. Defaults to 64,000. |
 
+Every write (`POST /artifacts`, `POST /artifacts/binary`, `POST /artifacts/link-file`, `PATCH /artifacts/:id`) answers `{ data: { id, version, contentSha256 } }`, with the same digest the tenant routes report. For `link-file` the digest covers the stored `preview` text (empty when none is given), not the workspace file at `path`.
+
 ### `runArtifactMigrations(config, { schema })`
 
 Takes the same `DBConfig` and `schema` as Interchange's `runMigrations`. `schema` holds the host's `tenant` and `principal` tables; this package's tables always go in `artifacts`.
@@ -110,7 +114,7 @@ Takes the same `DBConfig` and `schema` as Interchange's `runMigrations`. `schema
 
 `artifacts` is an `@intx/agent` tool pack of three tools. They call the run-scoped routes through the agent's `hub` credential.
 
-- `artifact_write` creates an artifact when no id is given, from content or a workspace file path. With an id it revises, either with the full text or with `edits`: exact passages, each of which must appear once, or nothing is written. `expectedVersion` refuses the write if a newer version exists.
+- `artifact_write` creates an artifact when no id is given, from content or a workspace file path. With an id it revises, either with the full text or with `edits`: exact passages, each of which must appear once, or nothing is written. `expectedVersion` refuses the write if a newer version exists. It returns `{ id, version, contentSha256 }`.
 - `artifact_read` returns the content, a past version with `version`, or a range with `offset` and `limit`.
 - `artifact_search` lists the newest artifacts, filtered by `kind` and by a `query` matched against title and content.
 
