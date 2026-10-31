@@ -129,6 +129,8 @@ export type CreateWorkflowArtifactRoutesDeps = {
 export type CreatedWorkflowArtifact = {
   readonly id: string;
   readonly version: number;
+  /** sha256 (hex) stored with this version; null only on a pre-digest row. */
+  readonly contentSha256: string | null;
 };
 
 // Opaque to this package, same shape `mount.ts` validates: any JSON object,
@@ -358,6 +360,7 @@ export function createWorkflowArtifactRoutes({
     const created: CreatedWorkflowArtifact = {
       id: row.id,
       version: row.version,
+      contentSha256: row.contentSha256,
     };
     return c.json({ data: created }, 201);
   });
@@ -425,6 +428,7 @@ export function createWorkflowArtifactRoutes({
       const created: CreatedWorkflowArtifact = {
         id: row.id,
         version: row.version,
+        contentSha256: row.contentSha256,
       };
       return c.json({ data: created }, 201);
     } catch (err) {
@@ -493,6 +497,7 @@ export function createWorkflowArtifactRoutes({
     const created: CreatedWorkflowArtifact = {
       id: row.id,
       version: row.version,
+      contentSha256: row.contentSha256,
     };
     return c.json({ data: created }, 201);
   });
@@ -567,6 +572,7 @@ export function createWorkflowArtifactRoutes({
     const revised: CreatedWorkflowArtifact = {
       id: written.artifactId,
       version: written.version,
+      contentSha256: written.contentSha256,
     };
     return c.json({ data: revised });
   });

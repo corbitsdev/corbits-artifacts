@@ -41,10 +41,15 @@ function env(recorded: Recorded[], respond: () => Response) {
 }
 
 const ok = () =>
-  new Response(JSON.stringify({ data: { id: "art_1", version: 1 } }), {
-    status: 201,
-    headers: { "content-type": "application/json" },
-  });
+  new Response(
+    JSON.stringify({
+      data: { id: "art_1", version: 1, contentSha256: "ab12" },
+    }),
+    {
+      status: 201,
+      headers: { "content-type": "application/json" },
+    },
+  );
 
 const signal = new AbortController().signal;
 
@@ -70,6 +75,11 @@ describe("the artifacts sidecar bundle", () => {
     );
 
     expect(result.isError).toBeUndefined();
+    expect(JSON.parse(String(result.content))).toEqual({
+      id: "art_1",
+      version: 1,
+      contentSha256: "ab12",
+    });
     expect(recorded).toHaveLength(1);
     expect(recorded[0]?.url).toBe("/api/workflow-artifacts/artifacts");
     const headers = recorded[0]?.init?.headers as Record<string, string>;

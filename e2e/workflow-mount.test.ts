@@ -5,7 +5,11 @@ import {
   type ResolvedWorkflowRunScope,
 } from "../src/workflow-mount.js";
 import { InlineContentStore } from "../src/content-store.js";
-import { getArtifact, setArtifactArchived } from "../src/artifacts.js";
+import {
+  getArtifact,
+  setArtifactArchived,
+  sha256Hex,
+} from "../src/artifacts.js";
 import { seedArtifact } from "./fixtures.js";
 import { testDb } from "./helpers.js";
 import type { ArtifactDb } from "../src/db.js";
@@ -104,9 +108,10 @@ describe("POST /artifacts", () => {
     );
     expect(res.status).toBe(201);
     const { data } = (await res.json()) as {
-      data: { id: string; version: number };
+      data: { id: string; version: number; contentSha256: string | null };
     };
     expect(data.version).toBe(1);
+    expect(data.contentSha256).toBe(sha256Hex("hello"));
 
     const row = await getArtifact(db, data.id);
     expect(row?.tenantId).toBe("acme");
@@ -409,7 +414,10 @@ describe("POST /artifacts/binary", () => {
       json({ filename: "brief.html", mimeType: "text/html", contentBase64 }),
     );
     expect(res.status).toBe(201);
-    const { data } = (await res.json()) as { data: { id: string } };
+    const { data } = (await res.json()) as {
+      data: { id: string; contentSha256: string | null };
+    };
+    expect(data.contentSha256).toBe(sha256Hex("<h1>rendered</h1>"));
 
     const row = await getArtifact(db, data.id);
     expect(row?.tenantId).toBe("acme");
@@ -520,16 +528,22 @@ describe("creator grant minting", () => {
     ]);
   });
 
-  test("POST /artifacts/link-file mints write+archive creator grants", async () => {
+  test("POST /artifacts/link-file mints write+archive creator grants and digests the preview", async () => {
     const db = await testDb();
     const res = await host(db).request(
       "/artifacts/link-file",
-      json({ title: "Report", kind: "document", path: "out/report.md" }),
+      json({
+        title: "Report",
+        kind: "document",
+        path: "out/report.md",
+        preview: "summary",
+      }),
     );
     expect(res.status).toBe(201);
     const { data } = (await res.json()) as {
-      data: { id: string; version: number };
+      data: { id: string; version: number; contentSha256: string | null };
     };
+    expect(data.contentSha256).toBe(sha256Hex("summary"));
     expect(await grantsFor(db, data.id)).toEqual([
       { action: "archive", origin: "creator" },
       { action: "write", origin: "creator" },
@@ -569,8 +583,11 @@ describe("PATCH /artifacts/:id", () => {
       patchJson({ content: "v2", metadata: { stage: "review" } }),
     );
     expect(res.status).toBe(200);
-    const { data } = (await res.json()) as { data: { version: number } };
+    const { data } = (await res.json()) as {
+      data: { version: number; contentSha256: string | null };
+    };
     expect(data.version).toBe(2);
+    expect(data.contentSha256).toBe(sha256Hex("v2"));
 
     const updated = await getArtifact(db, row.id);
     expect(updated?.metadata).toEqual({ stage: "review" });

@@ -4,6 +4,7 @@ import {
   type AgentTokenAuth,
   type ResolvedWorkflowRunScope,
 } from "../src/workflow-mount.js";
+import { sha256Hex } from "../src/artifacts.js";
 import { InlineContentStore } from "../src/content-store.js";
 import { seedArtifact } from "./fixtures.js";
 import { testDb } from "./helpers.js";
@@ -134,9 +135,11 @@ describe("the routes the artifact tools call", () => {
     });
     expect(revised.status).toBe(200);
     expect(
-      (await revised.json()) as { data: { id: string; version: number } },
+      (await revised.json()) as {
+        data: { id: string; version: number; contentSha256: string | null };
+      },
     ).toEqual({
-      data: { id: artifact.id, version: 2 },
+      data: { id: artifact.id, version: 2, contentSha256: sha256Hex("second") },
     });
 
     const read = await app.request(`/artifacts/${artifact.id}/read`, {
