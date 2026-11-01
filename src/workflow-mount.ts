@@ -48,6 +48,7 @@ import {
   type UploadPolicy,
 } from "./uploads.js";
 import type { ContentStore } from "./ports.js";
+import type { ArtifactRow } from "./schema.js";
 
 const DEFAULT_RECENT_LIMIT = 10;
 const MAX_RECENT_LIMIT = 50;
@@ -108,6 +109,40 @@ export type AgentTokenAuth = {
     | null;
 };
 
+/** A text write about to land, as `beforeWrite` sees it. `content` is what the
+ * version will hold, after any edits are applied. */
+export type WorkflowWriteCheck = {
+  readonly scope: ResolvedWorkflowRunScope;
+  readonly kind: string;
+  readonly write:
+    | { readonly op: "create" }
+    | { readonly op: "revise"; readonly artifactId: string };
+  readonly content: string;
+};
+
+/**
+ * `refuse` answers 422 with `{ code, message }`; `code` must match
+ * `/^[a-z0-9_]+$/` and `message` must be 1 to 1,000 characters. `redirect` is
+ * only for a create: it becomes a revision of `artifactId`, an artifact of the
+ * same kind in the run's tenant, under `expectedVersion` when given.
+ */
+export type WorkflowWriteDecision =
+  | { readonly action: "allow" }
+  | {
+      readonly action: "refuse";
+      readonly code: string;
+      readonly message: string;
+    }
+  | {
+      readonly action: "redirect";
+      readonly artifactId: string;
+      readonly expectedVersion?: number;
+    };
+
+export type WorkflowBeforeWrite = (
+  check: WorkflowWriteCheck,
+) => Promise<WorkflowWriteDecision> | WorkflowWriteDecision;
+
 export type CreateWorkflowArtifactRoutesDeps = {
   db: ArtifactDb;
   contentStore: ContentStore;
@@ -124,6 +159,8 @@ export type CreateWorkflowArtifactRoutesDeps = {
   maxBinaryBytes?: number;
   /** Character ceiling for `POST /artifacts`' `content`. */
   maxContentChars?: number;
+  /** Checks `POST /artifacts` and `PATCH /artifacts/:id` before they write. */
+  beforeWrite?: WorkflowBeforeWrite;
 };
 
 export type CreatedWorkflowArtifact = {
@@ -132,6 +169,19 @@ export type CreatedWorkflowArtifact = {
   /** sha256 (hex) stored with this version; null only on a pre-digest row. */
   readonly contentSha256: string | null;
 };
+
+const REFUSAL_CODE = /^[a-z0-9_]+$/;
+const MAX_REFUSAL_MESSAGE_CHARS = 1_000;
+
+class WriteRefusedError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "WriteRefusedError";
+  }
+}
 
 // Opaque to this package, same shape `mount.ts` validates: any JSON object,
 // or `null` to clear it explicitly. Mirrors `NullableMetadata` there.
@@ -221,8 +271,12 @@ function readFailure(c: Context<WorkflowArtifactEnv>, err: unknown): Response {
 }
 
 /** An archived or missing artifact reads as 404, an oversized field or an
- * edit that does not land as 400, a stale `expectedVersion` as 409. */
+ * edit that does not land as 400, a stale `expectedVersion` as 409, a host
+ * refusal as 422. */
 function writeFailure(c: Context<WorkflowArtifactEnv>, err: unknown): Response {
+  if (err instanceof WriteRefusedError) {
+    return c.json({ code: err.code, message: err.message }, 422);
+  }
   if (err instanceof ArtifactNotFoundError) {
     return c.json({ error: "Artifact not found" }, 404);
   }
@@ -238,6 +292,33 @@ function writeFailure(c: Context<WorkflowArtifactEnv>, err: unknown): Response {
     );
   }
   throw err;
+}
+
+/** The agent asked to create, so a failed redirect speaks of the existing
+ * artifact of that kind rather than an id the agent never named. */
+function redirectFailure(
+  c: Context<WorkflowArtifactEnv>,
+  err: unknown,
+  kind: string,
+  artifactId: string,
+): Response {
+  if (err instanceof ArtifactNotFoundError) {
+    return c.json(
+      {
+        error: `This ${kind} could not be created: the existing ${kind} it should revise was not found.`,
+      },
+      404,
+    );
+  }
+  if (err instanceof VersionConflictError) {
+    return c.json(
+      {
+        error: `A ${kind} already exists as artifact ${artifactId} at version ${err.currentVersion}. Read it, then revise it.`,
+      },
+      409,
+    );
+  }
+  return writeFailure(c, err);
 }
 
 function parseRecentLimit(raw: string | undefined): number {
@@ -262,8 +343,45 @@ export function createWorkflowArtifactRoutes({
   uploadPolicy = ARTIFACT_UPLOAD_POLICY,
   maxBinaryBytes = MAX_UPLOAD_BYTES,
   maxContentChars = DEFAULT_MAX_WORKFLOW_CONTENT_CHARS,
+  beforeWrite,
 }: CreateWorkflowArtifactRoutesDeps): Hono<WorkflowArtifactEnv> {
   const app = new Hono<WorkflowArtifactEnv>();
+
+  /** Throws `WriteRefusedError` on a refusal; a malformed decision is the
+   * host's bug and throws plainly, so nothing is written. */
+  async function decideWrite(
+    check: WorkflowWriteCheck,
+  ): Promise<WorkflowWriteDecision> {
+    if (beforeWrite === undefined) return { action: "allow" };
+    const decision = await beforeWrite(check);
+    switch (decision.action) {
+      case "allow":
+        return decision;
+      case "refuse":
+        if (!REFUSAL_CODE.test(decision.code)) {
+          throw new Error(
+            `beforeWrite refusal code must match ${String(REFUSAL_CODE)}`,
+          );
+        }
+        if (
+          typeof decision.message !== "string" ||
+          decision.message.trim() === "" ||
+          decision.message.length > MAX_REFUSAL_MESSAGE_CHARS
+        ) {
+          throw new Error(
+            `beforeWrite refusal message must be 1 to ${MAX_REFUSAL_MESSAGE_CHARS} characters`,
+          );
+        }
+        throw new WriteRefusedError(decision.code, decision.message);
+      case "redirect":
+        if (check.write.op !== "create") {
+          throw new Error("beforeWrite can only redirect a create");
+        }
+        return decision;
+      default:
+        throw new Error("beforeWrite returned an unknown action");
+    }
+  }
 
   const authenticate: MiddlewareHandler<WorkflowArtifactEnv> = async (
     c,
@@ -331,6 +449,50 @@ export function createWorkflowArtifactRoutes({
     }
 
     const scope = c.get("workflowRunScope");
+    let decision: WorkflowWriteDecision;
+    try {
+      decision = await decideWrite({
+        scope,
+        kind: parsed.kind,
+        write: { op: "create" },
+        content: parsed.content,
+      });
+    } catch (err) {
+      return writeFailure(c, err);
+    }
+    if (decision.action === "redirect") {
+      let written: Awaited<ReturnType<typeof writeArtifactVersion>>;
+      try {
+        written = await writeArtifactVersion(db, {
+          scope: { tenantId: scope.tenantId, principalId: scope.principalId },
+          artifactId: decision.artifactId,
+          title: parsed.title,
+          content: parsed.content,
+          ...(decision.expectedVersion !== undefined
+            ? { expectedVersion: decision.expectedVersion }
+            : {}),
+          ...(parsed.metadata !== undefined
+            ? { metadata: parsed.metadata }
+            : {}),
+          maxContentChars,
+          beforeWrite: async (locked) => {
+            if (locked.kind !== parsed.kind) {
+              throw new Error(
+                `beforeWrite redirected a ${parsed.kind} create to a ${locked.kind} artifact`,
+              );
+            }
+          },
+        });
+      } catch (err) {
+        return redirectFailure(c, err, parsed.kind, decision.artifactId);
+      }
+      const revised: CreatedWorkflowArtifact = {
+        id: written.artifactId,
+        version: written.version,
+        contentSha256: written.contentSha256,
+      };
+      return c.json({ data: revised });
+    }
     let row: Awaited<ReturnType<typeof createArtifact>>;
     try {
       row = await db.transaction(async (tx) => {
@@ -565,6 +727,18 @@ export function createWorkflowArtifactRoutes({
           : {}),
         ...(parsed.metadata !== undefined ? { metadata: parsed.metadata } : {}),
         maxContentChars,
+        ...(beforeWrite !== undefined
+          ? {
+              beforeWrite: async (locked: ArtifactRow, content: string) => {
+                await decideWrite({
+                  scope,
+                  kind: locked.kind,
+                  write: { op: "revise", artifactId },
+                  content,
+                });
+              },
+            }
+          : {}),
       });
     } catch (err) {
       return writeFailure(c, err);

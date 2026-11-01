@@ -17,6 +17,7 @@ import {
   UnsupportedUploadTypeError,
   type ContentStore,
 } from "../src/index.js";
+import { sha256Hex } from "../src/artifacts.js";
 import {
   createReferenceHost,
   type ReferenceHost,
@@ -720,5 +721,45 @@ describe("the migration runner is re-runnable", () => {
       await host.request("/api/artifacts?limit=100"),
     );
     expect(survived.artifacts.length).toBeGreaterThan(0);
+  });
+});
+
+describe("the host's beforeWrite policy on agent writes", () => {
+  const runPost = (body: unknown): RequestInit => ({
+    method: "POST",
+    headers: { "content-type": "application/json", ...host.runHeaders },
+    body: JSON.stringify(body),
+  });
+
+  test("refuses a plan with no heading, then folds a second plan into the first", async () => {
+    const refused = await host.request(
+      "/api/workflow-artifacts/artifacts",
+      runPost({ title: "Plan", kind: "plan", content: "Ship." }),
+    );
+    expect(refused.status).toBe(422);
+    expect(await refused.json()).toEqual({
+      code: "plan_needs_heading",
+      message: "Start the plan with a '# ' heading.",
+    });
+
+    const first = await host.request(
+      "/api/workflow-artifacts/artifacts",
+      runPost({ title: "Plan", kind: "plan", content: "# Plan\nShip." }),
+    );
+    expect(first.status).toBe(201);
+    const { data: created } = await json<{ data: { id: string } }>(first);
+
+    const second = await host.request(
+      "/api/workflow-artifacts/artifacts",
+      runPost({ title: "Plan v2", kind: "plan", content: "# Plan\nShip now." }),
+    );
+    expect(second.status).toBe(200);
+    expect(await second.json()).toEqual({
+      data: {
+        id: created.id,
+        version: 2,
+        contentSha256: sha256Hex("# Plan\nShip now."),
+      },
+    });
   });
 });

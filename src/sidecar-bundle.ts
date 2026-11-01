@@ -140,6 +140,11 @@ async function readErrorMessage(response: Response): Promise<string> {
     const error = (body as { error: unknown }).error;
     if (typeof error === "string") return error;
   }
+  // A host's `beforeWrite` refusal: `{ code, message }`.
+  if (typeof body === "object" && body !== null && "message" in body) {
+    const message = (body as { message: unknown }).message;
+    if (typeof message === "string") return message;
+  }
   return `the hub answered ${String(response.status)}`;
 }
 

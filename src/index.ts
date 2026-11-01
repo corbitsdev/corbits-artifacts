@@ -11,7 +11,10 @@ export type {
   CreateWorkflowArtifactRoutesDeps,
   ResolvedWorkflowRunScope,
   WorkflowArtifactEnv,
+  WorkflowBeforeWrite,
   WorkflowRunResolver,
+  WorkflowWriteCheck,
+  WorkflowWriteDecision,
 } from "./workflow-mount.js";
 
 export {
