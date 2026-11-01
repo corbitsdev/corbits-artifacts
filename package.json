@@ -97,5 +97,8 @@
   "engines": {
     "bun": ">=1.2.0",
     "node": ">=24"
+  },
+  "interchange": {
+    "tools": "./dist/sidecar-bundle.js"
   }
 }
